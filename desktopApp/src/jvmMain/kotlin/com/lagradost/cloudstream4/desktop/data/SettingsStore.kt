@@ -24,6 +24,8 @@ data class AppSettings(
     @JsonProperty("demoProvider") val demoProvider: Boolean = false,
     /** Where downloads are saved. Null means ~/Movies/CloudStream. */
     @JsonProperty("downloadFolder") val downloadFolder: String? = null,
+    /** Connections per download for hosts that allow it, like Internet Download Manager. */
+    @JsonProperty("downloadConnections") val downloadConnections: Int = 8,
 )
 
 object SettingsStore {

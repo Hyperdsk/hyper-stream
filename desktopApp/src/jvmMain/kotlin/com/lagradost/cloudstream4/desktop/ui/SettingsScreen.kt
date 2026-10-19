@@ -127,6 +127,23 @@ fun SettingsScreen(vlcAvailable: Boolean) {
                 OutlinedButton(onClick = { SettingsStore.update { it.copy(downloadFolder = null) } }) { Text("Use Movies folder") }
             }
         }
+        Label("Connections per download")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1, 4, 8, 16).forEach { n ->
+                FilterChip(
+                    selected = settings.downloadConnections == n,
+                    onClick = { SettingsStore.update { it.copy(downloadConnections = n) } },
+                    label = { Text(if (n == 1) "1 (off)" else "$n") },
+                )
+            }
+        }
+        Text(
+            "Downloads a file in parts over several connections at once, when the host allows it. " +
+                "Some hosts limit connections, so lower this if downloads fail.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
         Text(
             "Finished downloads stay where they are when you change the folder.",
             style = MaterialTheme.typography.bodySmall,

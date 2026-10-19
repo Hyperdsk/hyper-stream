@@ -199,7 +199,11 @@ private fun statusText(entry: DownloadEntry): String {
     return when (entry.status) {
         DownloadStatus.Queued -> "Waiting"
         DownloadStatus.Downloading -> listOfNotNull(
-            percent, size, entry.speed.takeIf { it > 0 }?.let { "${formatBytes(it)}/s" }, entry.link?.name,
+            percent,
+            size,
+            entry.speed.takeIf { it > 0 }?.let { "${formatBytes(it)}/s" },
+            entry.connections.takeIf { it > 1 }?.let { "$it connections" },
+            entry.link?.info()?.title,
         ).joinToString(" · ").ifBlank { "Finding a source…" }
         DownloadStatus.Paused -> listOfNotNull("Paused", percent, size).joinToString(" · ")
         DownloadStatus.Failed -> entry.error ?: "Failed"

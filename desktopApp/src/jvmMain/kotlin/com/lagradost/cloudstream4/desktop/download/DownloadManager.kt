@@ -30,7 +30,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import okhttp3.ConnectionPool
+import okhttp3.Protocol
 import okhttp3.Request
+import java.util.concurrent.TimeUnit
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -78,6 +83,11 @@ data class DownloadEntry(
     @JsonProperty("chosen") val chosen: Boolean = false,
     /** Bytes per second, only meaningful while downloading. */
     @JsonProperty("speed") val speed: Long = 0,
+    /** Multi-connection downloads: the chunk size and which chunks are finished, for resuming. */
+    @JsonProperty("chunkSize") val chunkSize: Long? = null,
+    @JsonProperty("doneChunks") val doneChunks: List<Int> = emptyList(),
+    /** Connections currently downloading this file. */
+    @JsonProperty("connections") val connections: Int = 0,
 ) {
     @get:JsonIgnore
     val playable: PlayableEpisode get() = PlayableEpisode(episodeData, episodeName, season, episode)
@@ -166,7 +176,7 @@ object DownloadManager {
             if (request.link != null && request.link.url != existing.link?.url) {
                 jobs.remove(id)?.cancel()
                 set(id) {
-                    it.copy(link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, error = null)
+                    it.copy(link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList(), error = null)
                 }
             }
             resume(id)
@@ -258,7 +268,7 @@ object DownloadManager {
                 val link = entry.link?.let { listOf(it) }?.takeIf { entry.bytesDone > 0 || entry.segmentsDone > 0 }
                 // Try the saved link first when resuming, then freshly loaded links
                 link?.let { tryLinks(id, it) } == true || run {
-                    set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null) }
+                    set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
                     val (links, subs) = findLinks(entry.apiName, entry.episodeData)
                     if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
                     downloadSubtitles(id, subs)
@@ -327,7 +337,7 @@ object DownloadManager {
                 throw e
             } catch (t: Throwable) {
                 lastError = t
-                set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null) }
+                set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
             }
         }
         lastError?.let { throw it }
@@ -358,12 +368,91 @@ object DownloadManager {
     private fun safeName(name: String) =
         name.replace(Regex("[/\\\\:*?\"<>|\\p{Cntrl}]"), " ").replace(Regex("\\s+"), " ").trim().take(120).ifBlank { "Untitled" }
 
+    /**
+     * Separate HTTP/1.1 connections for downloads. Over HTTP/2 every range request would share a
+     * single connection, and per-connection speed limits are what multiple connections get around.
+     */
+    private val downloadClient by lazy {
+        app.baseClient.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectionPool(ConnectionPool(32, 5, TimeUnit.MINUTES))
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
     private suspend fun downloadDirect(id: String, link: SavedLink) {
         val entry = current(id) ?: return
         val ext = extensionFrom(link.url) ?: "mp4"
         val target = File(targetBase(entry).path + ".$ext")
         val part = File(target.path + ".part")
-        val offset = if (entry.link?.url == link.url && part.exists()) part.length() else 0L
+        val headers = headersFor(link)
+        val wanted = SettingsStore.state.value.downloadConnections
+
+        if (wanted > 1) {
+            val probe = runCatching { SegmentedDownload.probe(downloadClient, link.url, headers) }.getOrNull()
+            if (probe?.contentType?.startsWith("text/html") == true) {
+                throw IOException("The host returned a web page instead of the video.")
+            }
+            val total = probe?.total
+            if (probe != null && probe.acceptsRanges && total != null && total > 16L shl 20) {
+                val resume = entry.chunkSize != null && entry.bytesTotal == total && entry.link?.url == link.url &&
+                    part.exists() && part.length() == total
+                val chunkSize = if (resume) entry.chunkSize!! else SegmentedDownload.chunkSizeFor(total)
+                // A partial file from a single-connection download is complete from its start,
+                // so the chunks it fully covers are already done
+                val singlePrefix = !resume && entry.chunkSize == null && entry.link?.url == link.url &&
+                    part.exists() && part.length() in 1 until total
+                val alreadyDone = when {
+                    resume -> entry.doneChunks
+                    singlePrefix -> (0 until (part.length() / chunkSize).toInt()).toList()
+                    else -> emptyList()
+                }
+                if (!resume && !singlePrefix) part.delete()
+                val segmented = SegmentedDownload(downloadClient, link.url, headers, part, total, chunkSize, wanted, alreadyDone)
+                set(id) {
+                    it.copy(filePath = part.path, bytesTotal = total, chunkSize = chunkSize, doneChunks = segmented.doneChunks, bytesDone = segmented.bytesDone)
+                }
+                try {
+                    coroutineScope {
+                        val ticker = launch {
+                            val meter = SpeedMeter(segmented.bytesDone)
+                            while (isActive) {
+                                delay(1_000)
+                                val bytes = segmented.bytesDone
+                                val speed = meter.tick(bytes)
+                                set(id) {
+                                    it.copy(bytesDone = bytes, doneChunks = segmented.doneChunks, connections = segmented.activeConnections, speed = speed ?: it.speed)
+                                }
+                                save()
+                            }
+                        }
+                        try {
+                            segmented.run()
+                        } finally {
+                            ticker.cancel()
+                        }
+                    }
+                } catch (e: RangesNotSupported) {
+                    // The host stopped honouring ranges part way, start again in one piece
+                    part.delete()
+                    set(id) { it.copy(bytesDone = 0, chunkSize = null, doneChunks = emptyList(), connections = 0) }
+                    downloadSingle(id, link, target, part)
+                    return
+                } finally {
+                    set(id) { it.copy(bytesDone = segmented.bytesDone, doneChunks = segmented.doneChunks, connections = 0) }
+                }
+                finish(id, part, target)
+                return
+            }
+        }
+        downloadSingle(id, link, target, part)
+    }
+
+    /** One connection, for hosts that don't support ranges. Resumes by appending. */
+    private suspend fun downloadSingle(id: String, link: SavedLink, target: File, part: File) {
+        val entry = current(id) ?: return
+        // A partial file from a multi-connection attempt has holes, so it can't be appended to
+        val offset = if (entry.link?.url == link.url && entry.chunkSize == null && part.exists()) part.length() else 0L
         if (offset == 0L) part.delete()
 
         val request = Request.Builder().url(link.url).apply {
@@ -371,7 +460,7 @@ object DownloadManager {
             if (offset > 0) header("Range", "bytes=$offset-")
         }.build()
 
-        app.baseClient.newCall(request).execute().use { response ->
+        downloadClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("The host answered with HTTP ${response.code}.")
             val type = response.header("Content-Type").orEmpty()
             if (type.startsWith("text/html")) throw IOException("The host returned a web page instead of the video.")
@@ -379,7 +468,7 @@ object DownloadManager {
             val start = if (resuming) offset else 0L
             val total = response.header("Content-Range")?.substringAfter('/')?.toLongOrNull()
                 ?: response.body.contentLength().takeIf { it > 0 }?.plus(start)
-            set(id) { it.copy(filePath = part.path, bytesDone = start, bytesTotal = total) }
+            set(id) { it.copy(filePath = part.path, bytesDone = start, bytesTotal = total, connections = 1) }
 
             FileOutputStream(part, resuming).use { out ->
                 response.body.byteStream().use { input ->
@@ -394,7 +483,7 @@ object DownloadManager {
                         done += read
                         meter.tick(done)?.let { speed -> set(id) { it.copy(bytesDone = done, speed = speed) }; save() }
                     }
-                    set(id) { it.copy(bytesDone = done, bytesTotal = total ?: done) }
+                    set(id) { it.copy(bytesDone = done, bytesTotal = total ?: done, connections = 0) }
                 }
             }
         }
