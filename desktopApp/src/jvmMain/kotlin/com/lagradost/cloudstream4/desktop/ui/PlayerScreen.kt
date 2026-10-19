@@ -145,7 +145,12 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     Key.F -> toggleFullscreen()
                     Key.M -> player.toggleMute()
                     Key.N -> model.next()
-                    Key.Escape -> if (fullscreen) toggleFullscreen() else exit()
+                    // Escape closes the panel first, then leaves fullscreen, then the player
+                    Key.Escape -> when {
+                        openMenu != null -> openMenu = null
+                        fullscreen -> toggleFullscreen()
+                        else -> exit()
+                    }
                     else -> return@onPreviewKeyEvent false
                 }
                 true
@@ -172,7 +177,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     Text(ui.error!!, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 420.dp))
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (ui.links.isNotEmpty()) OutlinedButton(onClick = { openMenu = "sources" }) { Text("Choose a source") }
+                        if (ui.links.isNotEmpty()) OutlinedButton(onClick = { openMenu = "panel:Sources" }) { Text("Choose a source") }
                         Button(onClick = { model.loadEpisode(ui.index) }) { Text("Reload links") }
                     }
                 }
@@ -206,8 +211,16 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         }
                     }
                     ui.current?.let { i ->
-                        val label = if (ui.offlineFile != null) "Downloaded file" else ui.links.getOrNull(i)?.label() ?: ""
-                        Text(label, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+                        val label = if (ui.offlineFile != null) "Downloaded file" else ui.links.getOrNull(i)?.info()?.summary ?: ""
+                        // Short summary, the full source details are in the Sources panel
+                        Text(
+                            label,
+                            color = Color.White.copy(alpha = 0.75f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 420.dp).clickable { openMenu = "panel:Sources" }.padding(8.dp),
+                        )
                     }
                 }
 
@@ -225,6 +238,19 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     )
                 }
             }
+        }
+
+        // Sources, subtitles and audio, in a side panel instead of long menus
+        openMenu?.takeIf { it.startsWith("panel:") }?.let { id ->
+            val tab = PanelTab.entries.firstOrNull { it.name == id.removePrefix("panel:") } ?: PanelTab.Sources
+            PlayerPanel(
+                tab = tab,
+                onTab = { openMenu = "panel:${it.name}" },
+                ui = ui,
+                playback = playback,
+                model = model,
+                onClose = { openMenu = null },
+            )
         }
     }
 }
@@ -285,21 +311,9 @@ private fun BottomControls(
             Menu("speed", openMenu, onMenu, Icons.Default.Speed, "Speed ${playback.rate}x", listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).map { r ->
                 "${r}x" to (r == playback.rate) to { player.setRate(r) }
             })
-            Menu("sources", openMenu, onMenu, Icons.Default.VideoLibrary, "Sources (${ui.links.size})", ui.links.mapIndexed { i, link ->
-                (link.label() + if (i in ui.failed) " (failed)" else "") to (i == ui.current) to { model.playLink(i) }
-            })
-            Menu(
-                "subtitles", openMenu, onMenu, Icons.Default.Subtitles, "Subtitles",
-                playback.subtitleTracks.map { t -> t.name to (t.id == playback.subtitleTrack) to { player.setSubtitleTrack(t.id) } } +
-                    listOfNotNull(
-                        if (ui.subtitles.isNotEmpty() && playback.subtitleTracks.size <= 1) {
-                            "Load ${ui.subtitles.size} provider subtitles" to false to { model.reloadSubtitlesIntoPlayer() }
-                        } else null
-                    ),
-            )
-            Menu("audio", openMenu, onMenu, Icons.Default.Audiotrack, "Audio", playback.audioTracks.map { t ->
-                t.name to (t.id == playback.audioTrack) to { player.setAudioTrack(t.id) }
-            })
+            ControlButton(Icons.Default.VideoLibrary, "Sources (${ui.links.size})", enabled = ui.links.isNotEmpty()) { onMenu("panel:Sources") }
+            ControlButton(Icons.Default.Subtitles, "Subtitles") { onMenu("panel:Subtitles") }
+            ControlButton(Icons.Default.Audiotrack, "Audio") { onMenu("panel:Audio") }
             ControlButton(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Fullscreen", onClick = onFullscreen)
         }
     }
