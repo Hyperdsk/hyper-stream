@@ -166,8 +166,11 @@ object PluginLoader {
     }
 
     private fun translate(dex: ByteArray, jar: File) {
-        val tmp = File(jar.parentFile, "${jar.name}.tmp")
-        tmp.delete()
+        // Classes go to a folder first and are zipped by InnerClassFixer. dex2jar's own jar
+        // output needs the jdk.zipfs module, which a trimmed app runtime may not include.
+        val tmp = File(jar.parentFile, "${jar.name}.classes")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
         Dex2jar.from(dex)
             .reUseReg(false)
             .topoLogicalSort()
@@ -178,13 +181,13 @@ object PluginLoader {
             .dontSanitizeNames(true)
             // A method that fails to translate is replaced with one that throws, instead of failing the whole extension
             .withExceptionHandler(BaseDexExceptionHandler())
-            .to(tmp.toPath())
+            .doTranslate(tmp.toPath())
         val fixed = File(jar.parentFile, "${jar.name}.fixed")
         try {
             InnerClassFixer.fix(tmp, fixed)
             check(fixed.renameTo(jar)) { "Could not save translated extension ${jar.name}" }
         } finally {
-            tmp.delete()
+            tmp.deleteRecursively()
             fixed.delete()
         }
     }

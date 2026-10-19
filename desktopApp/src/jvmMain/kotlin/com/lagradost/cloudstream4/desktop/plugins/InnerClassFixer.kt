@@ -21,15 +21,23 @@ import java.util.zip.ZipOutputStream
  * way is turned back into a plain class without a declaring class, which is how Android sees it.
  */
 internal object InnerClassFixer {
-    fun fix(jar: File, out: File) {
-        ZipFile(jar).use { zip ->
-            ZipOutputStream(out.outputStream().buffered()).use { output ->
-                for (entry in zip.entries()) {
-                    val bytes = zip.getInputStream(entry).use { it.readBytes() }
-                    val fixed = if (entry.name.endsWith(".class")) fixClass(bytes) else bytes
-                    output.putNextEntry(ZipEntry(entry.name))
-                    output.write(fixed)
-                    output.closeEntry()
+    /** Writes the classes in [source], a jar or a folder of class files, to the jar [out]. */
+    fun fix(source: File, out: File) {
+        ZipOutputStream(out.outputStream().buffered()).use { output ->
+            fun put(name: String, bytes: ByteArray) {
+                output.putNextEntry(ZipEntry(name))
+                output.write(if (name.endsWith(".class")) fixClass(bytes) else bytes)
+                output.closeEntry()
+            }
+            if (source.isDirectory) {
+                source.walkTopDown().filter { it.isFile }.sortedBy { it.path }.forEach { file ->
+                    put(file.relativeTo(source).invariantSeparatorsPath, file.readBytes())
+                }
+            } else {
+                ZipFile(source).use { zip ->
+                    for (entry in zip.entries()) {
+                        if (!entry.isDirectory) put(entry.name, zip.getInputStream(entry).use { it.readBytes() })
+                    }
                 }
             }
         }

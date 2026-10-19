@@ -59,7 +59,7 @@ compose.desktop {
             // Extensions are loaded at runtime, so include what they commonly need too (TLS curves, scripting)
             modules(
                 "java.instrument", "java.management", "java.naming", "java.net.http", "java.scripting", "java.sql",
-                "jdk.crypto.ec", "jdk.dynalink", "jdk.httpserver", "jdk.localedata", "jdk.unsupported",
+                "jdk.charsets", "jdk.crypto.ec", "jdk.dynalink", "jdk.httpserver", "jdk.localedata", "jdk.unsupported", "jdk.zipfs",
             )
             // The debugger agent, only in debug builds (-PdebugApp)
             if (project.hasProperty("debugApp")) modules("jdk.jdwp.agent")
