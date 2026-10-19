@@ -108,6 +108,51 @@ class DownloadManagerTest {
     }
 
     @Test
+    fun usesOnlyThePickedSource() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())
+        val folder = Files.createTempDirectory("cs-downloads-picked").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val api = TestProvider(base).apply { sourcePlugin = "test-picked" }
+        APIHolder.allProviders.add(api)
+        try {
+            // The picker lists what findLinks returns: here a single direct file plus subtitles
+            val (links, subs) = DownloadManager.findLinks("DownloadTest", "direct")
+            assertEquals(1, links.size)
+            assertEquals(1, subs.size)
+
+            val episode = PlayableEpisode("picked", "Picked", null, null)
+            DownloadManager.enqueue(
+                DownloadRequest("DownloadTest", "$base/picked", "Picked Movie", null, null, episode, link = links.single(), subtitles = subs)
+            )
+            val id = DownloadManager.idFor("DownloadTest", "picked")
+            val done = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == id && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+            }.first { it.id == id }
+            assertEquals(DownloadStatus.Completed, done.status, done.error)
+            assertTrue(done.chosen)
+            assertEquals(links.single().url, done.link?.url)
+            assertEquals(1, done.subtitles.size)
+
+            // A picked source that fails is reported, not silently replaced by another one
+            val broken = links.single().copy(url = "$base/missing.mp4")
+            val other = PlayableEpisode("broken", "Broken", null, null)
+            DownloadManager.enqueue(DownloadRequest("DownloadTest", "$base/broken", "Broken Movie", null, null, other, link = broken))
+            val brokenId = DownloadManager.idFor("DownloadTest", "broken")
+            val failed = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == brokenId && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+            }.first { it.id == brokenId }
+            assertEquals(DownloadStatus.Failed, failed.status)
+            assertEquals(broken.url, failed.link?.url)
+            println("Picked source failure: ${failed.error}")
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-picked" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun downloadsDirectFileWithPauseResumeAndEncryptedHls() = runBlocking {
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())
         val folder = Files.createTempDirectory("cs-downloads").toFile()

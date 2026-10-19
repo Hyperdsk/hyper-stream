@@ -10,6 +10,9 @@ import androidx.compose.ui.unit.Density
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream4.desktop.player.PlaybackState
+import com.lagradost.cloudstream4.desktop.download.SavedLink
+import com.lagradost.cloudstream4.desktop.ui.DownloadPickerDialog
+import com.lagradost.cloudstream4.desktop.ui.DownloadPickerState
 import com.lagradost.cloudstream4.desktop.ui.PanelTab
 import com.lagradost.cloudstream4.desktop.ui.PlayRequest
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
@@ -56,5 +59,19 @@ class PlayerPanelRenderTest {
         dir.mkdirs()
         File(dir, "sources-panel.png").writeBytes(scene.render().encodeToData(EncodedImageFormat.PNG)!!.bytes)
         scene.close()
+
+        val saved = links.take(5).map { SavedLink(it.source, it.name, it.url, it.referer, it.quality, it.headers, it.type) }
+        val picker = DownloadPickerState(PlayableEpisode("d", null, null, null), saved.toPersistentList(), loading = true)
+        val dialogScene = ImageComposeScene(1400, 900, Density(1.5f)) {
+            CloudStreamTheme(mode = CloudStreamThemeMode.Dark) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF111111))) {
+                    DownloadPickerDialog(picker, "Street Fighter", {}, {})
+                }
+            }
+        }
+        // Render after the dialog's fade-in has finished
+        repeat(3) { dialogScene.render(it * 500_000_000L) }
+        File(dir, "download-picker.png").writeBytes(dialogScene.render(2_000_000_000L).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        dialogScene.close()
     }
 }

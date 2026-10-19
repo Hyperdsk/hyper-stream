@@ -74,6 +74,8 @@ data class DownloadEntry(
     @JsonProperty("subtitles") val subtitles: List<String> = emptyList(),
     @JsonProperty("error") val error: String? = null,
     @JsonProperty("addedAt") val addedAt: Long = System.currentTimeMillis(),
+    /** True when the user picked [link] themselves. Then only that source is used. */
+    @JsonProperty("chosen") val chosen: Boolean = false,
     /** Bytes per second, only meaningful while downloading. */
     @JsonProperty("speed") val speed: Long = 0,
 ) {
@@ -101,6 +103,10 @@ data class DownloadRequest(
     val posterUrl: String?,
     val posterHeaders: Map<String, String>?,
     val episode: PlayableEpisode,
+    /** The source the user picked. Null lets the downloader choose and fall back by itself. */
+    val link: SavedLink? = null,
+    /** Subtitles found together with [link], saved next to the video. */
+    val subtitles: List<SubtitleFile> = emptyList(),
 )
 
 /**
@@ -118,6 +124,9 @@ object DownloadManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val file = jsonFile<List<DownloadEntry>>("downloads.json") { emptyList() }
     private val jobs = ConcurrentHashMap<String, Job>()
+
+    /** Subtitles handed over with a picked source, used when its download starts. */
+    private val pendingSubtitles = ConcurrentHashMap<String, List<SubtitleFile>>()
 
     private val _entries = MutableStateFlow(
         // Anything that was running when the app closed is paused, the user resumes it
@@ -149,9 +158,18 @@ object DownloadManager {
 
     fun enqueue(request: DownloadRequest) {
         val id = idFor(request.apiName, request.episode.data)
+        if (request.subtitles.isNotEmpty()) pendingSubtitles[id] = request.subtitles
         val existing = _entries.value.firstOrNull { it.id == id }
         if (existing != null) {
-            if (existing.status != DownloadStatus.Completed) resume(id)
+            if (existing.status == DownloadStatus.Completed) return
+            // A different source was picked: start over with it
+            if (request.link != null && request.link.url != existing.link?.url) {
+                jobs.remove(id)?.cancel()
+                set(id) {
+                    it.copy(link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, error = null)
+                }
+            }
+            resume(id)
             return
         }
         val entry = DownloadEntry(
@@ -166,6 +184,8 @@ object DownloadManager {
             season = request.episode.season,
             episode = request.episode.episode,
             status = DownloadStatus.Queued,
+            link = request.link,
+            chosen = request.link != null,
         )
         _entries.update { (it + entry).toPersistentList() }
         save()
@@ -223,14 +243,27 @@ object DownloadManager {
     private suspend fun work(id: String) {
         try {
             val entry = current(id) ?: return
-            val link = entry.link?.let { listOf(it) }?.takeIf { entry.bytesDone > 0 || entry.segmentsDone > 0 }
-            // Try the saved link first when resuming, then freshly loaded links
-            val succeeded = link?.let { tryLinks(id, it) } == true || run {
-                set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null) }
-                val (links, subs) = loadLinks(entry)
-                if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
-                downloadSubtitles(id, subs)
-                tryLinks(id, links)
+            val chosen = entry.link?.takeIf { entry.chosen }
+            val succeeded = if (chosen != null) {
+                // The user picked this source, so use only it
+                pendingSubtitles.remove(id)?.let { downloadSubtitles(id, it) }
+                try {
+                    tryLinks(id, listOf(chosen))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    throw IOException("${t.message ?: "Download failed"} Try another source.", t)
+                }
+            } else {
+                val link = entry.link?.let { listOf(it) }?.takeIf { entry.bytesDone > 0 || entry.segmentsDone > 0 }
+                // Try the saved link first when resuming, then freshly loaded links
+                link?.let { tryLinks(id, it) } == true || run {
+                    set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null) }
+                    val (links, subs) = findLinks(entry.apiName, entry.episodeData)
+                    if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
+                    downloadSubtitles(id, subs)
+                    tryLinks(id, links)
+                }
             }
             if (!succeeded) throw IOException("None of the sources could be downloaded.")
             set(id) { it.copy(status = DownloadStatus.Completed, speed = 0, error = null) }
@@ -245,16 +278,20 @@ object DownloadManager {
         }
     }
 
-    private suspend fun loadLinks(entry: DownloadEntry): Pair<List<SavedLink>, List<SubtitleFile>> {
-        val api = providerByName(entry.apiName)
-            ?: throw IOException("The ${entry.apiName} extension isn't loaded.")
+    /**
+     * Asks the extension for links and keeps the downloadable ones (direct files and HLS), best
+     * first. [onUpdate] gets the list so far each time a link arrives, so a picker can fill in live.
+     */
+    suspend fun findLinks(
+        apiName: String,
+        episodeData: String,
+        onUpdate: (List<SavedLink>, List<SubtitleFile>) -> Unit = { _, _ -> },
+    ): Pair<List<SavedLink>, List<SubtitleFile>> {
+        val api = providerByName(apiName) ?: throw IOException("The $apiName extension isn't loaded.")
         val links = mutableListOf<ExtractorLink>()
         val subs = mutableListOf<SubtitleFile>()
-        withTimeoutOrNull(90_000) {
-            api.loadLinks(entry.episodeData, false, { synchronized(subs) { subs += it } }, { synchronized(links) { links += it } })
-        }
         val preferred = SettingsStore.state.value.preferredQuality
-        val usable = synchronized(links) { links.toList() }
+        fun usable(): List<SavedLink> = synchronized(links) { links.toList() }
             .filter { it.type == ExtractorLinkType.VIDEO || it.type == ExtractorLinkType.M3U8 }
             .distinctBy { it.url }
             .sortedWith(
@@ -264,7 +301,17 @@ object DownloadManager {
                     .thenBy { if (it.type == ExtractorLinkType.VIDEO) 0 else 1 }
             )
             .map { SavedLink(it.source, it.name, it.url, it.referer, it.quality, it.headers, it.type) }
-        return usable to synchronized(subs) { subs.distinctBy { it.url } }
+        fun subtitles() = synchronized(subs) { subs.distinctBy { it.url } }
+
+        withTimeoutOrNull(90_000) {
+            api.loadLinks(
+                episodeData,
+                false,
+                { sub -> synchronized(subs) { subs += sub }; onUpdate(usable(), subtitles()) },
+                { link -> synchronized(links) { links += link }; onUpdate(usable(), subtitles()) },
+            )
+        }
+        return usable() to subtitles()
     }
 
     /** Tries each link in turn. Returns true once one downloads completely. */

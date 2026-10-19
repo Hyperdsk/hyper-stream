@@ -70,6 +70,9 @@ import com.lagradost.cloudstream4.desktop.data.WatchType
 import com.lagradost.cloudstream4.desktop.download.DownloadEntry
 import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.download.DownloadRequest
+import com.lagradost.cloudstream4.desktop.download.SavedLink
+import com.lagradost.cloudstream4.desktop.DesktopToasts
+import kotlinx.coroutines.Job
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
@@ -96,6 +99,8 @@ data class DetailsState(
     /** Episodes of the selected dub, all seasons, in watch order. */
     val allEpisodes: PersistentList<EpisodeUi> = persistentListOf(),
     val unsupported: String? = null,
+    /** Open while the user chooses a download source. */
+    val picker: DownloadPickerState? = null,
 ) {
     val episodes: List<EpisodeUi> get() = allEpisodes.filter { seasons.isEmpty() || it.playable.season == season }
     val isMovieLike: Boolean get() = response is MovieLoadResponse || response is LiveStreamLoadResponse
@@ -203,8 +208,34 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
         )
     }
 
+    private var pickerJob: Job? = null
+
+    /**
+     * Finds the downloadable sources and lets the user pick one. When loading ends with a single
+     * source, the download starts right away without asking.
+     */
     fun download(episode: PlayableEpisode) {
+        pickerJob?.cancel()
+        update { copy(picker = DownloadPickerState(episode)) }
+        pickerJob = scope.launch {
+            providerCall {
+                DownloadManager.findLinks(route.apiName, episode.data) { links, subs ->
+                    update { copy(picker = picker?.copy(links = links.toPersistentList(), subtitles = subs)) }
+                }
+            }.onSuccess { (links, subs) ->
+                update { copy(picker = picker?.copy(links = links.toPersistentList(), subtitles = subs, loading = false)) }
+                if (links.size == 1) pickDownload(links.single())
+            }.onFailure { e ->
+                update { copy(picker = picker?.copy(loading = false, error = e.userMessage())) }
+            }
+        }
+    }
+
+    fun pickDownload(link: SavedLink) {
         val response = current.response ?: return
+        val picker = current.picker ?: return
+        pickerJob?.cancel()
+        update { copy(picker = null) }
         DownloadManager.enqueue(
             DownloadRequest(
                 apiName = route.apiName,
@@ -212,9 +243,17 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
                 title = response.name,
                 posterUrl = response.posterUrl,
                 posterHeaders = response.posterHeaders,
-                episode = episode,
+                episode = picker.episode,
+                link = link,
+                subtitles = picker.subtitles,
             )
         )
+        DesktopToasts.show("Downloading from ${link.info().title}")
+    }
+
+    fun dismissPicker() {
+        pickerJob?.cancel()
+        update { copy(picker = null) }
     }
 
     /** The movie itself as one item, for playing and downloading. Null for series. */
@@ -253,6 +292,15 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
     val library by LibraryStore.state.collectAsState()
     val downloads by DownloadManager.entries.collectAsState()
     val response = state.response
+
+    state.picker?.let { picker ->
+        DownloadPickerDialog(
+            state = picker,
+            title = response?.name ?: route.name,
+            onPick = model::pickDownload,
+            onDismiss = model::dismissPicker,
+        )
+    }
 
     Box(Modifier.fillMaxSize()) {
         when {
