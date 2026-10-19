@@ -35,9 +35,9 @@ fun LibraryScreen() {
     Column(Modifier.fillMaxSize()) {
         Text(
             "Library",
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 32.dp, top = 28.dp, bottom = 12.dp),
         )
         PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 16.dp) {
             types.forEachIndexed { i, type ->

@@ -74,7 +74,7 @@ fun DownloadsScreen() {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("Downloads", style = MaterialTheme.typography.headlineLarge)
                 val downloading = entries.count { it.status == DownloadStatus.Downloading }
                 val waiting = entries.count { it.status == DownloadStatus.Queued }
                 Text(

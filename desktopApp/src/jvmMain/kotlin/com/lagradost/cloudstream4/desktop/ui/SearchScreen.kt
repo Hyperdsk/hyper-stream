@@ -19,7 +19,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -124,22 +125,32 @@ fun SearchScreen(model: SearchModel) {
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 
     Column(Modifier.fillMaxSize()) {
-        OutlinedTextField(
+        LargeTitle("Search")
+        // A filled, rounded field like Apple's search fields, rather than an outlined form input
+        TextField(
             value = state.query,
             onValueChange = model::onQueryChange,
-            placeholder = { Text("Search all providers") },
+            placeholder = { Text("Movies, shows and more", style = MaterialTheme.typography.bodyLarge) },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
                 if (state.query.isNotEmpty()) IconButton(onClick = model::clear) { Icon(Icons.Default.Clear, "Clear") }
             },
             singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.1f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f),
+                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+            ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { model.search() }),
-            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 16.dp).focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp).focusRequester(focus),
         )
         if (state.providers.size > 1) {
             FlowRow(
-                Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                Modifier.padding(horizontal = 32.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 state.providers.forEach { name ->
@@ -179,8 +190,8 @@ fun SearchScreen(model: SearchModel) {
 
 @Composable
 private fun PosterRowPlaceholder(title: String, message: String) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 12.dp)) {
+        Text(title, style = MaterialTheme.typography.titleLarge)
         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
@@ -66,10 +67,17 @@ data class HomeState(
     val loading: Boolean = false,
     val error: String? = null,
     val hasMainPage: Boolean = true,
+    /** The featured carousel: the top row's first titles, with details loaded for backdrops. */
+    val hero: PersistentList<HeroItem> = persistentListOf(),
 )
+
+data class HeroItem(val search: SearchResponse, val details: LoadResponse? = null)
+
+private const val HERO_COUNT = 6
 
 class HomeModel : ScreenModel<HomeState>(HomeState()) {
     private var job: Job? = null
+    private var heroJob: Job? = null
 
     init {
         scope.launch {
@@ -108,7 +116,8 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
             update { copy(rows = persistentListOf(), loading = false, error = null, hasMainPage = false) }
             return
         }
-        update { copy(rows = persistentListOf(), loading = true, error = null, hasMainPage = true) }
+        heroJob?.cancel()
+        update { copy(rows = persistentListOf(), loading = true, error = null, hasMainPage = true, hero = persistentListOf()) }
         job = scope.launch {
             val requests = api.mainPage.mapIndexed { i, page -> i to MainPageRequest(page.name, page.data, page.horizontalImages) }
             val errors = mutableListOf<Throwable>()
@@ -129,6 +138,7 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
                             )
                         }.filter { it.items.isNotEmpty() }
                         update { copy(rows = (this.rows + rows).sortedBy { it.order }.toPersistentList()) }
+                        if (current.hero.isEmpty()) startHero(api)
                     }
                     .onFailure { errors += it }
             }
@@ -147,6 +157,28 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
                     error = if (this.rows.isEmpty()) errors.firstOrNull()?.userMessage() ?: "This provider returned nothing." else null,
                 )
             }
+        }
+    }
+
+    /** Fills the carousel from the first row, then loads each title's details for its backdrop and logo. */
+    private fun startHero(api: com.lagradost.cloudstream3.MainAPI) {
+        val picks = current.rows.firstOrNull()?.items?.take(HERO_COUNT).orEmpty()
+        if (picks.isEmpty()) return
+        update { copy(hero = picks.map { HeroItem(it) }.toPersistentList()) }
+        heroJob = scope.launch {
+            val limit = kotlinx.coroutines.sync.Semaphore(3)
+            picks.map { item ->
+                async {
+                    limit.acquire()
+                    try {
+                        providerCall { api.load(item.url) }.getOrNull()?.let { details ->
+                            update { copy(hero = hero.map { if (it.search.url == item.url) it.copy(details = details) else it }.toPersistentList()) }
+                        }
+                    } finally {
+                        limit.release()
+                    }
+                }
+            }.awaitAll()
         }
     }
 
@@ -187,54 +219,64 @@ fun HomeScreen(model: HomeModel) {
     val library by LibraryStore.state.collectAsState()
     val continueWatching = library.continueWatching
 
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Home", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            if (state.providers.isNotEmpty()) {
-                ProviderPicker(state.providers, state.provider, onSelect = model::select)
-                IconButton(onClick = model::load) { Icon(Icons.Default.Refresh, "Reload") }
-            }
-        }
-
-        when {
-            state.providers.isEmpty() && continueWatching.isEmpty() -> MessageBox(
+    if (state.providers.isEmpty() && continueWatching.isEmpty()) {
+        Column(Modifier.fillMaxSize()) {
+            LargeTitle("Home")
+            MessageBox(
                 title = "No extensions yet",
                 body = "CloudStream doesn't include any content. Add a repository and install extensions to start browsing.",
                 actionLabel = "Open Extensions",
             ) { nav.open(Route.Extensions) }
+        }
+        return
+    }
 
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-                if (continueWatching.isNotEmpty()) {
-                    item(key = "continue") { ContinueWatchingRow(continueWatching) }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp)) {
+            if (state.hero.isNotEmpty()) {
+                item(key = "hero") { HeroCarousel(state.hero) }
+            } else {
+                // Room for the floating provider picker when there is no hero
+                item(key = "title") { LargeTitle("Home") }
+            }
+            if (continueWatching.isNotEmpty()) {
+                item(key = "continue") { ContinueWatchingRow(continueWatching) }
+            }
+            when {
+                state.loading && state.rows.isEmpty() -> item { LoadingBox(Modifier.fillMaxWidth().padding(64.dp)) }
+                !state.hasMainPage -> item {
+                    MessageBox(
+                        "${state.provider} has no home page",
+                        "Use Search to find something on this provider.",
+                        "Go to Search",
+                        Modifier.fillMaxWidth(),
+                    ) { nav.open(Route.Search) }
                 }
-                when {
-                    state.loading && state.rows.isEmpty() -> item { LoadingBox(Modifier.fillMaxWidth().padding(64.dp)) }
-                    !state.hasMainPage -> item {
-                        MessageBox(
-                            "${state.provider} has no home page",
-                            "Use Search to find something on this provider.",
-                            "Go to Search",
-                            Modifier.fillMaxWidth(),
-                        ) { nav.open(Route.Search) }
-                    }
 
-                    state.error != null -> item {
-                        MessageBox("Couldn't load ${state.provider}", state.error, "Try again", Modifier.fillMaxWidth(), model::load)
-                    }
+                state.error != null -> item {
+                    MessageBox("Couldn't load ${state.provider}", state.error, "Try again", Modifier.fillMaxWidth(), model::load)
                 }
-                items(state.rows, key = { it.key }) { row ->
-                    PosterRow(
-                        title = row.name,
-                        items = row.items.map { it.toPoster() },
-                        horizontal = row.horizontal,
-                        loadingMore = row.loadingMore,
-                        onReachEnd = if (row.hasNext) ({ model.loadMore(row.key) }) else null,
-                    ) { nav.open(Route.Details(it.apiName, it.url, it.name)) }
-                }
+            }
+            items(state.rows, key = { it.key }) { row ->
+                PosterRow(
+                    title = row.name,
+                    items = row.items.map { it.toPoster() },
+                    horizontal = row.horizontal,
+                    loadingMore = row.loadingMore,
+                    onReachEnd = if (row.hasNext) ({ model.loadMore(row.key) }) else null,
+                ) { nav.open(Route.Details(it.apiName, it.url, it.name)) }
+            }
+        }
+
+        // Provider choice floats over the top right, like the Apple TV app's account controls
+        if (state.providers.isNotEmpty()) {
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(top = 20.dp, end = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ProviderPicker(state.providers, state.provider, onSelect = model::select)
+                GlassButton(Icons.Default.Refresh, "Reload", onClick = model::load)
             }
         }
     }
@@ -244,11 +286,7 @@ fun HomeScreen(model: HomeModel) {
 fun ProviderPicker(providers: List<String>, selected: String?, onSelect: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { open = true }) {
-            Text(selected ?: "Choose provider")
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.ArrowDropDown, null)
-        }
+        GlassButton(Icons.Default.ArrowDropDown, "Choose provider", text = selected ?: "Choose provider") { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             providers.forEach { name ->
                 DropdownMenuItem(

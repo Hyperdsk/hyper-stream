@@ -63,15 +63,13 @@ import java.io.File
 fun ContinueWatchingRow(entries: List<HistoryEntry>) {
     if (entries.isEmpty()) return
     val nav = LocalNavigator.current
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(
-            "Continue watching",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 24.dp),
-        )
-        Spacer(Modifier.height(8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp)) {
+        ShelfTitle("Up Next")
+        Spacer(Modifier.height(12.dp))
+        LazyRow(
+            contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 10.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
             items(entries, key = { "${it.apiName}|${it.parentUrl}" }) { entry ->
                 ContinueWatchingCard(
                     entry = entry,
@@ -100,18 +98,17 @@ fun HistoryEntry.resumeRequest() = PlayRequest(
 fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () -> Unit, onRemove: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val scale by animateFloatAsState(if (hovered) 1.04f else 1f, tween(180))
     val snapshot = rememberSnapshot(entry.snapshotPath, entry.updatedAt)
 
-    Column(Modifier.width(300.dp).hoverable(interaction)) {
+    Column(Modifier.width(320.dp)) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
-                .scale(scale)
-                .clip(RoundedCornerShape(10.dp))
+                .tvLift(interaction, hoverScale = 1.05f)
+                .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(onClick = onPlay),
+                .clickable(interactionSource = interaction, indication = null, onClick = onPlay),
         ) {
             // Where you stopped; the original poster fades in on hover, or when there is no picture yet
             Crossfade(targetState = hovered || snapshot == null, animationSpec = tween(250)) { showPoster ->
@@ -141,7 +138,7 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
                 Box(Modifier.fillMaxHeight().fillMaxWidth(entry.progress.coerceIn(0.02f, 1f)).background(MaterialTheme.colorScheme.primary))
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
         Text(
             entry.name,
             color = MaterialTheme.colorScheme.onBackground,
@@ -153,7 +150,7 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
         Text(
             listOfNotNull(entry.episodeLabel(), timeLeft(entry)).joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = secondaryText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

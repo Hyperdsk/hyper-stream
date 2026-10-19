@@ -62,7 +62,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).widthIn(max = 760.dp)) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Settings", style = MaterialTheme.typography.headlineLarge)
 
         Section("Appearance")
         Label("Theme")

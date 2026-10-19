@@ -100,9 +100,11 @@ fun RemoteImage(
     headers: Map<String, String>?,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
+    /** A filled box behind the image while it loads; off for logos over other imagery. */
+    placeholder: Boolean = true,
 ) {
     if (url.isNullOrBlank()) {
-        Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant))
+        if (placeholder) Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant))
         return
     }
     val context = LocalPlatformContext.current
@@ -121,7 +123,7 @@ fun RemoteImage(
         model = request,
         contentDescription = null,
         contentScale = contentScale,
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        modifier = if (placeholder) modifier.background(MaterialTheme.colorScheme.surfaceVariant) else modifier,
     )
 }
 
@@ -133,25 +135,17 @@ fun PosterCard(
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    Column(
-        Modifier
-            .width(width)
-            .hoverable(interaction)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
+    Column(Modifier.width(width)) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(if (horizontal) 16f / 9f else 2f / 3f)
-                .clip(RoundedCornerShape(10.dp))
+                // The tvOS focus lift: grow with a deep shadow on hover, dip on press
+                .tvLift(interaction, hoverScale = 1.06f)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
         ) {
-            RemoteImage(
-                item.posterUrl,
-                item.posterHeaders,
-                Modifier.fillMaxSize().scale(if (hovered) 1.04f else 1f),
-            )
+            RemoteImage(item.posterUrl, item.posterHeaders, Modifier.fillMaxSize())
             if (item.badge != null) {
                 Text(
                     item.badge,
@@ -159,9 +153,9 @@ fun PosterCard(
                     color = Color.White,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                        .padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(5.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
             if (item.progress != null) {
@@ -174,25 +168,36 @@ fun PosterCard(
         }
         Text(
             item.name,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
+            modifier = Modifier.padding(top = 10.dp, start = 2.dp, end = 2.dp),
         )
         if (item.subtitle != null) {
             Text(
                 item.subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = secondaryText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 2.dp),
+                modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp),
             )
         }
     }
 }
 
-/** A titled, horizontally scrolling row of posters. Calls [onReachEnd] near the end, for paging. */
+/** A shelf title, Apple style: large and bold, with a chevron when the shelf leads somewhere. */
+@Composable
+fun ShelfTitle(title: String, modifier: Modifier = Modifier, trailing: @Composable (() -> Unit)? = null) {
+    Row(modifier.padding(horizontal = 32.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.weight(1f))
+        trailing?.invoke()
+    }
+}
+
+/** A titled, horizontally scrolling shelf of posters. Calls [onReachEnd] near the end, for paging. */
 @Composable
 fun PosterRow(
     title: String,
@@ -215,23 +220,21 @@ fun PosterRow(
             snapshotFlow { nearEnd }.distinctUntilChanged().filter { it }.collect { onReachEnd() }
         }
     }
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            trailing?.invoke()
-        }
-        Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp)) {
+        ShelfTitle(title, trailing = trailing)
+        Spacer(Modifier.height(12.dp))
         LazyRow(
             state = listState,
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            // Vertical room so the hover lift and its shadow aren't clipped
+            contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 10.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             itemsIndexed(items, key = { i, it -> "$i|${it.apiName}|${it.url}" }) { _, item ->
-                PosterCard(item, if (horizontal) 240.dp else 140.dp, horizontal) { onClick(item) }
+                PosterCard(item, if (horizontal) 300.dp else 168.dp, horizontal) { onClick(item) }
             }
             if (loadingMore) {
                 item {
-                    Box(Modifier.size(80.dp, 200.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(80.dp, 240.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                     }
                 }

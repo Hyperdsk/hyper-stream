@@ -87,18 +87,7 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VlcPlayer?) {
         }
 
         Row(Modifier.fillMaxSize()) {
-            NavigationRail(Modifier.fillMaxHeight()) {
-                Spacer(Modifier.height(12.dp))
-                tabs.forEach { tab ->
-                    NavigationRailItem(
-                        selected = nav.tab == tab.route,
-                        onClick = { nav.open(tab.route) },
-                        icon = { Icon(tab.icon, tab.label) },
-                        label = { Text(tab.label) },
-                    )
-                }
-            }
-            VerticalDivider()
+            Sidebar(nav)
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 when (route) {
                     Route.Home -> HomeScreen(store.home)

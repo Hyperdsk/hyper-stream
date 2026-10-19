@@ -1,6 +1,18 @@
 package com.lagradost.cloudstream4.desktop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -354,45 +366,62 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                 "Couldn't open ${route.name}", state.error, "Try again", onAction = model::load,
             )
 
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
+            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp)) {
                 item { Header(route, response, state, model) }
 
                 if (state.unsupported != null) {
-                    item { Text(state.unsupported!!, Modifier.padding(24.dp), color = MaterialTheme.colorScheme.error) }
+                    item { Text(state.unsupported!!, Modifier.padding(horizontal = 48.dp, vertical = 12.dp), color = MaterialTheme.colorScheme.error) }
                 }
 
                 if (!state.isMovieLike && state.allEpisodes.isNotEmpty()) {
                     item {
-                        Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.Top) {
-                            FlowRow(
-                                Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                state.dubOptions.takeIf { it.size > 1 }?.forEach { dub ->
-                                    FilterChip(selected = dub == state.dub, onClick = { model.selectDub(dub) }, label = { Text(dub.name) })
+                        // Season and dub tabs, Apple style: plain text, the chosen one bright
+                        Row(Modifier.fillMaxWidth().padding(start = 48.dp, end = 32.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                                if (state.dubOptions.size > 1) {
+                                    items(state.dubOptions) { dub ->
+                                        TabText(dub.name, dub == state.dub) { model.selectDub(dub) }
+                                    }
                                 }
-                                state.seasons.takeIf { it.size > 1 }?.forEach { (number, name) ->
-                                    FilterChip(selected = number == state.season, onClick = { model.selectSeason(number) }, label = { Text(name) })
+                                if (state.seasons.size > 1) {
+                                    items(state.seasons) { (number, name) ->
+                                        TabText(name, number == state.season) { model.selectSeason(number) }
+                                    }
+                                } else {
+                                    item { Text("Episodes", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground) }
                                 }
                             }
                             val remaining = state.episodes.count { ep ->
                                 downloads.none { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
                             }
-                            OutlinedButton(onClick = { showSeasonDialog = true }, enabled = state.episodes.isNotEmpty()) {
-                                Icon(Icons.Default.Download, null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(if (state.seasons.size > 1) "Download season" else "Download all")
-                                if (remaining in 1 until state.episodes.size) Text(" ($remaining left)")
-                            }
+                            SubtleCapsule(
+                                Icons.Default.Download,
+                                (if (state.seasons.size > 1) "Download season" else "Download all") +
+                                    if (remaining in 1 until state.episodes.size) " ($remaining left)" else "",
+                            ) { showSeasonDialog = true }
                         }
                     }
-                    items(state.episodes, key = { it.playable.data }) { ep ->
-                        val progress = library.progress(route.apiName, ep.playable.data)
-                        val download = downloads.firstOrNull { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
-                        EpisodeRow(ep, progress?.progress, progress?.finished == true, download, onDownload = { model.download(ep.playable) }) {
-                            val start = progress?.takeIf { !it.finished }?.positionMs ?: 0
-                            model.playRequest(ep.playable, start)?.let { nav.open(Route.Player(it)) }
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(start = 48.dp, end = 32.dp, top = 14.dp, bottom = 14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        ) {
+                            items(state.episodes, key = { it.playable.data }) { ep ->
+                                val progress = library.progress(route.apiName, ep.playable.data)
+                                val download = downloads.firstOrNull { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
+                                EpisodeCard(
+                                    ep = ep,
+                                    fallbackImage = response.backgroundPosterUrl ?: response.posterUrl,
+                                    headers = response.posterHeaders,
+                                    progress = progress?.progress,
+                                    finished = progress?.finished == true,
+                                    download = download,
+                                    onDownload = { model.download(ep.playable) },
+                                ) {
+                                    val start = progress?.takeIf { !it.finished }?.positionMs ?: 0
+                                    model.playRequest(ep.playable, start)?.let { nav.open(Route.Player(it)) }
+                                }
+                            }
                         }
                     }
                 }
@@ -400,14 +429,21 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                 val cast = response.actors.orEmpty()
                 if (cast.isNotEmpty()) {
                     item {
-                        Text("Cast", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp))
-                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        ShelfTitle("Cast & Crew", Modifier.padding(start = 16.dp, top = 18.dp))
+                        LazyRow(
+                            contentPadding = PaddingValues(start = 48.dp, end = 32.dp, top = 14.dp, bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(22.dp),
+                        ) {
                             items(cast) { actor ->
-                                Column(Modifier.width(88.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    RemoteImage(actor.actor.image, null, Modifier.size(72.dp).clip(CircleShape))
-                                    Text(actor.actor.name, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Column(Modifier.width(104.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    RemoteImage(actor.actor.image, null, Modifier.size(96.dp).clip(CircleShape))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        actor.actor.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground,
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                                    )
                                     (actor.roleString ?: actor.role?.name)?.let {
-                                        Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                        Text(it, style = MaterialTheme.typography.labelSmall, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                                     }
                                 }
                             }
@@ -418,82 +454,107 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                 val recommendations = response.recommendations.orEmpty()
                 if (recommendations.isNotEmpty()) {
                     item {
-                        Spacer(Modifier.height(12.dp))
-                        PosterRow("Recommended", recommendations.map { it.toPoster() }) {
-                            nav.open(Route.Details(it.apiName, it.url, it.name))
+                        Box(Modifier.padding(start = 16.dp)) {
+                            PosterRow("More Like This", recommendations.map { it.toPoster() }) {
+                                nav.open(Route.Details(it.apiName, it.url, it.name))
+                            }
                         }
                     }
                 }
             }
         }
-        IconButton(
-            onClick = { nav.back() },
-            modifier = Modifier.padding(12.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape),
-        ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
+        GlassButton(
+            Icons.AutoMirrored.Filled.ArrowBack, "Back",
+            modifier = Modifier.padding(start = 20.dp, top = 20.dp),
+        ) { nav.back() }
     }
 }
 
+/**
+ * The top of the page: a full-bleed backdrop that fades into the page, with the logo or title,
+ * key facts, the main actions and the summary over its lower left.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Header(route: Route.Details, response: LoadResponse, state: DetailsState, model: DetailsModel) {
-    val nav = LocalNavigator.current
     val library by LibraryStore.state.collectAsState()
+    val downloads by DownloadManager.entries.collectAsState()
     val bookmark = library.bookmark(route.apiName, route.url)
+    val background = MaterialTheme.colorScheme.background
+    var plotExpanded by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxWidth().heightIn(min = 380.dp)) {
-        RemoteImage(
-            response.backgroundPosterUrl ?: response.posterUrl,
-            response.posterHeaders,
-            Modifier.matchParentSize(),
-        )
-        Box(Modifier.matchParentSize().background(scrimColor))
-        Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 72.dp, bottom = 24.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val height = (maxWidth * 0.52f).coerceIn(440.dp, 660.dp)
+        Box(Modifier.fillMaxWidth().heightIn(min = height)) {
             RemoteImage(
-                response.posterUrl,
+                response.backgroundPosterUrl ?: response.posterUrl,
                 response.posterHeaders,
-                Modifier.width(190.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(12.dp)),
+                Modifier.matchParentSize(),
             )
-            Spacer(Modifier.width(24.dp))
-            Column(Modifier.weight(1f)) {
-                Text(response.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    response.year?.let { Pill(it.toString()) }
-                    Pill(response.type.name)
-                    response.score?.let { Pill("★ ${it.toStringNull(0.1, 10, 1) ?: it.toString()}") }
-                    response.duration?.takeIf { it > 0 }?.let { Pill("${it / 60}h ${it % 60}m".removePrefix("0h ")) }
-                    response.contentRating?.let { Pill(it) }
-                    (response as? EpisodeResponse)?.showStatus?.let { Pill(it.name) }
-                    Pill(route.apiName)
+            Box(Modifier.matchParentSize().background(leftScrim(background)))
+            Box(Modifier.matchParentSize().background(bottomScrim(background)))
+
+            Column(
+                Modifier.align(Alignment.BottomStart).padding(start = 48.dp, end = 48.dp, top = 120.dp, bottom = 28.dp).widthIn(max = 680.dp),
+            ) {
+                val logo = response.logoUrl
+                if (logo != null) {
+                    RemoteImage(logo, response.posterHeaders, Modifier.heightIn(max = 150.dp).widthIn(max = 440.dp), contentScale = ContentScale.Fit, placeholder = false)
+                } else {
+                    Text(response.name, style = MaterialTheme.typography.displayMedium, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
-                Spacer(Modifier.height(12.dp))
-                response.plot?.let {
-                    Text(it, color = Color.White.copy(alpha = 0.9f), maxLines = 6, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(14.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                    val facts = listOfNotNull(
+                        response.year?.toString(),
+                        response.type.name,
+                        response.duration?.takeIf { it > 0 }?.let { if (it >= 60) "${it / 60}h ${it % 60}m" else "${it}m" },
+                        (response as? EpisodeResponse)?.showStatus?.name,
+                        response.score?.toStringNull(0.1, 10, 1)?.let { "★ $it" },
+                    )
+                    facts.forEachIndexed { i, fact ->
+                        if (i > 0) Text("·", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.6f))
+                        Text(fact, style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
+                    }
+                    response.contentRating?.let { rating ->
+                        Text(
+                            rating, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
                 }
-                response.tags?.takeIf { it.isNotEmpty() }?.let { tags ->
-                    Text(tags.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f))
-                    Spacer(Modifier.height(16.dp))
+                response.tags?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.let { tags ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(tags.take(5).joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.65f))
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.height(20.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     PlayButton(route, response, state, model)
                     BookmarkButton(bookmark?.watchType, model::setBookmark)
                     model.movieItem?.let { movie ->
-                        val downloads by DownloadManager.entries.collectAsState()
                         val download = downloads.firstOrNull { it.id == DownloadManager.idFor(route.apiName, movie.data) }
-                        DownloadButton(download, tint = Color.White) { model.download(movie) }
-                    }
-                    response.trailers.firstOrNull()?.let { trailer ->
-                        OutlinedButton(onClick = { openInBrowser(trailer.extractorUrl) }) {
-                            Icon(Icons.Default.Theaters, null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Trailer")
+                        Box(Modifier.background(Color.White.copy(alpha = 0.16f), CircleShape)) {
+                            DownloadButton(download, tint = Color.White) { model.download(movie) }
                         }
                     }
-                    IconButton(onClick = { openInBrowser(response.url) }) {
-                        Icon(Icons.Default.OpenInBrowser, "Open in browser", tint = Color.White)
+                    response.trailers.firstOrNull()?.let { trailer ->
+                        GlassButton(Icons.Default.Theaters, "Trailer", text = "Trailer") { openInBrowser(trailer.extractorUrl) }
                     }
+                    GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(response.url) }
                 }
+                response.plot?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White.copy(alpha = 0.85f),
+                        maxLines = if (plotExpanded) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { plotExpanded = !plotExpanded },
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(route.apiName, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
             }
         }
     }
@@ -511,7 +572,7 @@ private fun PlayButton(route: Route.Details, response: LoadResponse, state: Deta
         state.isMovieLike -> {
             val data = (response as? MovieLoadResponse)?.dataUrl ?: (response as? LiveStreamLoadResponse)?.dataUrl
             val p = data?.let { library.progress(route.apiName, it) }
-            if (p != null && !p.finished && p.positionMs > 0) Triple("Resume ${formatTime(p.positionMs)}", null, p.positionMs)
+            if (p != null && !p.finished && p.positionMs > 0) Triple("Resume", null, p.positionMs)
             else Triple("Play", null, 0L)
         }
 
@@ -529,10 +590,8 @@ private fun PlayButton(route: Route.Details, response: LoadResponse, state: Deta
         else -> Triple("Play", state.allEpisodes.firstOrNull()?.playable, 0L)
     }
     if (!state.isMovieLike && state.allEpisodes.isEmpty()) return
-    Button(onClick = { model.playRequest(target, start)?.let { nav.open(Route.Player(it)) } }) {
-        Icon(Icons.Default.PlayArrow, null)
-        Spacer(Modifier.width(6.dp))
-        Text(label)
+    PrimaryCapsuleButton(label, Icons.Default.PlayArrow) {
+        model.playRequest(target, start)?.let { nav.open(Route.Player(it)) }
     }
 }
 
@@ -540,11 +599,11 @@ private fun PlayButton(route: Route.Details, response: LoadResponse, state: Deta
 private fun BookmarkButton(current: WatchType?, onSelect: (WatchType?) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { open = true }) {
-            Icon(if (current != null) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, null)
-            Spacer(Modifier.width(6.dp))
-            Text(current?.label ?: "Bookmark")
-        }
+        GlassButton(
+            if (current != null) Icons.Default.Check else Icons.Default.Add,
+            current?.label ?: "Add to Library",
+            text = current?.label,
+        ) { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             WatchType.entries.forEach { type ->
                 DropdownMenuItem(
@@ -553,52 +612,110 @@ private fun BookmarkButton(current: WatchType?, onSelect: (WatchType?) -> Unit) 
                 )
             }
             if (current != null) {
-                DropdownMenuItem(text = { Text("Remove bookmark") }, onClick = { open = false; onSelect(null) })
+                DropdownMenuItem(text = { Text("Remove from Library") }, onClick = { open = false; onSelect(null) })
             }
         }
     }
 }
 
+/** Season or dub choice as plain text tabs: the selected one bright and bold, others dimmed. */
 @Composable
-private fun EpisodeRow(
+private fun TabText(text: String, selected: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Text(
+        text,
+        style = MaterialTheme.typography.titleLarge,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (selected) 1f else if (hovered) 0.8f else 0.45f),
+        modifier = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = null, onClick = onClick),
+    )
+}
+
+/** A quiet capsule button for actions on the plain page, next to more important content. */
+@Composable
+private fun SubtleCapsule(icon: ImageVector, text: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        Modifier
+            .pressScale(interaction)
+            .hoverable(interaction)
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = if (hovered) 0.16f else 0.09f), RoundedCornerShape(50))
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
+    }
+}
+
+/** An episode as an Apple TV card: a still with progress, the episode number, title and summary. */
+@Composable
+private fun EpisodeCard(
     ep: EpisodeUi,
+    fallbackImage: String?,
+    headers: Map<String, String>?,
     progress: Float?,
     finished: Boolean,
     download: DownloadEntry?,
     onDownload: () -> Unit,
     onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
-    ) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(160.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))) {
-                if (ep.posterUrl != null) {
-                    RemoteImage(ep.posterUrl, null, Modifier.fillMaxSize())
-                } else {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                if (progress != null && progress > 0f) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
-                    )
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Column(Modifier.width(300.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .tvLift(interaction, hoverScale = 1.05f)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        ) {
+            RemoteImage(ep.posterUrl ?: fallbackImage, if (ep.posterUrl != null) null else headers, Modifier.fillMaxSize())
+            if (hovered) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
+                Box(
+                    Modifier.align(Alignment.Center).size(48.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape).border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Default.PlayArrow, "Play", tint = Color.White, modifier = Modifier.size(28.dp)) }
+            }
+            // Download stays visible once started, otherwise it appears on hover
+            if (hovered || download != null) {
+                Box(Modifier.align(Alignment.TopEnd).padding(6.dp).background(Color.Black.copy(alpha = 0.6f), CircleShape)) {
+                    DownloadButton(download, tint = Color.White, onStart = onDownload)
                 }
             }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(ep.playable.label, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                ep.runTimeMinutes?.let { Text("$it min", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                ep.description?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (finished) {
+                Icon(
+                    Icons.Default.CheckCircle, "Watched", tint = Color.White,
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp).size(22.dp),
+                )
+            }
+            if (progress != null && progress > 0f && !finished) {
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0.02f, 1f)).background(MaterialTheme.colorScheme.primary))
                 }
             }
-            if (finished) Icon(Icons.Default.CheckCircle, "Watched", tint = MaterialTheme.colorScheme.primary)
-            DownloadButton(download, onStart = onDownload)
         }
+        Spacer(Modifier.height(10.dp))
+        val number = listOfNotNull(
+            ep.playable.season?.takeIf { it > 0 }?.let { "SEASON $it" },
+            ep.playable.episode?.let { "EPISODE $it" },
+        ).joinToString(", ")
+        if (number.isNotEmpty()) Text(number, style = MaterialTheme.typography.labelSmall, color = secondaryText)
+        Text(
+            ep.playable.name ?: ep.playable.label,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        ep.description?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = secondaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        ep.runTimeMinutes?.let { Text("$it min", style = MaterialTheme.typography.labelSmall, color = secondaryText, modifier = Modifier.padding(top = 2.dp)) }
     }
 }

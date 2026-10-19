@@ -21,6 +21,7 @@ import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
 import com.lagradost.cloudstream4.desktop.ui.LocalWindowState
+import com.lagradost.cloudstream4.desktop.ui.TvTypography
 import com.lagradost.cloudstream4.desktop.ui.ModelStore
 import com.lagradost.cloudstream4.desktop.ui.Route
 import com.lagradost.cloudstream4.desktop.ui.rememberNavigator
@@ -80,6 +81,8 @@ fun main() {
 
             val settings by SettingsStore.state.collectAsState()
             CloudStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
+                // San Francisco and Apple's text styles across the app, on top of the chosen colours
+                MaterialTheme(colorScheme = MaterialTheme.colorScheme, typography = TvTypography) {
                 CompositionLocalProvider(
                     LocalFocusOutlineDefault provides false,
                     LocalWindowState provides windowState,
@@ -87,6 +90,7 @@ fun main() {
                     Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                         CloudStreamApp(nav, store, vlc)
                     }
+                }
                 }
             }
         }

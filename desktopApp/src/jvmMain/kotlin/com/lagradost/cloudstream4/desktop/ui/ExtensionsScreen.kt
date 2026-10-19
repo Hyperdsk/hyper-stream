@@ -89,7 +89,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Extensions", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Extensions", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
                 IconButton(onClick = { runCatching { Desktop.getDesktop().open(AppDirs.extensions) } }) {
                     Icon(Icons.Default.FolderOpen, "Open extensions folder")
                 }
@@ -295,7 +295,7 @@ private fun RepositoryScreen(repo: RepositoryState, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(start = 12.dp, end = 24.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
             OutlinedTextField(filter, { filter = it }, placeholder = { Text("Filter") }, singleLine = true, modifier = Modifier.width(260.dp))
         }
         when {
