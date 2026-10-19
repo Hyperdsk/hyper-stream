@@ -10,14 +10,52 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import okhttp3.Request
+import okhttp3.Response
 import java.io.File
+import java.io.IOException
+import java.net.URI
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
+/** Thrown when a site answers with a web page (an error or bot-check page) instead of repository data. */
+class WebPageResponseException(url: String) : IOException(
+    "${hostOf(url)} returned a web page instead of repository data. " +
+        "The site may be down, or it may be showing a bot check."
+)
+
+private fun hostOf(url: String) = runCatching { URI(url).host }.getOrNull() ?: url
+
 /** Fetches repositories and extension files. Port of the Android RepositoryManager networking. */
 object RepositoryClient {
+    /**
+     * Repository files are plain data, so they are fetched as an app, not as a browser. Some
+     * hosts (git.disroot.org, which runs the Anubis bot check) answer browser user agents with
+     * a challenge page instead of the file. Extensions keep using the browser user agent.
+     */
+    const val USER_AGENT = "CloudStream-Desktop/1.0"
+
+    private fun get(url: String): Response {
+        val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
+        val response = app.baseClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            response.close()
+            throw IOException("${hostOf(url)} answered with HTTP ${response.code}.")
+        }
+        return response
+    }
+
+    /** Text of a json file, refusing html pages so the user gets a readable reason. */
+    private fun getJsonText(url: String): String {
+        val text = get(url).use { it.body.string() }
+        if (looksLikeWebPage(text)) throw WebPageResponseException(url)
+        return text
+    }
+
+    /** Json never starts with "<", while html and xml pages always do. */
+    internal fun looksLikeWebPage(text: String): Boolean = text.trimStart().startsWith("<")
     private val schemeRegex = "^(cloudstreamrepo://)|(https://cs\\.repo/\\??)".toRegex()
 
     /**
@@ -45,11 +83,11 @@ object RepositoryClient {
     }
 
     suspend fun fetchRepository(url: String): Repository = withContext(Dispatchers.IO) {
-        jsonMapper.readValue(app.get(url).text, Repository::class.java)
+        jsonMapper.readValue(getJsonText(url), Repository::class.java)
     }
 
     suspend fun fetchJson(url: String): JsonNode = withContext(Dispatchers.IO) {
-        jsonMapper.readTree(app.get(url).text)
+        jsonMapper.readTree(getJsonText(url))
     }
 
     /**
@@ -69,14 +107,17 @@ object RepositoryClient {
     }
 
     suspend fun fetchPluginList(url: String): List<SitePlugin> = withContext(Dispatchers.IO) {
-        jsonMapper.readValue(app.get(url).text, Array<SitePlugin>::class.java).toList()
+        jsonMapper.readValue(getJsonText(url), Array<SitePlugin>::class.java).toList()
     }
 
-    /** All plugins listed by a repository, across all of its plugin lists. */
+    /**
+     * All plugins listed by a repository, across all of its plugin lists. A list that fails is
+     * skipped, but if every list fails the first error is thrown, so the user sees why.
+     */
     suspend fun fetchRepoPlugins(repo: Repository): List<SitePlugin> = coroutineScope {
-        repo.pluginLists.map { url ->
-            async { runCatching { fetchPluginList(url) }.getOrElse { emptyList() } }
-        }.awaitAll().flatten()
+        val results = repo.pluginLists.map { url -> async { runCatching { fetchPluginList(url) } } }.awaitAll()
+        if (results.isNotEmpty() && results.all { it.isFailure }) throw results.first().exceptionOrNull()!!
+        results.flatMap { it.getOrDefault(emptyList()) }
     }
 
     /** Downloads to a temp file, checks the hash when the repository provides one, then moves into place. */
@@ -84,8 +125,14 @@ object RepositoryClient {
         target.parentFile?.mkdirs()
         val tmp = File.createTempFile(target.name, ".tmp", target.parentFile)
         try {
-            app.get(url).okhttpResponse.body.byteStream().use { input ->
-                tmp.outputStream().use { input.copyTo(it) }
+            get(url).use { response ->
+                response.body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            }
+            // A .cs3 is a zip, which always starts with "PK"
+            val head = tmp.inputStream().use { it.readNBytes(64) }
+            if (head.size < 2 || head[0] != 'P'.code.toByte() || head[1] != 'K'.code.toByte()) {
+                if (looksLikeWebPage(String(head))) throw WebPageResponseException(url)
+                throw IOException("${hostOf(url)} did not return an extension file.")
             }
             if (expectedHash != null) {
                 val actual = sha256(tmp)

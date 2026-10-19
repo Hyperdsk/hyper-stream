@@ -33,3 +33,13 @@ class RepositoryListTest {
         assertNull(RepositoryClient.repositoryList(json))
     }
 }
+
+class WebPageDetectionTest {
+    @Test
+    fun recognisesBotCheckPagesButNotJson() {
+        kotlin.test.assertTrue(RepositoryClient.looksLikeWebPage("<!doctype html><html><head><title>Making sure you're not a bot!</title>"))
+        kotlin.test.assertTrue(RepositoryClient.looksLikeWebPage("\n  <html>"))
+        kotlin.test.assertFalse(RepositoryClient.looksLikeWebPage("""{"name": "FStream"}"""))
+        kotlin.test.assertFalse(RepositoryClient.looksLikeWebPage("""[{"url": "x"}]"""))
+    }
+}

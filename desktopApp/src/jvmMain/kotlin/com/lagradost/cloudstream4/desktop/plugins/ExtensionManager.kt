@@ -195,9 +195,32 @@ object ExtensionManager {
                     loading = false,
                 )
             }
+            fixStoredName(url, repo)
         }.onFailure { e ->
-            updateRepo(url) { it.copy(loading = false, error = e.message ?: "Could not load repository") }
+            updateRepo(url) { it.copy(loading = false, error = repositoryError(url, e)) }
         }
+    }
+
+    private fun repositoryError(url: String, e: Throwable): String = when (e) {
+        is com.fasterxml.jackson.core.JsonProcessingException ->
+            "${runCatching { java.net.URI(url).host }.getOrNull() ?: url} doesn't contain a valid CloudStream repository file."
+        else -> e.message ?: "Could not load repository"
+    }
+
+    /**
+     * Repositories added while their site was unreachable are saved as "No name" (the Android
+     * app and extensions such as MegaProvider do this). Once the repository loads, keep its real
+     * name and icon.
+     */
+    private suspend fun fixStoredName(url: String, repo: Repository) {
+        val stored = _state.value.repositories.firstOrNull { it.data.url == url }?.data ?: return
+        if (stored.name.isNotBlank() && stored.name != "No name" && (stored.iconUrl != null || repo.iconUrl == null)) return
+        val updated = stored.copy(
+            name = stored.name.takeUnless { it.isBlank() || it == "No name" } ?: repo.name,
+            iconUrl = stored.iconUrl ?: repo.iconUrl,
+        )
+        lock.withLock { reposFile.write(reposFile.read().map { if (it.url == url) updated else it }) }
+        updateRepo(url) { it.copy(data = updated) }
     }
 
     private fun updateRepo(url: String, block: (RepositoryState) -> RepositoryState) = _state.update { s ->
