@@ -65,9 +65,10 @@ compose.desktop {
             if (project.hasProperty("debugApp")) modules("jdk.jdwp.agent")
             packageVersion = "1.0.0"
 
-            val iconsRoot = project.file("desktop-icons")
+            val iconsRoot = project.file("src/desktop-icons")
             macOS {
-                // iconFile.set(iconsRoot.resolve("icon-mac.icns"))
+                // CloudStream's cloud logo on Apple's icon grid, made from icon.svg (see MACOS.md)
+                iconFile.set(iconsRoot.resolve("icon-mac.icns"))
                 bundleID = "com.lagradost.cloudstream4.desktop"
                 appCategory = "public.app-category.entertainment"
             }
