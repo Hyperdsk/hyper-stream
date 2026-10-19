@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream4.desktop.data.AppDirs
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.theme.CloudStreamPrimaryColor
 import com.lagradost.cloudstream4.theme.CloudStreamThemeMode
@@ -116,6 +117,23 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             }
         }
 
+        Section("Downloads")
+        Text(DownloadManager.folder.path, style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
+            OutlinedButton(onClick = {
+                chooseFolder()?.let { path -> SettingsStore.update { it.copy(downloadFolder = path) } }
+            }) { Text("Change folder") }
+            if (settings.downloadFolder != null) {
+                OutlinedButton(onClick = { SettingsStore.update { it.copy(downloadFolder = null) } }) { Text("Use Movies folder") }
+            }
+        }
+        Text(
+            "Finished downloads stay where they are when you change the folder.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+
         Section("Extensions")
         Toggle("Show demo provider with open movies", settings.demoProvider) { v -> ExtensionManager.setDemoProvider(v) }
         Text(
@@ -163,5 +181,18 @@ private fun Toggle(text: String, checked: Boolean, onChange: (Boolean) -> Unit) 
     Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** The native macOS folder picker. Returns null when cancelled. */
+private fun chooseFolder(): String? {
+    System.setProperty("apple.awt.fileDialogForDirectories", "true")
+    return try {
+        val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Choose a download folder", java.awt.FileDialog.LOAD)
+        dialog.directory = DownloadManager.folder.path
+        dialog.isVisible = true
+        dialog.file?.let { java.io.File(dialog.directory, it).path }
+    } finally {
+        System.setProperty("apple.awt.fileDialogForDirectories", "false")
     }
 }

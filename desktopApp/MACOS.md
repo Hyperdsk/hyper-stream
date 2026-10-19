@@ -45,11 +45,13 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 | Player | `desktop/player/VlcPlayer.kt` | vlcj renders frames into Compose. Tracks, subtitles, speed, resume. |
 | Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
 | Screens | `desktop/ui/` | Home, Search, Details, Player, Library, Extensions, Settings. One immutable state per screen, as `COMPOSE.md` asks. |
+| Downloads | `desktop/download/DownloadManager.kt` | Direct files resume with Range requests. HLS uses the library's `M3u8Helper2` like Android, including AES-128. Saved to `~/Movies/CloudStream` by default, with subtitles alongside. Downloaded episodes play offline. |
 | Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
 
 ## Not done yet
 
-- Downloads, Chromecast, account sync (AniList, MAL, Simkl) and subtitle search.
+- Chromecast, account sync (AniList, MAL, Simkl) and subtitle search.
+- DASH streams and HLS streams with separate audio tracks can't be downloaded, as on Android.
 - Extensions that need a WebView (Cloudflare checks) fail, because `WebViewResolver` has no JVM implementation upstream.
 - Extensions that use Android UI or other app-only classes fail to load, with the missing class shown on the Extensions screen.
 - Torrent links are skipped.

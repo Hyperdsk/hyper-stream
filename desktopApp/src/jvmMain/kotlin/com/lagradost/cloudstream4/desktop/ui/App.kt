@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -33,6 +34,7 @@ private val tabs = listOf(
     Tab(Route.Home, "Home", Icons.Default.Home),
     Tab(Route.Search, "Search", Icons.Default.Search),
     Tab(Route.Library, "Library", Icons.Default.VideoLibrary),
+    Tab(Route.Downloads, "Downloads", Icons.Default.Download),
     Tab(Route.Extensions, "Extensions", Icons.Default.Extension),
     Tab(Route.Settings, "Settings", Icons.Default.Settings),
 )
@@ -84,6 +86,7 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VlcPlayer?) {
                     Route.Home -> HomeScreen(store.home)
                     Route.Search -> SearchScreen(store.search)
                     Route.Library -> LibraryScreen()
+                    Route.Downloads -> DownloadsScreen()
                     Route.Extensions -> ExtensionsScreen()
                     Route.Settings -> SettingsScreen(vlcAvailable = vlc != null)
                     is Route.Details -> DetailsScreen(route, store.get(route) { DetailsModel(route) })

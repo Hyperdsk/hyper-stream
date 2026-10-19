@@ -22,6 +22,8 @@ data class AppSettings(
     @JsonProperty("searchExcluded") val searchExcluded: Set<String> = emptySet(),
     /** Built-in provider with open movies, for trying the app without extensions. */
     @JsonProperty("demoProvider") val demoProvider: Boolean = false,
+    /** Where downloads are saved. Null means ~/Movies/CloudStream. */
+    @JsonProperty("downloadFolder") val downloadFolder: String? = null,
 )
 
 object SettingsStore {

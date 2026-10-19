@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.player.StreamProxy
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import kotlinx.collections.immutable.PersistentList
@@ -18,6 +19,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
+import java.io.File
+
+/** Marks [PlayerUiState.current] while a downloaded file plays. */
+const val OFFLINE = -1
 
 data class PlayerUiState(
     val index: Int,
@@ -27,6 +32,8 @@ data class PlayerUiState(
     val current: Int? = null,
     val failed: PersistentSet<Int> = persistentSetOf(),
     val error: String? = null,
+    /** Set when playing a downloaded file instead of streaming. */
+    val offlineFile: String? = null,
 )
 
 fun ExtractorLink.label(): String =
@@ -73,13 +80,22 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         }
     }
 
-    fun loadEpisode(index: Int, startMs: Long = 0) {
+    fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true) {
         saveProgress()
         linksJob?.cancel()
         player?.stop()
         StreamProxy.clear()
         pendingStartMs = startMs
         update { PlayerUiState(index) }
+
+        // Play the downloaded file when there is one, like the Android app
+        val downloaded = if (allowOffline) DownloadManager.completedFile(request.apiName, request.episodes[index].data) else null
+        if (downloaded != null && player != null) {
+            val file = downloaded.file!!
+            update { copy(loadingLinks = false, current = OFFLINE, offlineFile = file.path) }
+            player.open(file.toURI().toString(), startMs, downloaded.subtitles.map { File(it).toURI().toString() })
+            return
+        }
 
         val api = providerByName(request.apiName)
         if (api == null) {
@@ -159,6 +175,11 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
     }
 
     private fun onSourceFailed() {
+        // A downloaded file that won't play falls back to streaming
+        if (current.offlineFile != null) {
+            loadEpisode(current.index, player?.state?.value?.timeMs ?: 0, allowOffline = false)
+            return
+        }
         val failedIndex = current.current ?: return
         update { copy(failed = failed.add(failedIndex)) }
         val next = sortedCandidates().firstOrNull()

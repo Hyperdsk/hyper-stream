@@ -32,12 +32,13 @@ sealed interface Route {
     data object Home : Route
     data object Search : Route
     data object Library : Route
+    data object Downloads : Route
     data object Extensions : Route
     data object Settings : Route
     data class Details(val apiName: String, val url: String, val name: String) : Route
     data class Player(val request: PlayRequest) : Route
 
-    val isTab: Boolean get() = this is Home || this is Search || this is Library || this is Extensions || this is Settings
+    val isTab: Boolean get() = this is Home || this is Search || this is Library || this is Downloads || this is Extensions || this is Settings
 }
 
 /** A back stack per tab, like the Android app's bottom navigation. */

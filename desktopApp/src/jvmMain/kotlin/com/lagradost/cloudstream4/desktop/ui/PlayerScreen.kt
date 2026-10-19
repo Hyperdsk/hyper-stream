@@ -206,7 +206,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         }
                     }
                     ui.current?.let { i ->
-                        Text(ui.links.getOrNull(i)?.label() ?: "", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+                        val label = if (ui.offlineFile != null) "Downloaded file" else ui.links.getOrNull(i)?.label() ?: ""
+                        Text(label, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
                     }
                 }
 

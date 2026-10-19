@@ -67,6 +67,9 @@ import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream4.desktop.data.Bookmark
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.WatchType
+import com.lagradost.cloudstream4.desktop.download.DownloadEntry
+import com.lagradost.cloudstream4.desktop.download.DownloadManager
+import com.lagradost.cloudstream4.desktop.download.DownloadRequest
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
@@ -200,6 +203,24 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
         )
     }
 
+    fun download(episode: PlayableEpisode) {
+        val response = current.response ?: return
+        DownloadManager.enqueue(
+            DownloadRequest(
+                apiName = route.apiName,
+                parentUrl = response.url,
+                title = response.name,
+                posterUrl = response.posterUrl,
+                posterHeaders = response.posterHeaders,
+                episode = episode,
+            )
+        )
+    }
+
+    /** The movie itself as one item, for playing and downloading. Null for series. */
+    val movieItem: PlayableEpisode?
+        get() = (current.response as? MovieLoadResponse)?.let { PlayableEpisode(it.dataUrl, null, null, null) }
+
     fun setBookmark(type: WatchType?) {
         val response = current.response ?: return
         LibraryStore.setBookmark(
@@ -230,6 +251,7 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
     val nav = LocalNavigator.current
     val state by model.state.collectAsState()
     val library by LibraryStore.state.collectAsState()
+    val downloads by DownloadManager.entries.collectAsState()
     val response = state.response
 
     Box(Modifier.fillMaxSize()) {
@@ -263,7 +285,8 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                     }
                     items(state.episodes, key = { it.playable.data }) { ep ->
                         val progress = library.progress(route.apiName, ep.playable.data)
-                        EpisodeRow(ep, progress?.progress, progress?.finished == true) {
+                        val download = downloads.firstOrNull { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
+                        EpisodeRow(ep, progress?.progress, progress?.finished == true, download, onDownload = { model.download(ep.playable) }) {
                             val start = progress?.takeIf { !it.finished }?.positionMs ?: 0
                             model.playRequest(ep.playable, start)?.let { nav.open(Route.Player(it)) }
                         }
@@ -351,6 +374,11 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     PlayButton(route, response, state, model)
                     BookmarkButton(bookmark?.watchType, model::setBookmark)
+                    model.movieItem?.let { movie ->
+                        val downloads by DownloadManager.entries.collectAsState()
+                        val download = downloads.firstOrNull { it.id == DownloadManager.idFor(route.apiName, movie.data) }
+                        DownloadButton(download, tint = Color.White) { model.download(movie) }
+                    }
                     response.trailers.firstOrNull()?.let { trailer ->
                         OutlinedButton(onClick = { openInBrowser(trailer.extractorUrl) }) {
                             Icon(Icons.Default.Theaters, null)
@@ -428,7 +456,14 @@ private fun BookmarkButton(current: WatchType?, onSelect: (WatchType?) -> Unit) 
 }
 
 @Composable
-private fun EpisodeRow(ep: EpisodeUi, progress: Float?, finished: Boolean, onClick: () -> Unit) {
+private fun EpisodeRow(
+    ep: EpisodeUi,
+    progress: Float?,
+    finished: Boolean,
+    download: DownloadEntry?,
+    onDownload: () -> Unit,
+    onClick: () -> Unit,
+) {
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -459,6 +494,7 @@ private fun EpisodeRow(ep: EpisodeUi, progress: Float?, finished: Boolean, onCli
                 }
             }
             if (finished) Icon(Icons.Default.CheckCircle, "Watched", tint = MaterialTheme.colorScheme.primary)
+            DownloadButton(download, onStart = onDownload)
         }
     }
 }

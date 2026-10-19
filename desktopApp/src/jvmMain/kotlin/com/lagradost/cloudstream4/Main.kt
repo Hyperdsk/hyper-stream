@@ -58,7 +58,8 @@ fun main() {
                     Item("Home", shortcut = KeyShortcut(Key.One, meta = true)) { nav.open(Route.Home) }
                     Item("Search", shortcut = KeyShortcut(Key.F, meta = true)) { nav.open(Route.Search) }
                     Item("Library", shortcut = KeyShortcut(Key.Two, meta = true)) { nav.open(Route.Library) }
-                    Item("Extensions", shortcut = KeyShortcut(Key.Three, meta = true)) { nav.open(Route.Extensions) }
+                    Item("Downloads", shortcut = KeyShortcut(Key.Three, meta = true)) { nav.open(Route.Downloads) }
+                    Item("Extensions", shortcut = KeyShortcut(Key.Four, meta = true)) { nav.open(Route.Extensions) }
                     Item("Settings", shortcut = KeyShortcut(Key.Comma, meta = true)) { nav.open(Route.Settings) }
                     Separator()
                     Item("Back", shortcut = KeyShortcut(Key.LeftBracket, meta = true)) { nav.back() }
