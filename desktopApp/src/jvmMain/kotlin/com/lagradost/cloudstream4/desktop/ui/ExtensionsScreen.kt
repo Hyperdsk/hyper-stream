@@ -17,11 +17,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -81,6 +83,8 @@ fun ExtensionsScreen() {
 private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     val state by ExtensionManager.state.collectAsState()
     var input by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+    val q = query.trim()
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -119,26 +123,81 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
             }
         }
 
-        item { SectionTitle("Repositories") }
-        if (state.repositories.isEmpty()) {
-            item { Hint("No repositories added.") }
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search repositories and extensions") },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Clear search") }
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
         }
-        items(state.repositories, key = { it.data.url }) { repo ->
+
+        val repos = state.repositories.filter {
+            matches(q, it.repository?.name ?: it.data.name, it.repository?.description, it.data.url)
+        }
+        item { SectionTitle(if (q.isEmpty()) "Repositories" else "Repositories (${repos.size})") }
+        if (repos.isEmpty()) {
+            item { Hint(if (q.isEmpty()) "No repositories added." else "No repositories match.") }
+        }
+        items(repos, key = { it.data.url }) { repo ->
             RepoCard(repo, onClick = { onOpenRepo(repo.data.url) })
         }
 
-        item { SectionTitle("Installed") }
-        val localFiles = state.status.keys.filter { path -> state.installed.none { it.filePath == path } }
-        if (state.installed.isEmpty() && localFiles.isEmpty()) {
-            item { Hint("No extensions installed.") }
+        // While searching, also list matching extensions from every repository, ready to install
+        if (q.isNotEmpty()) {
+            val found = state.repositories.flatMap { repo ->
+                repo.plugins
+                    .filter { matches(q, it.name, it.internalName, it.description, it.language, it.tvTypes?.joinToString(), it.authors.joinToString()) }
+                    .map { repo to it }
+            }
+            item { SectionTitle("Extensions (${found.size})") }
+            if (found.isEmpty()) item { Hint("No extensions match.") }
+            items(found.take(MAX_RESULTS), key = { (repo, plugin) -> "found|${repo.data.url}|${plugin.internalName}" }) { (repo, plugin) ->
+                val installed = state.installed.firstOrNull { it.repositoryUrl == repo.data.url && it.internalName == plugin.internalName }
+                PluginRow(
+                    plugin = plugin,
+                    installed = installed,
+                    status = installed?.let { state.status[it.filePath] },
+                    busy = plugin.internalName in state.busy,
+                    repoName = repo.repository?.name ?: repo.data.name,
+                    onInstall = { ExtensionManager.install(repo.data.url, plugin) },
+                    onUninstall = { installed?.let { ExtensionManager.uninstall(it) } },
+                )
+            }
+            if (found.size > MAX_RESULTS) {
+                item { Hint("Showing the first $MAX_RESULTS. Type more to narrow it down.") }
+            }
         }
-        items(state.installed, key = { it.filePath }) { plugin ->
+
+        val installed = state.installed.filter { matches(q, it.name, it.internalName, it.language) }
+        val localFiles = state.status.keys
+            .filter { path -> state.installed.none { it.filePath == path } }
+            .filter { matches(q, java.io.File(it).nameWithoutExtension) }
+        item { SectionTitle("Installed") }
+        if (installed.isEmpty() && localFiles.isEmpty()) {
+            item { Hint(if (q.isEmpty()) "No extensions installed." else "No installed extensions match.") }
+        }
+        items(installed, key = { it.filePath }) { plugin ->
             InstalledRow(plugin, state.status[plugin.filePath])
         }
         items(localFiles, key = { it }) { path ->
             InstalledRow(null, state.status[path], localName = java.io.File(path).nameWithoutExtension)
         }
     }
+}
+
+private const val MAX_RESULTS = 150
+
+/** True when every word of the query appears in at least one of the fields. Blank matches all. */
+private fun matches(query: String, vararg fields: String?): Boolean {
+    if (query.isBlank()) return true
+    val haystack = fields.filterNotNull().joinToString(" ").lowercase()
+    return query.lowercase().split(' ').filter { it.isNotBlank() }.all { it in haystack }
 }
 
 @Composable
@@ -265,6 +324,7 @@ private fun PluginRow(
     installed: InstalledPlugin?,
     status: PluginStatus?,
     busy: Boolean,
+    repoName: String? = null,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
 ) {
@@ -280,6 +340,7 @@ private fun PluginRow(
                     plugin.tvTypes?.joinToString(),
                     when (plugin.status) { 0 -> "Down"; 2 -> "Slow"; 3 -> "Beta"; else -> null },
                     plugin.authors.takeIf { it.isNotEmpty() }?.joinToString(prefix = "by "),
+                    repoName?.let { "from $it" },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
