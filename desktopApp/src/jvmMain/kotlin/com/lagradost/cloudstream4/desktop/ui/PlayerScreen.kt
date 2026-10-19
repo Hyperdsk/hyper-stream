@@ -81,7 +81,16 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.player.PlaybackState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
+import com.lagradost.cloudstream4.desktop.player.VlcPlayer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.net.URI
 
@@ -96,6 +105,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val settings by SettingsStore.state.collectAsState()
     val window = LocalWindowState.current
     val focus = remember { FocusRequester() }
+    val holdScope = rememberCoroutineScope()
+    val hold = remember { SpeedHold(holdScope) }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -134,10 +145,21 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             .focusable()
             .onPointerEvent(PointerEventType.Move) { poke() }
             .onPreviewKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown || player == null) return@onPreviewKeyEvent false
+                if (player == null) return@onPreviewKeyEvent false
+                // With the side panel open, keys go to it (its filter box), except Escape
+                if (openMenu != null && e.key != Key.Escape) return@onPreviewKeyEvent false
+                // Space: a tap plays or pauses, holding it plays at 2x until released
+                if (e.key == Key.Spacebar) {
+                    when (e.type) {
+                        KeyEventType.KeyDown -> { poke(); hold.press(player) }
+                        KeyEventType.KeyUp -> if (!hold.release(player)) player.togglePause()
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 poke()
                 when (e.key) {
-                    Key.Spacebar, Key.K -> player.togglePause()
+                    Key.K -> player.togglePause()
                     Key.DirectionLeft, Key.J -> player.seekBy(-seekMs)
                     Key.DirectionRight, Key.L -> player.seekBy(seekMs)
                     Key.DirectionUp -> player.setVolume(playback.volume + 5)
@@ -162,11 +184,29 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                 frame,
                 null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { player.togglePause(); poke() },
+                // A click plays or pauses, holding the mouse down plays at 2x until released
+                modifier = Modifier.fillMaxSize().pointerInput(player) {
+                    detectTapGestures(onPress = {
+                        poke()
+                        hold.press(player)
+                        tryAwaitRelease()
+                        if (!hold.release(player)) player.togglePause()
+                    })
+                },
             )
+        }
+
+        if (hold.boosting) {
+            Row(
+                Modifier.align(Alignment.TopCenter).padding(top = 72.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("2x", color = Color.White, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Default.FastForward, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            }
         }
 
         // Center status: loading links, buffering or errors
@@ -382,5 +422,41 @@ private fun NoVlc(ui: PlayerUiState, model: PlayerModel) {
             Spacer(Modifier.height(16.dp))
             Text("${ui.links.size} links found for ${model.episode.label}", color = Color.White.copy(alpha = 0.7f))
         }
+    }
+}
+
+/**
+ * Hold to watch at 2x, like YouTube. Pressing starts a short timer; if the press is still held
+ * when it ends (and the video is playing), the speed goes to 2x until release, then back.
+ */
+internal class SpeedHold(private val scope: CoroutineScope) {
+    var boosting by mutableStateOf(false)
+        private set
+    private var pressed = false
+    private var timer: Job? = null
+    private var savedRate = 1f
+
+    fun press(player: VlcPlayer) {
+        if (pressed) return // key repeat while held
+        pressed = true
+        timer = scope.launch {
+            delay(350)
+            if (pressed && player.state.value.playing) {
+                savedRate = player.state.value.rate
+                player.setRate(2f)
+                boosting = true
+            }
+        }
+    }
+
+    /** Ends the press. Returns true if it was a hold (speed was raised), false for a tap. */
+    fun release(player: VlcPlayer): Boolean {
+        if (!pressed) return false
+        pressed = false
+        timer?.cancel()
+        if (!boosting) return false
+        player.setRate(savedRate)
+        boosting = false
+        return true
     }
 }
