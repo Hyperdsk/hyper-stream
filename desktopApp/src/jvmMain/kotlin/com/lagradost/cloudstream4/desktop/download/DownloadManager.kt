@@ -82,6 +82,8 @@ data class DownloadEntry(
     @JsonProperty("addedAt") val addedAt: Long = System.currentTimeMillis(),
     /** True when the user picked [link] themselves. Then only that source is used. */
     @JsonProperty("chosen") val chosen: Boolean = false,
+    /** Highest quality to pick automatically, in pixels of height. -1 means best, null follows Settings. */
+    @JsonProperty("maxQuality") val maxQuality: Int? = null,
     /** Bytes per second, only meaningful while downloading. */
     @JsonProperty("speed") val speed: Long = 0,
     /** Multi-connection downloads: the chunk size and which chunks are finished, for resuming. */
@@ -118,6 +120,8 @@ data class DownloadRequest(
     val link: SavedLink? = null,
     /** Subtitles found together with [link], saved next to the video. */
     val subtitles: List<SubtitleFile> = emptyList(),
+    /** Highest quality to pick automatically when no [link] is given. -1 means best, null follows Settings. */
+    val maxQuality: Int? = null,
 )
 
 /**
@@ -197,6 +201,7 @@ object DownloadManager {
             status = DownloadStatus.Queued,
             link = request.link,
             chosen = request.link != null,
+            maxQuality = request.maxQuality,
         )
         _entries.update { (it + entry).toPersistentList() }
         save()
@@ -217,6 +222,20 @@ object DownloadManager {
         }
         save()
         pump()
+    }
+
+    /** Pauses every unfinished download of one title. */
+    fun pauseAll(apiName: String, parentUrl: String) {
+        _entries.value.filter { it.apiName == apiName && it.parentUrl == parentUrl }
+            .filter { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }
+            .forEach { pause(it.id) }
+    }
+
+    /** Resumes or retries every unfinished download of one title. */
+    fun resumeAll(apiName: String, parentUrl: String) {
+        _entries.value.filter { it.apiName == apiName && it.parentUrl == parentUrl }
+            .filter { it.status == DownloadStatus.Paused || it.status == DownloadStatus.Failed }
+            .forEach { resume(it.id) }
     }
 
     /** Cancels and removes the download, deleting its files. */
@@ -270,7 +289,7 @@ object DownloadManager {
                 // Try the saved link first when resuming, then freshly loaded links
                 link?.let { tryLinks(id, it) } == true || run {
                     set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
-                    val (links, subs) = findLinks(entry.apiName, entry.episodeData)
+                    val (links, subs) = findLinks(entry.apiName, entry.episodeData, maxQuality = entry.maxQuality)
                     if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
                     downloadSubtitles(id, subs)
                     tryLinks(id, links)
@@ -296,12 +315,18 @@ object DownloadManager {
     suspend fun findLinks(
         apiName: String,
         episodeData: String,
+        maxQuality: Int? = null,
         onUpdate: (List<SavedLink>, List<SubtitleFile>) -> Unit = { _, _ -> },
     ): Pair<List<SavedLink>, List<SubtitleFile>> {
         val api = providerByName(apiName) ?: throw IOException("The $apiName extension isn't loaded.")
         val links = mutableListOf<ExtractorLink>()
         val subs = mutableListOf<SubtitleFile>()
-        val preferred = SettingsStore.state.value.preferredQuality
+        // -1 asks for the best, null follows the Settings preference
+        val preferred = when (maxQuality) {
+            null -> SettingsStore.state.value.preferredQuality
+            -1 -> null
+            else -> maxQuality
+        }
         fun usable(): List<SavedLink> = synchronized(links) { links.toList() }
             .filter { it.type == ExtractorLinkType.VIDEO || it.type == ExtractorLinkType.M3U8 }
             .distinctBy { it.url }

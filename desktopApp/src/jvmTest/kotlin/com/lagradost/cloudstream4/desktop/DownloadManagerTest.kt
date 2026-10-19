@@ -107,6 +107,56 @@ class DownloadManagerTest {
         }
     }
 
+    private class SeasonProvider(private val base: String) : MainAPI() {
+        override var name = "SeasonTest"
+        override var mainUrl = base
+        override suspend fun loadLinks(
+            data: String,
+            isCasting: Boolean,
+            subtitleCallback: (SubtitleFile) -> Unit,
+            callback: (ExtractorLink) -> Unit,
+        ): Boolean {
+            // Each episode offers 1080p and 720p
+            callback(newExtractorLink(name, "Server A", "$base/movie.mp4?ep=$data&q=1080", ExtractorLinkType.VIDEO) { quality = 1080 })
+            callback(newExtractorLink(name, "Server B", "$base/movie.mp4?ep=$data&q=720", ExtractorLinkType.VIDEO) { quality = 720 })
+            return true
+        }
+    }
+
+    @Test
+    fun downloadsAWholeSeasonAtTheChosenQuality() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())
+        val folder = Files.createTempDirectory("cs-downloads-season").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val api = SeasonProvider(base).apply { sourcePlugin = "test-season" }
+        APIHolder.allProviders.add(api)
+        try {
+            val episodes = (1..3).map { PlayableEpisode("s1e$it", "Episode $it", 1, it) }
+            episodes.forEach {
+                DownloadManager.enqueue(DownloadRequest("SeasonTest", "$base/show", "Season Show", null, null, it, maxQuality = 720))
+            }
+            val ids = episodes.map { DownloadManager.idFor("SeasonTest", it.data) }.toSet()
+            var maxRunning = 0
+            val done = withTimeout(60_000) {
+                DownloadManager.entries.first { list ->
+                    maxRunning = maxOf(maxRunning, list.count { it.id in ids && it.status == DownloadStatus.Downloading })
+                    list.filter { it.id in ids }.all { it.status == DownloadStatus.Completed || it.status == DownloadStatus.Failed }
+                }
+            }.filter { it.id in ids }
+            done.forEach { assertEquals(DownloadStatus.Completed, it.status, it.error) }
+            done.forEach { assertEquals(720, it.link?.quality, "picked ${it.link?.name}") }
+            assertTrue(maxRunning <= 2, "ran $maxRunning at once")
+            val names = done.mapNotNull { it.file?.name }.sorted()
+            println("Season files: $names, at most $maxRunning at once")
+            assertEquals(listOf("S01E01 - Episode 1.mp4", "S01E02 - Episode 2.mp4", "S01E03 - Episode 3.mp4"), names)
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-season" } }
+            server.stop(0)
+        }
+    }
+
     @Test
     fun usesOnlyThePickedSource() = runBlocking {
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())

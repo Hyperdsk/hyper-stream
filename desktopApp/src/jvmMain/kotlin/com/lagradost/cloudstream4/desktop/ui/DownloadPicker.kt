@@ -22,6 +22,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -146,5 +148,65 @@ private fun Chip(text: String, color: Color) {
         color = color,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.background(color.copy(alpha = 0.14f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/** Confirms downloading a whole season and asks for the quality to aim for. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun SeasonDownloadDialog(
+    title: String,
+    episodes: Int,
+    alreadyAdded: Int,
+    onConfirm: (maxQuality: Int?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val default = com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.preferredQuality ?: -1
+    var quality by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(default) }
+    val toAdd = episodes - alreadyAdded
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Download season")
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        text = {
+            Column(Modifier.width(440.dp)) {
+                Text(
+                    when {
+                        toAdd <= 0 -> "All $episodes episodes are already in Downloads. Unfinished ones will be resumed."
+                        alreadyAdded > 0 -> "$toAdd of $episodes episodes will be added. The other $alreadyAdded are already in Downloads."
+                        else -> "$episodes episodes will be added to Downloads."
+                    },
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("Quality", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(-1 to "Best", 2160 to "4K", 1080 to "1080p", 720 to "720p", 480 to "480p").forEach { (q, label) ->
+                        androidx.compose.material3.FilterChip(
+                            selected = quality == q,
+                            onClick = { quality = q },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Each episode picks its best source up to this quality when its turn comes, and tries the next one if a source fails.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.Button(onClick = { onConfirm(quality) }) {
+                Text(if (toAdd > 0) "Download $toAdd episodes" else "Resume")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

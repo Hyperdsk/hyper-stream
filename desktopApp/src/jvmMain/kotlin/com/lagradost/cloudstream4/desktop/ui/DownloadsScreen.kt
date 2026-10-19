@@ -108,8 +108,24 @@ fun DownloadsScreen() {
                         )
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(first.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text(first.apiName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(first.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    val done = group.count { it.status == DownloadStatus.Completed }
+                                    Text(
+                                        listOfNotNull(first.apiName, if (group.size > 1) "$done of ${group.size} downloaded" else null).joinToString(" · "),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                // Whole-season controls, once there is more than one episode
+                                if (group.size > 1) {
+                                    val running = group.any { it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued }
+                                    val stopped = group.any { it.status == DownloadStatus.Paused || it.status == DownloadStatus.Failed }
+                                    if (running) TextButton(onClick = { DownloadManager.pauseAll(first.apiName, first.parentUrl) }) { Text("Pause all") }
+                                    if (stopped) TextButton(onClick = { DownloadManager.resumeAll(first.apiName, first.parentUrl) }) { Text("Resume all") }
+                                }
+                            }
                             Spacer(Modifier.height(6.dp))
                             group.forEach { entry ->
                                 DownloadRow(

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Theaters
@@ -251,6 +252,37 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
         DesktopToasts.show("Downloading from ${link.info().title}")
     }
 
+    /**
+     * Queues every episode of the shown season that isn't downloaded or queued yet. Each picks
+     * its own best source up to [maxQuality] when its turn comes, so links don't expire waiting.
+     */
+    fun downloadSeason(maxQuality: Int?) {
+        val response = current.response ?: return
+        val existing = DownloadManager.entries.value.map { it.id }.toSet()
+        var added = 0
+        for (ep in current.episodes) {
+            val id = DownloadManager.idFor(route.apiName, ep.playable.data)
+            if (id in existing) {
+                // Failed or paused ones get another go
+                DownloadManager.resume(id)
+                continue
+            }
+            DownloadManager.enqueue(
+                DownloadRequest(
+                    apiName = route.apiName,
+                    parentUrl = response.url,
+                    title = response.name,
+                    posterUrl = response.posterUrl,
+                    posterHeaders = response.posterHeaders,
+                    episode = ep.playable,
+                    maxQuality = maxQuality,
+                )
+            )
+            added++
+        }
+        DesktopToasts.show(if (added == 0) "All episodes are already in Downloads." else "Added $added episodes to Downloads.")
+    }
+
     fun dismissPicker() {
         pickerJob?.cancel()
         update { copy(picker = null) }
@@ -292,6 +324,19 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
     val library by LibraryStore.state.collectAsState()
     val downloads by DownloadManager.entries.collectAsState()
     val response = state.response
+    var showSeasonDialog by remember { mutableStateOf(false) }
+
+    if (showSeasonDialog) {
+        val seasonName = state.seasons.firstOrNull { it.first == state.season }?.second
+        val already = state.episodes.count { ep -> downloads.any { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) } }
+        SeasonDownloadDialog(
+            title = listOfNotNull(response?.name ?: route.name, seasonName).joinToString(" · "),
+            episodes = state.episodes.size,
+            alreadyAdded = already,
+            onConfirm = { quality -> showSeasonDialog = false; model.downloadSeason(quality) },
+            onDismiss = { showSeasonDialog = false },
+        )
+    }
 
     state.picker?.let { picker ->
         DownloadPickerDialog(
@@ -318,16 +363,27 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
 
                 if (!state.isMovieLike && state.allEpisodes.isNotEmpty()) {
                     item {
-                        FlowRow(
-                            Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            state.dubOptions.takeIf { it.size > 1 }?.forEach { dub ->
-                                FilterChip(selected = dub == state.dub, onClick = { model.selectDub(dub) }, label = { Text(dub.name) })
+                        Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                            FlowRow(
+                                Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                state.dubOptions.takeIf { it.size > 1 }?.forEach { dub ->
+                                    FilterChip(selected = dub == state.dub, onClick = { model.selectDub(dub) }, label = { Text(dub.name) })
+                                }
+                                state.seasons.takeIf { it.size > 1 }?.forEach { (number, name) ->
+                                    FilterChip(selected = number == state.season, onClick = { model.selectSeason(number) }, label = { Text(name) })
+                                }
                             }
-                            state.seasons.takeIf { it.size > 1 }?.forEach { (number, name) ->
-                                FilterChip(selected = number == state.season, onClick = { model.selectSeason(number) }, label = { Text(name) })
+                            val remaining = state.episodes.count { ep ->
+                                downloads.none { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
+                            }
+                            OutlinedButton(onClick = { showSeasonDialog = true }, enabled = state.episodes.isNotEmpty()) {
+                                Icon(Icons.Default.Download, null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (state.seasons.size > 1) "Download season" else "Download all")
+                                if (remaining in 1 until state.episodes.size) Text(" ($remaining left)")
                             }
                         }
                     }

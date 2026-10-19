@@ -13,6 +13,7 @@ import com.lagradost.cloudstream4.desktop.player.PlaybackState
 import com.lagradost.cloudstream4.desktop.download.SavedLink
 import com.lagradost.cloudstream4.desktop.ui.DownloadPickerDialog
 import com.lagradost.cloudstream4.desktop.ui.DownloadPickerState
+import com.lagradost.cloudstream4.desktop.ui.SeasonDownloadDialog
 import com.lagradost.cloudstream4.desktop.ui.PanelTab
 import com.lagradost.cloudstream4.desktop.ui.PlayRequest
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
@@ -73,5 +74,16 @@ class PlayerPanelRenderTest {
         repeat(3) { dialogScene.render(it * 500_000_000L) }
         File(dir, "download-picker.png").writeBytes(dialogScene.render(2_000_000_000L).encodeToData(EncodedImageFormat.PNG)!!.bytes)
         dialogScene.close()
+
+        val seasonScene = ImageComposeScene(1400, 900, Density(1.5f)) {
+            CloudStreamTheme(mode = CloudStreamThemeMode.Dark) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF111111))) {
+                    SeasonDownloadDialog("The Show · Season 1", 10, 3, {}, {})
+                }
+            }
+        }
+        repeat(3) { seasonScene.render(it * 500_000_000L) }
+        File(dir, "season-dialog.png").writeBytes(seasonScene.render(2_000_000_000L).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        seasonScene.close()
     }
 }
