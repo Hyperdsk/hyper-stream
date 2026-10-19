@@ -96,6 +96,12 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             )
         }
         Toggle("Play next episode automatically", settings.autoPlayNext) { v -> SettingsStore.update { it.copy(autoPlayNext = v) } }
+        Toggle("Start playing as soon as a source is found", settings.playFirstSource) { v -> SettingsStore.update { it.copy(playFirstSource = v) } }
+        Text(
+            "Other sources keep loading in the background and appear under Sources. When off, the player waits for all sources, or up to 8 seconds.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Label("Preferred quality")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(null to "Best", 2160 to "4K", 1080 to "1080p", 720 to "720p", 480 to "480p", 360 to "360p").forEach { (q, label) ->

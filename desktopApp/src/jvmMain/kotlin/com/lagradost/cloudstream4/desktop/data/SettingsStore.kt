@@ -16,6 +16,8 @@ data class AppSettings(
     /** Highest quality picked automatically, in pixels of height. Null means best available. */
     @JsonProperty("preferredQuality") val preferredQuality: Int? = null,
     @JsonProperty("autoPlayNext") val autoPlayNext: Boolean = true,
+    /** Start with the first source found instead of waiting for all of them. The rest load in the background. */
+    @JsonProperty("playFirstSource") val playFirstSource: Boolean = false,
     @JsonProperty("seekSeconds") val seekSeconds: Int = 10,
     @JsonProperty("volume") val volume: Int = 100,
     /** Providers left out of the combined search. */

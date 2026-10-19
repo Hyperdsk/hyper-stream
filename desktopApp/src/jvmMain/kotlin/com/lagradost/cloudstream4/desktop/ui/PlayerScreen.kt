@@ -186,9 +186,21 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     CircularProgressIndicator(color = Color.White)
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        if (ui.links.isEmpty()) "Loading links…" else "Found ${ui.links.size} links…",
+                        if (ui.links.isEmpty()) "Finding sources…" else "Found ${ui.links.size} sources, still looking…",
                         color = Color.White,
                     )
+                    if (ui.links.isNotEmpty()) {
+                        // Skip the wait: play the best source so far, the rest keep loading
+                        Spacer(Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(onClick = model::playNow) {
+                                Icon(Icons.Default.PlayArrow, null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Play now")
+                            }
+                            OutlinedButton(onClick = { openMenu = "panel:Sources" }) { Text("Choose a source", color = Color.White) }
+                        }
+                    }
                 }
 
                 playback.buffering && ui.current != null -> CircularProgressIndicator(color = Color.White)

@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.utils.M3u8Helper2
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.jsonFile
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
+import com.lagradost.cloudstream4.desktop.ui.parseSourceInfo
 import com.lagradost.cloudstream4.desktop.ui.providerByName
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
@@ -382,7 +383,10 @@ object DownloadManager {
 
     private suspend fun downloadDirect(id: String, link: SavedLink) {
         val entry = current(id) ?: return
-        val ext = extensionFrom(link.url) ?: "mp4"
+        // The url often has no extension, the release name in the link usually does (".mkv")
+        val ext = extensionFrom(link.url)
+            ?: parseSourceInfo(link.name, link.source, link.quality, link.type).format?.lowercase()?.takeIf { it.length in 2..4 }
+            ?: "mp4"
         val target = File(targetBase(entry).path + ".$ext")
         val part = File(target.path + ".part")
         val headers = headersFor(link)

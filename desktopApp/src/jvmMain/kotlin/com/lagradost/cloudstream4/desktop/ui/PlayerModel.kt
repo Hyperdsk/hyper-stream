@@ -93,7 +93,8 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         if (downloaded != null && player != null) {
             val file = downloaded.file!!
             update { copy(loadingLinks = false, current = OFFLINE, offlineFile = file.path) }
-            player.open(file.toURI().toString(), startMs, downloaded.subtitles.map { File(it).toURI().toString() })
+            // file:/// form: VLC can't open the file:/ urls that File.toURI() makes
+            player.open(file.toPath().toUri().toString(), startMs, downloaded.subtitles.map { File(it).toPath().toUri().toString() })
             return
         }
 
@@ -119,11 +120,15 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                     )
                 }.onFailure { failure = it }
             }
-            // Start once loading is done, or early if some links are in and loading is slow
+            // Start once loading is done, or early: when the user presses Play now, when the
+            // "play first source" setting is on, or when some links are in and loading is slow.
+            // The remaining links keep loading in the background either way.
             val started = System.currentTimeMillis()
+            val playFirst = SettingsStore.state.value.playFirstSource
             while (loader.isActive) {
+                if (current.current != null) break
                 val waited = System.currentTimeMillis() - started
-                if (current.links.isNotEmpty() && (api.instantLinkLoading || waited > 8_000)) break
+                if (current.links.isNotEmpty() && (api.instantLinkLoading || playFirst || waited > 8_000)) break
                 delay(200)
             }
             if (current.current == null) playBest()
@@ -136,6 +141,11 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
             }
             if (current.current == null && current.links.isNotEmpty()) playBest()
         }
+    }
+
+    /** Plays the best source found so far, while the rest keep loading. */
+    fun playNow() {
+        if (current.current == null && current.links.isNotEmpty()) playBest()
     }
 
     private fun sortedCandidates(): List<Int> {
