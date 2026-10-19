@@ -2,9 +2,14 @@ package com.lagradost.cloudstream4.desktop.plugins
 
 import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.plugins.RepositoryManager
+import com.lagradost.cloudstream3.plugins.Repository
+import com.lagradost.cloudstream3.plugins.SitePlugin
+import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
 import com.lagradost.cloudstream4.desktop.data.AppDirs
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.jsonFile
+import com.lagradost.cloudstream4.desktop.data.jsonMapper
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentListOf
@@ -14,6 +19,10 @@ import kotlinx.collections.immutable.toPersistentMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -91,6 +100,12 @@ object ExtensionManager {
 
     // ---------- Repositories ----------
 
+    fun repositories(): List<RepositoryData> = _state.value.repositories.map { it.data }
+
+    /**
+     * Adds what the user typed: a repository, or a list of repositories such as CloudStream's
+     * community list, in which case every repository in it is added.
+     */
     fun addRepository(input: String) = scope.launch {
         if (input.isBlank()) return@launch
         val url = RepositoryClient.parseRepoUrl(input)
@@ -102,22 +117,61 @@ object ExtensionManager {
             _state.update { it.copy(message = "That repository is already added.") }
             return@launch
         }
-        val repo = runCatching { RepositoryClient.fetchRepository(url) }.getOrElse { e ->
+        val json = runCatching { RepositoryClient.fetchJson(url) }.getOrElse { e ->
             _state.update { it.copy(message = "Could not read repository: ${e.message}") }
             return@launch
         }
-        val data = RepositoryData(repo.iconUrl, repo.name, url)
-        lock.withLock {
-            val repos = reposFile.read() + data
-            reposFile.write(repos.distinctBy { it.url })
+
+        val list = RepositoryClient.repositoryList(json)
+        if (list != null) {
+            val added = addRepositoryList(list)
+            _state.update {
+                it.copy(message = "Added $added of ${list.size} repositories from this list. Open one to install extensions.")
+            }
+            return@launch
         }
-        _state.update {
-            it.copy(
-                repositories = (it.repositories + RepositoryState(data, repo)).toPersistentList(),
-                message = "Added ${repo.name}.",
-            )
+
+        val repo = runCatching { jsonMapper.treeToValue(json, Repository::class.java) }
+            .getOrElse { e ->
+                _state.update { it.copy(message = "That link isn't a CloudStream repository: ${e.message}") }
+                return@launch
+            }
+        if (addRepositoryData(RepositoryData(repo.iconUrl, repo.name, url), repo)) {
+            _state.update { it.copy(message = "Added ${repo.name}.") }
         }
-        refreshRepository(url)
+    }
+
+    /** Adds each repository in a list, reading its name first. Returns how many were added. */
+    private suspend fun addRepositoryList(urls: List<String>): Int {
+        val known = repositories().map { it.url }.toSet()
+        val limit = Semaphore(6)
+        return urls.filter { it !in known }.map { repoUrl ->
+            scope.async {
+                limit.withPermit {
+                    val repo = RepositoryManager.parseRepository(repoUrl) ?: return@withPermit false
+                    addRepositoryData(RepositoryData(repo.iconUrl, repo.name, repoUrl), repo)
+                }
+            }
+        }.awaitAll().count { it }
+    }
+
+    /**
+     * Adds a repository without asking the user, the way the Android RepositoryManager does.
+     * Extensions call this through RepositoryManager.addRepository. Returns false if it was already added.
+     */
+    suspend fun addRepositoryData(data: RepositoryData, known: Repository? = null): Boolean {
+        val added = lock.withLock {
+            val repos = reposFile.read()
+            if (repos.any { it.url == data.url }) return@withLock false
+            reposFile.write(repos + data)
+            _state.update { s ->
+                if (s.repositories.any { it.data.url == data.url }) s
+                else s.copy(repositories = (s.repositories + RepositoryState(data, known)).toPersistentList())
+            }
+            true
+        }
+        if (added) refreshRepository(data.url)
+        return added
     }
 
     /** Removes the repository and every extension that was installed from it. */

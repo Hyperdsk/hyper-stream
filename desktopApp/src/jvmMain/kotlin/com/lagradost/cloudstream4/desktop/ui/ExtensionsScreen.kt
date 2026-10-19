@@ -53,7 +53,7 @@ import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.desktop.plugins.InstalledPlugin
 import com.lagradost.cloudstream4.desktop.plugins.PluginStatus
 import com.lagradost.cloudstream4.desktop.plugins.RepositoryState
-import com.lagradost.cloudstream4.desktop.plugins.SitePlugin
+import com.lagradost.cloudstream3.plugins.SitePlugin
 import java.awt.Desktop
 
 @Composable
@@ -98,7 +98,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
             }
             Text(
                 "Extensions are the same files the Android app uses. Add a repository by link or short code, " +
-                    "or drop .cs3 files into the extensions folder.",
+                    "paste a list of repositories to add them all, or drop .cs3 files into the extensions folder.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

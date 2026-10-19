@@ -39,7 +39,9 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 | --- | --- | --- |
 | Extensions | `desktop/plugins/PluginLoader.kt` | Unzips a `.cs3`, converts `classes.dex` to a JVM jar with dex2jar, loads it in its own class loader. |
 | Android stand-ins | `android/`, `androidx/`, `cloudstream3/plugins/Plugin.kt` | Same class names and signatures as Android, so extensions link without recompiling. `getSharedPreferences` is file-backed. |
-| Repositories | `desktop/plugins/ExtensionManager.kt` | Same `repo.json` and `plugins.json` formats, links, `cloudstreamrepo://` and short codes as Android. |
+| Repositories | `desktop/plugins/ExtensionManager.kt` | Same `repo.json` and `plugins.json` formats, links, `cloudstreamrepo://` and short codes as Android. A link to a list of repositories, such as the community `repos-db.json`, adds every repository in it. |
+| Repository API for extensions | `cloudstream3/plugins/RepositoryManager.kt` | Same names and signatures as Android, so extensions that add repositories themselves, such as MegaRepo's MegaProvider, work. |
+| Translation fixes | `desktop/plugins/InnerClassFixer.kt` | Undoes a wrong guess dex2jar makes about local classes in shrunk extensions, which otherwise breaks Kotlin reflection and JSON parsing. |
 | Player | `desktop/player/VlcPlayer.kt` | vlcj renders frames into Compose. Tracks, subtitles, speed, resume. |
 | Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
 | Screens | `desktop/ui/` | Home, Search, Details, Player, Library, Extensions, Settings. One immutable state per screen, as `COMPOSE.md` asks. |

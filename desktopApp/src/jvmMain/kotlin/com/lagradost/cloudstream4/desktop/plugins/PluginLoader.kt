@@ -37,6 +37,9 @@ class LoadedPlugin(
  * cross-platform `library` module plus the small Android stand-ins in this module.
  */
 object PluginLoader {
+    /** Bump when translation output changes, so cached jars are rebuilt. */
+    private const val TRANSLATION_VERSION = 2
+
     private val loaded = ConcurrentHashMap<String, LoadedPlugin>()
 
     /** The context handed to `Plugin.load(context)`. Carries no Android behaviour. */
@@ -130,7 +133,7 @@ object PluginLoader {
     /** Cache key includes size and modification time, so an updated .cs3 gets translated again. */
     private fun convertedJar(file: File, dexName: String): File {
         val prefix = cachePrefix(file)
-        val name = "$prefix${file.length()}_${file.lastModified()}_${dexName.removeSuffix(".dex")}.jar"
+        val name = "$prefix${file.length()}_${file.lastModified()}_v${TRANSLATION_VERSION}_${dexName.removeSuffix(".dex")}.jar"
         val jar = File(AppDirs.convertedExtensions, name)
         if (!jar.exists()) {
             // Remove stale translations of older versions
@@ -153,7 +156,14 @@ object PluginLoader {
             // A method that fails to translate is replaced with one that throws, instead of failing the whole extension
             .withExceptionHandler(BaseDexExceptionHandler())
             .to(tmp.toPath())
-        check(tmp.renameTo(jar)) { "Could not save translated extension ${jar.name}" }
+        val fixed = File(jar.parentFile, "${jar.name}.fixed")
+        try {
+            InnerClassFixer.fix(tmp, fixed)
+            check(fixed.renameTo(jar)) { "Could not save translated extension ${jar.name}" }
+        } finally {
+            tmp.delete()
+            fixed.delete()
+        }
     }
 
     private fun describe(t: Throwable): String {

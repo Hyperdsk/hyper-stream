@@ -1,6 +1,9 @@
 package com.lagradost.cloudstream4.desktop.plugins
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.plugins.Repository
+import com.lagradost.cloudstream3.plugins.SitePlugin
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -43,6 +46,26 @@ object RepositoryClient {
 
     suspend fun fetchRepository(url: String): Repository = withContext(Dispatchers.IO) {
         jsonMapper.readValue(app.get(url).text, Repository::class.java)
+    }
+
+    suspend fun fetchJson(url: String): JsonNode = withContext(Dispatchers.IO) {
+        jsonMapper.readTree(app.get(url).text)
+    }
+
+    /**
+     * Reads a list of repositories, like CloudStream's community list (cs-repos repos-db.json).
+     * Entries are either a url string or an object with a "url" field. Returns null when the
+     * json is not such a list.
+     */
+    fun repositoryList(json: JsonNode): List<String>? {
+        if (!json.isArray) return null
+        return json.mapNotNull { entry ->
+            when {
+                entry.isTextual -> entry.asText()
+                entry.isObject -> entry.get("url")?.takeIf { it.isTextual }?.asText()
+                else -> null
+            }
+        }.map { it.trim() }.filter { it.startsWith("http") }.distinct()
     }
 
     suspend fun fetchPluginList(url: String): List<SitePlugin> = withContext(Dispatchers.IO) {
