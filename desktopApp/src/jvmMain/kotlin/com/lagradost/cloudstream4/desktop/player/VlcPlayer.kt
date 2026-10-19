@@ -155,6 +155,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
             if (startMs > 0) add(":start-time=${startMs / 1000.0}")
         }
         player.media().play(url, *options.toTypedArray())
+        currentUrl = url
         // External subtitles are added but not selected, the user picks one
         subtitles.forEach { player.media().addSlave(MediaSlaveType.SUBTITLE, it, false) }
         player.audio().setVolume(_state.value.volume)
@@ -205,9 +206,17 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
         refreshTracks()
     }
 
+    /** The url currently opened, so seek bar previews can open the same video. */
+    var currentUrl by mutableStateOf<String?>(null)
+        private set
+
+    /** A silent second player for seek bar thumbnails. Release it when done. */
+    fun createPreview(): SeekPreview = SeekPreview(factory)
+
     fun stop() {
         player.controls().stop()
         frame = null
+        currentUrl = null
         _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = false) }
     }
 

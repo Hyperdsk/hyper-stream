@@ -86,11 +86,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
+import com.lagradost.cloudstream4.desktop.player.SeekPreview
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
+import androidx.compose.runtime.DisposableEffect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.offset
+import kotlin.math.roundToInt
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.layout.wrapContentHeight
 import java.awt.Desktop
 import java.net.URI
 
@@ -107,6 +120,12 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val focus = remember { FocusRequester() }
     val holdScope = rememberCoroutineScope()
     val hold = remember { SpeedHold(holdScope) }
+
+    // Seek bar thumbnails, from a second silent player on the same video
+    val preview = remember(player) { player?.createPreview() }
+    DisposableEffect(preview) { onDispose { preview?.release() } }
+    val currentUrl = player?.currentUrl
+    LaunchedEffect(preview, currentUrl) { preview?.open(currentUrl) }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -279,6 +298,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                 if (player != null) {
                     BottomControls(
                         model = model,
+                        preview = preview,
                         ui = ui,
                         playback = playback,
                         seekMs = seekMs,
@@ -310,6 +330,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
 @Composable
 private fun BottomControls(
     model: PlayerModel,
+    preview: SeekPreview?,
     ui: PlayerUiState,
     playback: PlaybackState,
     seekMs: Long,
@@ -328,14 +349,16 @@ private fun BottomControls(
     Column(modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(formatTime(if (dragging) (dragValue * length).toLong() else playback.timeMs), color = Color.White, style = MaterialTheme.typography.labelMedium)
-            Slider(
+            SeekBar(
                 value = shown.coerceIn(0f, 1f),
+                lengthMs = playback.lengthMs,
+                dragging = dragging,
+                preview = preview,
                 onValueChange = { dragging = true; dragValue = it },
                 onValueChangeFinished = {
                     player.seekTo((dragValue * length).toLong())
                     dragging = false
                 },
-                enabled = playback.lengthMs > 0,
                 modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
             )
             Text(if (playback.lengthMs > 0) formatTime(playback.lengthMs) else "Live", color = Color.White, style = MaterialTheme.typography.labelMedium)
@@ -458,5 +481,93 @@ internal class SpeedHold(private val scope: CoroutineScope) {
         player.setRate(savedRate)
         boosting = false
         return true
+    }
+}
+
+/**
+ * The seek slider with a thumbnail preview. Hovering or dragging shows the frame and time at
+ * that point above the pointer, like streaming sites do.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun SeekBar(
+    value: Float,
+    lengthMs: Long,
+    dragging: Boolean,
+    preview: SeekPreview?,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    modifier: Modifier,
+) {
+    var hover by remember { mutableStateOf<Float?>(null) }
+    var widthPx by remember { mutableIntStateOf(1) }
+    val density = LocalDensity.current
+    // The slider's track starts and ends inset by the thumb's radius
+    val insetPx = with(density) { 10.dp.toPx() }
+    val fraction = if (dragging) value else hover
+    val previewTime = fraction?.let { (it * lengthMs).toLong() }
+
+    LaunchedEffect(previewTime?.div(SeekPreview.BUCKET_MS), preview) {
+        if (previewTime != null && lengthMs > 0) preview?.request(previewTime)
+    }
+
+    Box(
+        modifier
+            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+            // Initial pass: the slider underneath handles these events too, so watch them first
+            .onPointerEvent(PointerEventType.Move, pass = PointerEventPass.Initial) { e ->
+                val x = e.changes.first().position.x
+                hover = ((x - insetPx) / (widthPx - 2 * insetPx)).coerceIn(0f, 1f)
+            }
+            .onPointerEvent(PointerEventType.Enter, pass = PointerEventPass.Initial) { e ->
+                val x = e.changes.first().position.x
+                hover = ((x - insetPx) / (widthPx - 2 * insetPx)).coerceIn(0f, 1f)
+            }
+            .onPointerEvent(PointerEventType.Exit, pass = PointerEventPass.Initial) { hover = null },
+    ) {
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            enabled = lengthMs > 0,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (fraction != null && previewTime != null && lengthMs > 0) {
+            val cardWidth = 192.dp
+            val cardWidthPx = with(density) { cardWidth.toPx() }
+            val centerPx = insetPx + fraction * (widthPx - 2 * insetPx)
+            val left = (centerPx - cardWidthPx / 2).coerceIn(0f, (widthPx - cardWidthPx).coerceAtLeast(0f))
+            Column(
+                Modifier
+                    .offset { IntOffset(left.roundToInt(), -with(density) { 140.dp.roundToPx() }) }
+                    // Its own size, not limited to the slider's height
+                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                    .width(cardWidth),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                val thumbnail = preview?.thumbnail
+                Box(
+                    Modifier.width(cardWidth).aspectRatio(16f / 9f)
+                        .background(Color.Black, RoundedCornerShape(6.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (thumbnail != null) {
+                        Image(thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    } else if (preview != null) {
+                        CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    formatTime(previewTime),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
     }
 }
