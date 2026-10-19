@@ -739,7 +739,7 @@ private fun EpisodeCard(
 
 /** IMDb's yellow badge with the rating and vote count, and the Metascore in its colour. */
 @Composable
-private fun ImdbBadges(imdb: ImdbInfo) {
+internal fun ImdbBadges(imdb: ImdbInfo) {
     imdb.rating?.let { rating ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -775,7 +775,7 @@ private fun ImdbBadges(imdb: ImdbInfo) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun InformationSection(imdb: ImdbInfo) {
+internal fun InformationSection(imdb: ImdbInfo) {
     val facts = buildList<Pair<String, String>> {
         imdb.released?.let { add("Released" to it) }
         if (imdb.endYear != null && imdb.year != null) add("Years" to "${imdb.year}–${imdb.endYear}")
