@@ -20,6 +20,21 @@ kotlin {
             }
             implementation(project(":shared"))
             implementation(project(":library"))
+            implementation(libs.nicehttp) // Same HTTP client the extensions use
+            implementation(libs.jackson.module.kotlin) // Same JSON parser the extensions use
+            implementation(libs.jsoup)
+            implementation(libs.dex2jar.tools) // Converts Android .cs3 extensions to JVM bytecode
+            implementation(libs.vlcj) // Video playback through the installed VLC
+            implementation(libs.coil.network.ktor3) // Poster images
+            implementation(libs.compose.material.icons.extended.get().toString()) {
+                // Only the icon vectors are wanted, not Material 2
+                exclude(group = "org.jetbrains.compose.material", module = "material")
+            }
+            implementation(libs.ktor.client.java)
+        }
+        jvmTest.dependencies {
+            implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }
@@ -35,11 +50,19 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "CloudStream"
+            // Needed for java.net.http, jdk.httpserver and the URLClassLoader based plugin system
+            // Extensions are loaded at runtime, so include what they commonly need too (TLS curves, scripting)
+            modules(
+                "java.instrument", "java.management", "java.naming", "java.net.http", "java.scripting", "java.sql",
+                "jdk.crypto.ec", "jdk.dynalink", "jdk.httpserver", "jdk.localedata", "jdk.unsupported",
+            )
             packageVersion = "1.0.0"
 
             val iconsRoot = project.file("desktop-icons")
             macOS {
                 // iconFile.set(iconsRoot.resolve("icon-mac.icns"))
+                bundleID = "com.lagradost.cloudstream4.desktop"
+                appCategory = "public.app-category.entertainment"
             }
             windows {
                 iconFile.set(iconsRoot.resolve("icon-windows.ico"))

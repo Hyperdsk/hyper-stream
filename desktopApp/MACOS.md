@@ -1,0 +1,53 @@
+# CloudStream for macOS
+
+A native desktop build of CloudStream, made with Compose Multiplatform on top of the
+cross-platform `library` module. It loads the same extensions as the Android app.
+
+## Requirements
+
+- JDK 17 or newer
+- VLC installed in `/Applications` (the player uses its libVLC)
+- The Android SDK, only because the Gradle build also configures the Android targets
+
+## Run and build
+
+```bash
+./gradlew :desktopApp:run
+```
+
+```bash
+./gradlew :desktopApp:createDistributable   # CloudStream.app in desktopApp/build/compose/binaries/main/app
+./gradlew :desktopApp:packageDmg            # installer .dmg
+```
+
+```bash
+./gradlew :desktopApp:jvmTest
+```
+
+App data lives in `~/Library/Application Support/CloudStream`.
+Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
+
+## How it works
+
+| Area | Where | Notes |
+| --- | --- | --- |
+| Extensions | `desktop/plugins/PluginLoader.kt` | Unzips a `.cs3`, converts `classes.dex` to a JVM jar with dex2jar, loads it in its own class loader. |
+| Android stand-ins | `android/`, `androidx/`, `cloudstream3/plugins/Plugin.kt` | Same class names and signatures as Android, so extensions link without recompiling. `getSharedPreferences` is file-backed. |
+| Repositories | `desktop/plugins/ExtensionManager.kt` | Same `repo.json` and `plugins.json` formats, links, `cloudstreamrepo://` and short codes as Android. |
+| Player | `desktop/player/VlcPlayer.kt` | vlcj renders frames into Compose. Tracks, subtitles, speed, resume. |
+| Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
+| Screens | `desktop/ui/` | Home, Search, Details, Player, Library, Extensions, Settings. One immutable state per screen, as `COMPOSE.md` asks. |
+| Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
+
+## Not done yet
+
+- Downloads, Chromecast, account sync (AniList, MAL, Simkl) and subtitle search.
+- Extensions that need a WebView (Cloudflare checks) fail, because `WebViewResolver` has no JVM implementation upstream.
+- Extensions that use Android UI or other app-only classes fail to load, with the missing class shown on the Extensions screen.
+- Torrent links are skipped.
+- Extension settings screens are Android-only and are not shown.
+
+## Upstreaming
+
+The CloudStream maintainers have said they won't accept AI-written code for the Compose
+rewrite. Treat this as a fork, under the project's GPL-3.0 license.

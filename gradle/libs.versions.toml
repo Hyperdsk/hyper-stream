@@ -42,6 +42,9 @@ navigationKtx = "2.9.8"
 newpipeextractor = "v0.26.3"
 nextlibMedia3 = "1.9.3-0.12.0"
 nicehttp = "0.4.18"
+dex2jar = "2.4.38"
+vlcj = "4.12.1"
+composeMaterialIcons = "1.7.3"
 overlappingpanels = "0.1.5"
 paletteKtx = "1.0.0"
 preferenceKtx = "1.2.1"
@@ -134,6 +137,9 @@ newpipeextractor = { module = "com.github.teamnewpipe:NewPipeExtractor", version
 nextlib-media3ext = { module = "io.github.anilbeesetti:nextlib-media3ext", version.ref = "nextlibMedia3" }
 nextlib-mediainfo = { module = "io.github.anilbeesetti:nextlib-mediainfo", version.ref = "nextlibMedia3" }
 nicehttp = { module = "com.github.Blatzar:NiceHttp", version.ref = "nicehttp" }
+dex2jar-tools = { module = "de.femtopedia.dex2jar:dex-tools", version.ref = "dex2jar" }
+vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
+compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMaterialIcons" }
 overlappingpanels = { module = "com.github.discord:OverlappingPanels", version.ref = "overlappingpanels" }
 palette-ktx = { module = "androidx.palette:palette-ktx", version.ref = "paletteKtx" }
 preference-ktx = { module = "androidx.preference:preference-ktx", version.ref = "preferenceKtx" }

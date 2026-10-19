@@ -1,62 +1,81 @@
 package com.lagradost.cloudstream4
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import com.lagradost.cloudstream4.compose.BlackButton
+import androidx.compose.ui.window.rememberWindowState
 import com.lagradost.cloudstream4.compose.LocalFocusOutlineDefault
-import com.lagradost.cloudstream4.compose.WhiteButton
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.player.VlcPlayer
+import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
+import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
+import com.lagradost.cloudstream4.desktop.ui.LocalWindowState
+import com.lagradost.cloudstream4.desktop.ui.ModelStore
+import com.lagradost.cloudstream4.desktop.ui.Route
+import com.lagradost.cloudstream4.desktop.ui.rememberNavigator
 import com.lagradost.cloudstream4.generated.resources.Res
 import com.lagradost.cloudstream4.generated.resources.app_name
 import com.lagradost.cloudstream4.generated.resources.default_icon
-import com.lagradost.cloudstream4.generated.resources.preview
 import com.lagradost.cloudstream4.theme.CloudStreamTheme
-import com.lagradost.cloudstream4.theme.CloudStreamThemeMode
-import com.mihon.presentation.settings.widget.SwitchPreferenceWidget
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 
-fun main() = application {
-    Window(
-        onCloseRequest = ::exitApplication,
-        title = stringResource(Res.string.app_name),
-        icon = painterResource(Res.drawable.default_icon)
-    ) {
-        CloudStreamTheme(mode = CloudStreamThemeMode.Dark) {
-            CompositionLocalProvider(LocalFocusOutlineDefault provides false) {
-                Scaffold(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    contentColor = MaterialTheme.colorScheme.onBackground
-                ) {
-                    Column {
-                        Text("Hello, World!")
-                        Row {
-                            WhiteButton("Hello in White") {
-                            }
-                            BlackButton("Hello in Black") {
-                            }
-                        }
-                        var checked by remember { mutableStateOf(false) }
-                        SwitchPreferenceWidget(
-                            title = "hello", subtitle = "world", icon = painterResource(
-                                Res.drawable.preview
-                            ),
-                            checked = checked,
-                            onCheckedChanged = { checked = !checked }
-                        )
-                    }
+fun main() {
+    // Name in the macOS menu bar and Dock
+    System.setProperty("apple.awt.application.name", "CloudStream")
+    System.setProperty("apple.laf.useScreenMenuBar", "true")
+
+    ExtensionManager.start()
+    val vlc = VlcPlayer.create()
+
+    application {
+        val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
+        val nav = rememberNavigator()
+        val store = remember { ModelStore() }
+
+        Window(
+            onCloseRequest = {
+                vlc?.release()
+                exitApplication()
+            },
+            title = stringResource(Res.string.app_name),
+            icon = painterResource(Res.drawable.default_icon),
+            state = windowState,
+        ) {
+            window.minimumSize = java.awt.Dimension(900, 600)
+            MenuBar {
+                Menu("Go") {
+                    Item("Home", shortcut = KeyShortcut(Key.One, meta = true)) { nav.open(Route.Home) }
+                    Item("Search", shortcut = KeyShortcut(Key.F, meta = true)) { nav.open(Route.Search) }
+                    Item("Library", shortcut = KeyShortcut(Key.Two, meta = true)) { nav.open(Route.Library) }
+                    Item("Extensions", shortcut = KeyShortcut(Key.Three, meta = true)) { nav.open(Route.Extensions) }
+                    Item("Settings", shortcut = KeyShortcut(Key.Comma, meta = true)) { nav.open(Route.Settings) }
+                    Separator()
+                    Item("Back", shortcut = KeyShortcut(Key.LeftBracket, meta = true)) { nav.back() }
                 }
             }
 
+            val settings by SettingsStore.state.collectAsState()
+            CloudStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
+                CompositionLocalProvider(
+                    LocalFocusOutlineDefault provides false,
+                    LocalWindowState provides windowState,
+                ) {
+                    Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
+                        CloudStreamApp(nav, store, vlc)
+                    }
+                }
+            }
         }
     }
 }

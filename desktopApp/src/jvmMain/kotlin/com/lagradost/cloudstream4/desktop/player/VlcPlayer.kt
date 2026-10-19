@@ -1,0 +1,230 @@
+package com.lagradost.cloudstream4.desktop.player
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asComposeImageBitmap
+import kotlinx.collections.immutable.PersistentList
+import kotlinx.collections.immutable.persistentListOf
+import kotlinx.collections.immutable.toPersistentList
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import org.jetbrains.skia.Bitmap
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.ColorType
+import org.jetbrains.skia.ImageInfo
+import uk.co.caprica.vlcj.factory.MediaPlayerFactory
+import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
+import uk.co.caprica.vlcj.media.MediaSlaveType
+import uk.co.caprica.vlcj.player.base.MediaPlayer
+import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
+import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormat
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormatCallback
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.RenderCallback
+import uk.co.caprica.vlcj.player.embedded.videosurface.callback.format.RV32BufferFormat
+import java.nio.ByteBuffer
+
+data class Track(val id: Int, val name: String)
+
+data class PlaybackState(
+    val playing: Boolean = false,
+    val buffering: Boolean = true,
+    val timeMs: Long = 0,
+    val lengthMs: Long = 0,
+    val volume: Int = 100,
+    val muted: Boolean = false,
+    val rate: Float = 1f,
+    val ended: Boolean = false,
+    val error: String? = null,
+    val audioTracks: PersistentList<Track> = persistentListOf(),
+    val subtitleTracks: PersistentList<Track> = persistentListOf(),
+    val audioTrack: Int = -1,
+    val subtitleTrack: Int = -1,
+)
+
+/**
+ * Plays video with the libVLC that ships inside VLC.app.
+ *
+ * Frames are rendered into memory through vlcj's callback surface and drawn by Compose,
+ * because embedding a native VLC view into a Compose window does not work on macOS.
+ */
+class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
+    private val player: EmbeddedMediaPlayer = factory.mediaPlayers().newEmbeddedMediaPlayer()
+
+    /** The latest decoded frame. Compose redraws whenever this changes. */
+    var frame by mutableStateOf<ImageBitmap?>(null)
+        private set
+
+    private val _state = MutableStateFlow(PlaybackState())
+    val state: StateFlow<PlaybackState> = _state.asStateFlow()
+
+    // Two bitmaps so the one being drawn is never the one being written
+    private val bitmaps = arrayOf(Bitmap(), Bitmap())
+    private var current = 0
+    private var info: ImageInfo? = null
+    private var pixels = ByteArray(0)
+
+    init {
+        player.videoSurface().set(
+            factory.videoSurfaces().newVideoSurface(
+                object : BufferFormatCallback {
+                    override fun getBufferFormat(sourceWidth: Int, sourceHeight: Int): BufferFormat {
+                        info = ImageInfo(sourceWidth, sourceHeight, ColorType.BGRA_8888, ColorAlphaType.PREMUL)
+                        pixels = ByteArray(sourceWidth * sourceHeight * 4)
+                        bitmaps.forEach { it.allocPixels(info!!) }
+                        return RV32BufferFormat(sourceWidth, sourceHeight)
+                    }
+
+                    override fun newFormatSize(bufferWidth: Int, bufferHeight: Int, displayWidth: Int, displayHeight: Int) = Unit
+                    override fun allocatedBuffers(buffers: Array<out ByteBuffer>) = Unit
+                },
+                object : RenderCallback {
+                    override fun lock(mediaPlayer: MediaPlayer) = Unit
+                    override fun unlock(mediaPlayer: MediaPlayer) = Unit
+                    override fun display(
+                        mediaPlayer: MediaPlayer,
+                        nativeBuffers: Array<out ByteBuffer>,
+                        bufferFormat: BufferFormat,
+                        displayWidth: Int,
+                        displayHeight: Int,
+                    ) {
+                        val imageInfo = info ?: return
+                        val buffer = nativeBuffers[0]
+                        if (buffer.remaining() < pixels.size) return
+                        buffer.get(pixels)
+                        buffer.rewind()
+                        current = 1 - current
+                        val bitmap = bitmaps[current]
+                        bitmap.installPixels(imageInfo, pixels, imageInfo.minRowBytes)
+                        frame = bitmap.asComposeImageBitmap()
+                    }
+                },
+                true,
+            )
+        )
+
+        player.events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
+            override fun playing(mediaPlayer: MediaPlayer) =
+                _state.update { it.copy(playing = true, buffering = false, ended = false, error = null) }
+
+            override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
+            override fun stopped(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
+            override fun finished(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, ended = true) }
+            override fun error(mediaPlayer: MediaPlayer) =
+                _state.update { it.copy(playing = false, buffering = false, error = "This source could not be played.") }
+
+            override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) =
+                _state.update { it.copy(buffering = newCache < 100f) }
+
+            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) =
+                _state.update { it.copy(timeMs = newTime, buffering = false) }
+
+            override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) =
+                _state.update { it.copy(lengthMs = newLength) }
+
+            override fun elementaryStreamAdded(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
+                refreshTracks()
+
+            override fun elementaryStreamDeleted(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
+                refreshTracks()
+
+            override fun elementaryStreamSelected(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
+                refreshTracks()
+        })
+    }
+
+    private fun refreshTracks() = _state.update {
+        it.copy(
+            audioTracks = player.audio().trackDescriptions().map { t -> Track(t.id(), t.description()) }.toPersistentList(),
+            subtitleTracks = player.subpictures().trackDescriptions().map { t -> Track(t.id(), t.description()) }.toPersistentList(),
+            audioTrack = player.audio().track(),
+            subtitleTrack = player.subpictures().track(),
+        )
+    }
+
+    /** @param subtitles local proxy urls of external subtitle files */
+    fun open(url: String, startMs: Long = 0, subtitles: List<String> = emptyList()) {
+        frame = null
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = true) }
+        val options = buildList {
+            add(":network-caching=1500")
+            if (startMs > 0) add(":start-time=${startMs / 1000.0}")
+        }
+        player.media().play(url, *options.toTypedArray())
+        // External subtitles are added but not selected, the user picks one
+        subtitles.forEach { player.media().addSlave(MediaSlaveType.SUBTITLE, it, false) }
+        player.audio().setVolume(_state.value.volume)
+    }
+
+    fun togglePause() {
+        if (_state.value.ended) {
+            player.controls().setTime(0)
+            player.controls().play()
+        } else {
+            player.controls().pause()
+        }
+    }
+
+    fun seekTo(ms: Long) {
+        val length = _state.value.lengthMs
+        val target = if (length > 0) ms.coerceIn(0, length) else ms.coerceAtLeast(0)
+        player.controls().setTime(target)
+        _state.update { it.copy(timeMs = target, ended = false) }
+    }
+
+    fun seekBy(ms: Long) = seekTo(_state.value.timeMs + ms)
+
+    fun setVolume(volume: Int) {
+        val v = volume.coerceIn(0, 200)
+        player.audio().setVolume(v)
+        _state.update { it.copy(volume = v, muted = false) }
+    }
+
+    fun toggleMute() {
+        val muted = !_state.value.muted
+        player.audio().setMute(muted)
+        _state.update { it.copy(muted = muted) }
+    }
+
+    fun setRate(rate: Float) {
+        player.controls().setRate(rate)
+        _state.update { it.copy(rate = rate) }
+    }
+
+    fun setAudioTrack(id: Int) {
+        player.audio().setTrack(id)
+        refreshTracks()
+    }
+
+    fun setSubtitleTrack(id: Int) {
+        player.subpictures().setTrack(id)
+        refreshTracks()
+    }
+
+    fun stop() {
+        player.controls().stop()
+        frame = null
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = false) }
+    }
+
+    fun release() {
+        runCatching { player.controls().stop() }
+        runCatching { player.release() }
+        runCatching { factory.release() }
+    }
+
+    companion object {
+        /** Finds libVLC, usually inside /Applications/VLC.app. Returns null when VLC is not installed. */
+        fun create(): VlcPlayer? {
+            val found = runCatching { NativeDiscovery().discover() }.getOrDefault(false)
+            if (!found) return null
+            return runCatching {
+                VlcPlayer(MediaPlayerFactory("--no-video-title-show", "--quiet"))
+            }.onFailure { it.printStackTrace() }.getOrNull()
+        }
+    }
+}
