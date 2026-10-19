@@ -1,11 +1,15 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.data.Snapshots
 import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.player.StreamProxy
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
@@ -26,6 +30,8 @@ const val OFFLINE = -1
 
 data class PlayerUiState(
     val index: Int,
+    /** Episodes for next and previous. Starts as the request's list, may grow once the show loads. */
+    val episodes: PersistentList<PlayableEpisode> = persistentListOf(),
     val links: PersistentList<ExtractorLink> = persistentListOf(),
     val subtitles: PersistentList<SubtitleFile> = persistentListOf(),
     val loadingLinks: Boolean = true,
@@ -45,23 +51,24 @@ fun ExtractorLink.label(): String =
  * to the next source when one fails.
  */
 class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
-    ScreenModel<PlayerUiState>(PlayerUiState(request.index)) {
+    ScreenModel<PlayerUiState>(PlayerUiState(request.index, request.episodes.toPersistentList())) {
 
     private var linksJob: Job? = null
     private var pendingStartMs = request.startMs
 
-    val episode: PlayableEpisode get() = request.episodes[current.index]
-    val hasNext: Boolean get() = current.index < request.episodes.lastIndex
+    val episode: PlayableEpisode get() = current.episodes[current.index]
+    val hasNext: Boolean get() = current.index < current.episodes.lastIndex
     val hasPrevious: Boolean get() = current.index > 0
 
     init {
         loadEpisode(request.index, request.startMs)
+        loadEpisodeList()
         player?.let { p ->
             // Save progress every few seconds while playing
             scope.launch {
                 while (true) {
                     delay(5_000)
-                    if (p.state.value.playing) saveProgress()
+                    if (p.state.value.playing) saveProgress(snapshot = false)
                 }
             }
             scope.launch {
@@ -86,10 +93,10 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         player?.stop()
         StreamProxy.clear()
         pendingStartMs = startMs
-        update { PlayerUiState(index) }
+        update { PlayerUiState(index, episodes) }
 
         // Play the downloaded file when there is one, like the Android app
-        val downloaded = if (allowOffline) DownloadManager.completedFile(request.apiName, request.episodes[index].data) else null
+        val downloaded = if (allowOffline) DownloadManager.completedFile(request.apiName, current.episodes[index].data) else null
         if (downloaded != null && player != null) {
             val file = downloaded.file!!
             update { copy(loadingLinks = false, current = OFFLINE, offlineFile = file.path) }
@@ -103,7 +110,7 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
             update { copy(loadingLinks = false, error = "The ${request.apiName} extension isn't loaded.") }
             return
         }
-        val data = request.episodes[index].data
+        val data = current.episodes[index].data
         linksJob = scope.launch {
             var failure: Throwable? = null
             val loader = launch(Dispatchers.IO) {
@@ -140,6 +147,31 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                 )
             }
             if (current.current == null && current.links.isNotEmpty()) playBest()
+        }
+    }
+
+    /**
+     * Started with a single episode of a show (from Continue watching): load the show's episode
+     * list in the background, so next and previous work like when starting from its page.
+     */
+    private fun loadEpisodeList() {
+        val only = request.episodes.singleOrNull() ?: return
+        if (only.season == null && only.episode == null) return
+        val api = providerByName(request.apiName) ?: return
+        scope.launch {
+            val response = providerCall { api.load(request.parentUrl) }.getOrNull() ?: return@launch
+            val raw = when (response) {
+                is TvSeriesLoadResponse -> response.episodes
+                // The dub list that contains this episode
+                is AnimeLoadResponse -> response.episodes.values.firstOrNull { list -> list.any { it.data == only.data } }.orEmpty()
+                else -> emptyList()
+            }
+            val list = raw.sortedWith(compareBy<Episode>({ it.season ?: 0 }, { it.episode ?: Int.MAX_VALUE }))
+                .map { PlayableEpisode(it.data, it.name, it.season, it.episode) }
+            val index = list.indexOfFirst { it.data == only.data }
+            if (index >= 0 && list.size > 1 && current.episodes.size == 1) {
+                update { copy(episodes = list.toPersistentList(), index = index) }
+            }
         }
     }
 
@@ -208,13 +240,23 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         if (hasPrevious) loadEpisode(current.index - 1)
     }
 
-    fun saveProgress(finished: Boolean = false) {
+    private var lastSnapshotAt = 0L
+
+    /**
+     * Saves watch progress. [snapshot] also saves a picture of the current frame for Continue
+     * watching; when leaving the player or the episode, and about once a minute while playing.
+     */
+    fun saveProgress(finished: Boolean = false, snapshot: Boolean = true) {
         val p = player ?: return
         // The player is shared, so only save once this session has started a source
         if (current.current == null) return
         val s = p.state.value
         if (s.lengthMs <= 0 || (s.timeMs <= 0 && !finished)) return
         val ep = episode
+        val now = System.currentTimeMillis()
+        val picture = if (!finished && (snapshot || now - lastSnapshotAt > 60_000)) {
+            p.frame?.let { Snapshots.save(request.apiName, ep.data, it) }?.also { lastSnapshotAt = now }
+        } else null
         LibraryStore.saveProgress(
             HistoryEntry(
                 parentUrl = request.parentUrl,
@@ -228,6 +270,7 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                 episode = ep.episode,
                 positionMs = if (finished) s.lengthMs else s.timeMs,
                 durationMs = s.lengthMs,
+                snapshotPath = picture?.path,
             )
         )
     }

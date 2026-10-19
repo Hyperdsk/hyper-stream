@@ -276,7 +276,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     IconButton(onClick = ::exit) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
                     Column(Modifier.weight(1f)) {
                         Text(model.request.title, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val ep = model.request.episodes[ui.index]
+                        val ep = ui.episodes[ui.index]
                         if (ep.season != null || ep.episode != null || ep.name != null) {
                             Text(ep.label, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
                         }

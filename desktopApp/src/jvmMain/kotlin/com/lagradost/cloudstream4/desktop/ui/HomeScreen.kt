@@ -209,11 +209,7 @@ fun HomeScreen(model: HomeModel) {
 
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
                 if (continueWatching.isNotEmpty()) {
-                    item(key = "continue") {
-                        PosterRow("Continue watching", continueWatching.map { it.toPoster() }, horizontal = true) {
-                            nav.open(Route.Details(it.apiName, it.url, it.name))
-                        }
-                    }
+                    item(key = "continue") { ContinueWatchingRow(continueWatching) }
                 }
                 when {
                     state.loading && state.rows.isEmpty() -> item { LoadingBox(Modifier.fillMaxWidth().padding(64.dp)) }

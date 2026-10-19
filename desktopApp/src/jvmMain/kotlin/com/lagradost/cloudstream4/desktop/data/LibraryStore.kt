@@ -45,6 +45,8 @@ data class HistoryEntry(
     @JsonProperty("positionMs") val positionMs: Long,
     @JsonProperty("durationMs") val durationMs: Long,
     @JsonProperty("updatedAt") val updatedAt: Long = System.currentTimeMillis(),
+    /** A picture of where playback stopped, shown on Continue watching. */
+    @JsonProperty("snapshotPath") val snapshotPath: String? = null,
 ) {
     @get:JsonIgnore
     val progress: Float get() = if (durationMs <= 0) 0f else (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
@@ -88,8 +90,11 @@ object LibraryStore {
 
     fun saveProgress(entry: HistoryEntry) {
         _state.update { s ->
+            val previous = s.history.firstOrNull { it.apiName == entry.apiName && it.episodeData == entry.episodeData }
+            // Keep the last picture when this save didn't take a new one
+            val merged = if (entry.snapshotPath == null) entry.copy(snapshotPath = previous?.snapshotPath) else entry
             val rest = s.history.removingAll { it.apiName == entry.apiName && it.episodeData == entry.episodeData }
-            s.copy(history = rest.addingAt(0, entry))
+            s.copy(history = rest.addingAt(0, merged))
         }
         historyFile.write(_state.value.history)
     }
