@@ -24,6 +24,12 @@ cross-platform `library` module. It loads the same extensions as the Android app
 ./gradlew :desktopApp:jvmTest
 ```
 
+To check how many of a folder's extensions load, point the compatibility sweep at it:
+
+```bash
+CS_COMPAT_DIR="$HOME/Library/Application Support/CloudStream/Extensions" ./gradlew :desktopApp:jvmTest --tests '*Compatibility*'
+```
+
 To debug, start with a debugger listening on `127.0.0.1:5005`, then attach from IntelliJ with a Remote JVM Debug configuration:
 
 ```bash
@@ -41,6 +47,7 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 | Android stand-ins | `android/`, `androidx/`, `cloudstream3/plugins/Plugin.kt` | Same class names and signatures as Android, so extensions link without recompiling. `getSharedPreferences` is file-backed. |
 | Repositories | `desktop/plugins/ExtensionManager.kt` | Same `repo.json` and `plugins.json` formats, links, `cloudstreamrepo://` and short codes as Android. A link to a list of repositories, such as the community `repos-db.json`, adds every repository in it. |
 | Repository API for extensions | `cloudstream3/plugins/RepositoryManager.kt` | Same names and signatures as Android, so extensions that add repositories themselves, such as MegaRepo's MegaProvider, work. |
+| Android placeholders | `desktop/plugins/AndroidStubs.kt` | Generates do-nothing versions of the Android classes an extension mentions (settings screens, toasts) and redirects calls to members the desktop stand-ins lack. App class relationships come from the Android sources at build time (`generateAppClassIndex`). |
 | Translation fixes | `desktop/plugins/InnerClassFixer.kt` | Undoes a wrong guess dex2jar makes about local classes in shrunk extensions, which otherwise breaks Kotlin reflection and JSON parsing. |
 | Player | `desktop/player/VlcPlayer.kt` | vlcj renders frames into Compose. Tracks, subtitles, speed, resume. |
 | Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
@@ -53,9 +60,8 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 - Chromecast, account sync (AniList, MAL, Simkl) and subtitle search.
 - DASH streams and HLS streams with separate audio tracks can't be downloaded, as on Android.
 - Extensions that need a WebView (Cloudflare checks) fail, because `WebViewResolver` has no JVM implementation upstream.
-- Extensions that use Android UI or other app-only classes fail to load, with the missing class shown on the Extensions screen.
+- Extension settings screens are Android UI and stay off. The Extensions screen says so for each affected extension.
 - Torrent links are skipped.
-- Extension settings screens are Android-only and are not shown.
 
 ## Upstreaming
 

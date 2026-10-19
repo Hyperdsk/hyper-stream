@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
@@ -14,6 +15,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Text
@@ -23,9 +26,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.lagradost.cloudstream4.desktop.DesktopToasts
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 
 private data class Tab(val route: Route, val label: String, val icon: ImageVector)
@@ -60,6 +65,19 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VlcPlayer?) {
         snapshotFlow { nav.stack.toList() }.collect { store.retain(it) }
     }
 
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        DesktopToasts.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        AppContent(nav, store, vlc)
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(24.dp))
+    }
+}
+
+@Composable
+private fun AppContent(nav: Navigator, store: ModelStore, vlc: VlcPlayer?) {
     CompositionLocalProvider(LocalNavigator provides nav) {
         val route = nav.current
         if (route is Route.Player) {

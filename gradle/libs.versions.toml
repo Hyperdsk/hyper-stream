@@ -45,6 +45,7 @@ nicehttp = "0.4.18"
 dex2jar = "2.4.38"
 vlcj = "4.12.1"
 composeMaterialIcons = "1.7.3"
+gson = "2.11.0"
 overlappingpanels = "0.1.5"
 paletteKtx = "1.0.0"
 preferenceKtx = "1.2.1"
@@ -139,6 +140,7 @@ nextlib-mediainfo = { module = "io.github.anilbeesetti:nextlib-mediainfo", versi
 nicehttp = { module = "com.github.Blatzar:NiceHttp", version.ref = "nicehttp" }
 dex2jar-tools = { module = "de.femtopedia.dex2jar:dex-tools", version.ref = "dex2jar" }
 vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMaterialIcons" }
 overlappingpanels = { module = "com.github.discord:OverlappingPanels", version.ref = "overlappingpanels" }
 palette-ktx = { module = "androidx.palette:palette-ktx", version.ref = "paletteKtx" }

@@ -260,7 +260,10 @@ private fun InstalledRow(plugin: InstalledPlugin?, status: PluginStatus?, localN
 @Composable
 private fun StatusText(status: PluginStatus?) {
     val (text, error) = when (status) {
-        is PluginStatus.Loaded -> (if (status.providers.isEmpty()) "Loaded" else "Providers: " + status.providers.joinToString()) to false
+        is PluginStatus.Loaded -> listOfNotNull(
+            if (status.providers.isEmpty()) "Loaded" else "Providers: " + status.providers.joinToString(),
+            androidOnlyNote(status.androidOnly),
+        ).joinToString(" · ") to false
         is PluginStatus.Failed -> status.reason to true
         PluginStatus.Loading -> "Loading…" to false
         else -> "Not loaded" to false
@@ -361,4 +364,14 @@ private fun PluginRow(
         }
     }
     HorizontalDivider()
+}
+
+/** A short note when Android-only parts (usually the extension's settings screen) are turned off. */
+private fun androidOnlyNote(classes: List<String>): String? {
+    if (classes.isEmpty()) return null
+    val ui = classes.any { c ->
+        listOf("Fragment", "View", "Dialog", "Layout", "Activity", "Adapter", "Toast", "Preference", "Widget", "R$")
+            .any { c.substringAfterLast('.').contains(it) || c.contains(".widget.") }
+    }
+    return if (ui) "Android settings screen not available" else "Some Android-only features are off"
 }

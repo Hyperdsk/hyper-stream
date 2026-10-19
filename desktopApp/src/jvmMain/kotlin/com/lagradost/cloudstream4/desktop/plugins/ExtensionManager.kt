@@ -36,7 +36,8 @@ import java.io.File
 sealed interface PluginStatus {
     data object NotLoaded : PluginStatus
     data object Loading : PluginStatus
-    data class Loaded(val providers: List<String>) : PluginStatus
+    /** [androidOnly] lists Android classes replaced by placeholders, usually a settings screen. */
+    data class Loaded(val providers: List<String>, val androidOnly: List<String> = emptyList()) : PluginStatus
     data class Failed(val reason: String) : PluginStatus
 }
 
@@ -327,7 +328,7 @@ object ExtensionManager {
         setStatus(file, PluginStatus.Loading)
         val status = try {
             val plugin = PluginLoader.load(file)
-            PluginStatus.Loaded(plugin.providerNames)
+            PluginStatus.Loaded(plugin.providerNames, plugin.stubbed)
         } catch (e: Throwable) {
             System.err.println("Failed to load ${file.name}: ${e.message}")
             e.cause?.printStackTrace()

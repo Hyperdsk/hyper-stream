@@ -21,6 +21,8 @@ class LoadedPlugin(
     val manifest: BasePlugin.Manifest,
     val instance: BasePlugin,
     private val classLoader: URLClassLoader,
+    /** Android classes replaced by placeholders, usually from settings screens. */
+    val stubbed: List<String> = emptyList(),
 ) {
     val providerNames: List<String>
         get() = APIHolder.allProviders.filter { it.sourcePlugin == instance.filename }.map { it.name }
@@ -38,12 +40,17 @@ class LoadedPlugin(
  */
 object PluginLoader {
     /** Bump when translation output changes, so cached jars are rebuilt. */
-    private const val TRANSLATION_VERSION = 2
+    private const val TRANSLATION_VERSION = 7
 
     private val loaded = ConcurrentHashMap<String, LoadedPlugin>()
 
-    /** The context handed to `Plugin.load(context)`. Carries no Android behaviour. */
-    private val desktopContext = Context()
+    /**
+     * The context handed to `Plugin.load(context)`. Many extensions cast it straight to
+     * AppCompatActivity (the Android app passes its main activity), so it is one. It only offers
+     * what desktop supports, mainly getSharedPreferences. Extension settings screens that need
+     * more are never opened on desktop.
+     */
+    private val desktopContext: Context get() = DesktopActivity.instance
 
     fun isLoaded(file: File) = loaded.containsKey(file.absolutePath)
     fun get(file: File): LoadedPlugin? = loaded[file.absolutePath]
@@ -77,10 +84,24 @@ object PluginLoader {
         val className = manifest.pluginClassName
             ?: error("${file.name} does not name its plugin class")
 
+        val parent = PluginLoader::class.java.classLoader
+        // Placeholders for Android classes the extension mentions but desktop doesn't have
+        val stubJar = File(jars.first().path.removeSuffix(".jar") + "_android-stubs.jar")
+        val stubListFile = File(stubJar.path + ".txt")
+        val stubbed = if (stubListFile.exists() && stubListFile.lastModified() >= jars.maxOf { it.lastModified() }) {
+            stubListFile.readLines().filter { it.isNotBlank() }
+        } else {
+            val result = AndroidStubs.generate(jars, parent, stubJar)
+            if (result == null) stubJar.delete()
+            stubListFile.writeText(result?.stubbed.orEmpty().joinToString("\n"))
+            result?.stubbed.orEmpty()
+        }
+        val urls = jars + listOfNotNull(stubJar.takeIf { stubbed.isNotEmpty() && it.exists() })
+
         val classLoader = URLClassLoader(
             "cs3:${file.nameWithoutExtension}",
-            jars.map { it.toURI().toURL() }.toTypedArray(),
-            PluginLoader::class.java.classLoader,
+            urls.map { it.toURI().toURL() }.toTypedArray(),
+            parent,
         )
 
         try {
@@ -91,7 +112,7 @@ object PluginLoader {
 
             if (instance is Plugin) instance.load(desktopContext) else instance.load()
 
-            val plugin = LoadedPlugin(file, manifest, instance, classLoader)
+            val plugin = LoadedPlugin(file, manifest, instance, classLoader, stubbed)
             loaded[file.absolutePath] = plugin
             return plugin
         } catch (t: Throwable) {
@@ -133,12 +154,12 @@ object PluginLoader {
     /** Cache key includes size and modification time, so an updated .cs3 gets translated again. */
     private fun convertedJar(file: File, dexName: String): File {
         val prefix = cachePrefix(file)
-        val name = "$prefix${file.length()}_${file.lastModified()}_v${TRANSLATION_VERSION}_${dexName.removeSuffix(".dex")}.jar"
-        val jar = File(AppDirs.convertedExtensions, name)
+        val key = "$prefix${file.length()}_${file.lastModified()}_v${TRANSLATION_VERSION}_"
+        val jar = File(AppDirs.convertedExtensions, "$key${dexName.removeSuffix(".dex")}.jar")
         if (!jar.exists()) {
-            // Remove stale translations of older versions
+            // Remove everything from older versions of this extension or of the translation
             AppDirs.convertedExtensions.listFiles()
-                ?.filter { it.name.startsWith(prefix) && it.name.endsWith("_${dexName.removeSuffix(".dex")}.jar") }
+                ?.filter { it.name.startsWith(prefix) && !it.name.startsWith(key) }
                 ?.forEach { it.delete() }
         }
         return jar
@@ -153,6 +174,8 @@ object PluginLoader {
             .skipDebug(false)
             .optimizeSynchronized(true)
             .noCode(false)
+            // Kotlin uses names like "constructor-impl" for inline classes, which must stay as they are
+            .dontSanitizeNames(true)
             // A method that fails to translate is replaced with one that throws, instead of failing the whole extension
             .withExceptionHandler(BaseDexExceptionHandler())
             .to(tmp.toPath())

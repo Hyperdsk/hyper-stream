@@ -1,9 +1,10 @@
 package androidx.appcompat.app
 
-import android.content.Context
-
 /**
- * Desktop stand-in so that the common extension pattern `context as? AppCompatActivity`
- * resolves. The desktop context is never an activity, so such code takes its non-Android path.
+ * Desktop stand-in for AppCompatActivity. Extensions get one as their load context, because many
+ * cast the context to it. It has the desktop Context features (getSharedPreferences) and runs
+ * runOnUiThread work right away. Android screens extensions build from it are never shown.
  */
-open class AppCompatActivity : Context()
+open class AppCompatActivity : android.app.Activity() {
+    fun runOnUiThread(action: Runnable) = action.run()
+}
