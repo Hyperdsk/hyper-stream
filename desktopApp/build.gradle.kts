@@ -47,6 +47,10 @@ tasks.withType<JavaExec> {
 compose.desktop {
     application {
         mainClass = "com.lagradost.cloudstream4.MainKt"
+        // ./gradlew :desktopApp:run -PdebugApp  starts with a debugger listening on port 5005
+        if (project.hasProperty("debugApp")) {
+            jvmArgs += listOf("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005")
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "CloudStream"

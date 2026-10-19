@@ -24,6 +24,12 @@ cross-platform `library` module. It loads the same extensions as the Android app
 ./gradlew :desktopApp:jvmTest
 ```
 
+To debug, start with a debugger listening on `127.0.0.1:5005`, then attach from IntelliJ with a Remote JVM Debug configuration:
+
+```bash
+./gradlew :desktopApp:run -PdebugApp
+```
+
 App data lives in `~/Library/Application Support/CloudStream`.
 Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 
