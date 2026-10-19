@@ -133,6 +133,25 @@ fun SettingsScreen(vlcAvailable: Boolean) {
                 OutlinedButton(onClick = { SettingsStore.update { it.copy(downloadFolder = null) } }) { Text("Use Movies folder") }
             }
         }
+        Label("Downloads at the same time")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1, 2, 3, 4).forEach { n ->
+                FilterChip(
+                    selected = settings.parallelDownloads == n,
+                    onClick = {
+                        SettingsStore.update { it.copy(parallelDownloads = n) }
+                        DownloadManager.limitChanged()
+                    },
+                    label = { Text("$n") },
+                )
+            }
+        }
+        Text(
+            "Other downloads wait and start one by one as these finish.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
         Label("Connections per download")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(1, 4, 8, 16).forEach { n ->

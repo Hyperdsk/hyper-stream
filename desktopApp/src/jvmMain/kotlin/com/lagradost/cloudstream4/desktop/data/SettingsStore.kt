@@ -28,6 +28,8 @@ data class AppSettings(
     @JsonProperty("downloadFolder") val downloadFolder: String? = null,
     /** Connections per download for hosts that allow it, like Internet Download Manager. */
     @JsonProperty("downloadConnections") val downloadConnections: Int = 8,
+    /** Files downloading at the same time. The rest wait and start in order as others finish. */
+    @JsonProperty("parallelDownloads") val parallelDownloads: Int = 2,
 )
 
 object SettingsStore {

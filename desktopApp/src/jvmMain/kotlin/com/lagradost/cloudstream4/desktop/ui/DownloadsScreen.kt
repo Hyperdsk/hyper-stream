@@ -75,8 +75,14 @@ fun DownloadsScreen() {
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                val downloading = entries.count { it.status == DownloadStatus.Downloading }
+                val waiting = entries.count { it.status == DownloadStatus.Queued }
                 Text(
-                    "${formatBytes(used)} in ${DownloadManager.folder.path.replace(System.getProperty("user.home"), "~")}",
+                    listOfNotNull(
+                        downloading.takeIf { it > 0 }?.let { "$it downloading" },
+                        waiting.takeIf { it > 0 }?.let { "$it waiting" },
+                        "${formatBytes(used)} in ${DownloadManager.folder.path.replace(System.getProperty("user.home"), "~")}",
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -213,7 +219,7 @@ private fun statusText(entry: DownloadEntry): String {
     }
     val percent = entry.progress?.let { "${(it * 100).toInt()}%" }
     return when (entry.status) {
-        DownloadStatus.Queued -> "Waiting"
+        DownloadStatus.Queued -> DownloadManager.queuePosition(entry.id)?.let { "Waiting · ${ordinal(it)} in line" } ?: "Waiting"
         DownloadStatus.Downloading -> listOfNotNull(
             percent,
             size,
@@ -238,4 +244,9 @@ private fun reveal(file: File) {
         if (desktop.isSupported(Desktop.Action.BROWSE_FILE_DIR)) desktop.browseFileDirectory(file)
         else desktop.open(file.parentFile)
     }
+}
+
+private fun ordinal(n: Int): String {
+    val suffix = if (n % 100 in 11..13) "th" else when (n % 10) { 1 -> "st"; 2 -> "nd"; 3 -> "rd"; else -> "th" }
+    return "$n$suffix"
 }

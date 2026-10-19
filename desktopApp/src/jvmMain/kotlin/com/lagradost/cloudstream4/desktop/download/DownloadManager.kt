@@ -133,7 +133,8 @@ data class DownloadRequest(
  * video. DASH and torrents are not downloadable, also like Android.
  */
 object DownloadManager {
-    private const val MAX_PARALLEL_DOWNLOADS = 2
+    /** How many files download at the same time; the rest wait in order. From Settings, 1 to 4. */
+    private val maxParallel: Int get() = SettingsStore.state.value.parallelDownloads.coerceIn(1, 4)
     private const val PARALLEL_SEGMENTS = 3
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -224,6 +225,15 @@ object DownloadManager {
         pump()
     }
 
+    /** Call after the parallel limit changes: starts more if it went up. Running ones are never stopped. */
+    fun limitChanged() = pump()
+
+    /** 1-based place in line for a waiting download, in the order they will start. Null when not waiting. */
+    fun queuePosition(id: String): Int? {
+        val waiting = _entries.value.filter { it.status == DownloadStatus.Queued }.sortedBy { it.addedAt }
+        return waiting.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.plus(1)
+    }
+
     /** Pauses every unfinished download of one title. */
     fun pauseAll(apiName: String, parentUrl: String) {
         _entries.value.filter { it.apiName == apiName && it.parentUrl == parentUrl }
@@ -256,7 +266,7 @@ object DownloadManager {
     @Synchronized
     private fun pump() {
         jobs.entries.removeIf { !it.value.isActive }
-        val free = MAX_PARALLEL_DOWNLOADS - jobs.size
+        val free = maxParallel - jobs.size
         if (free <= 0) return
         _entries.value
             .filter { it.status == DownloadStatus.Queued && !jobs.containsKey(it.id) }

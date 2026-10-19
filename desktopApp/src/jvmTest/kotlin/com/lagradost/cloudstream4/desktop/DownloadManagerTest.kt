@@ -14,6 +14,7 @@ import com.lagradost.cloudstream4.desktop.download.DownloadStatus
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -107,7 +108,7 @@ class DownloadManagerTest {
         }
     }
 
-    private class SeasonProvider(private val base: String) : MainAPI() {
+    private open class SeasonProvider(private val base: String) : MainAPI() {
         override var name = "SeasonTest"
         override var mainUrl = base
         override suspend fun loadLinks(
@@ -153,6 +154,55 @@ class DownloadManagerTest {
             assertEquals(listOf("S01E01 - Episode 1.mp4", "S01E02 - Episode 2.mp4", "S01E03 - Episode 3.mp4"), names)
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-season" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun queueRespectsTheLimitAndMovesOnInOrder() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())
+        val folder = Files.createTempDirectory("cs-downloads-queue").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path, parallelDownloads = 1) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val api = SeasonProvider(base).apply { name = "QueueTest"; sourcePlugin = "test-queue" }
+        APIHolder.allProviders.add(api)
+        try {
+            val episodes = (1..4).map { PlayableEpisode("q$it", "Part $it", 1, it) }
+            episodes.forEach {
+                DownloadManager.enqueue(DownloadRequest("QueueTest", "$base/queue", "Queue Show", null, null, it))
+                delay(5) // distinct add times, so the order is defined
+            }
+            val ids = episodes.map { DownloadManager.idFor("QueueTest", it.data) }
+            assertEquals(listOf(null, 1, 2, 3), ids.map { DownloadManager.queuePosition(it) })
+
+            val startOrder = mutableListOf<String>()
+            var maxRunning = 0
+            var raised = false
+            withTimeout(90_000) {
+                DownloadManager.entries.first { list ->
+                    val mine = list.filter { it.id in ids }
+                    val running = mine.filter { it.status == DownloadStatus.Downloading }
+                    running.forEach { if (it.id !in startOrder) startOrder += it.id }
+                    maxRunning = maxOf(maxRunning, running.size)
+                    // After the first file finishes, allow two at a time
+                    if (!raised && mine.count { it.status == DownloadStatus.Completed } >= 1) {
+                        raised = true
+                        assertTrue(maxRunning <= 1, "ran $maxRunning at once with a limit of 1")
+                        SettingsStore.update { it.copy(parallelDownloads = 2) }
+                        DownloadManager.limitChanged()
+                    }
+                    mine.all { it.status == DownloadStatus.Completed || it.status == DownloadStatus.Failed }
+                }
+            }
+            val done = DownloadManager.entries.value.filter { it.id in ids }
+            done.forEach { assertEquals(DownloadStatus.Completed, it.status, it.error) }
+            assertEquals(ids, startOrder, "started out of order")
+            assertTrue(maxRunning == 2, "limit of 2 was not used after raising it, max was $maxRunning")
+            println("Queue started in order, limit 1 then 2 respected")
+        } finally {
+            SettingsStore.update { it.copy(parallelDownloads = 2) }
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-queue" } }
             server.stop(0)
         }
     }
