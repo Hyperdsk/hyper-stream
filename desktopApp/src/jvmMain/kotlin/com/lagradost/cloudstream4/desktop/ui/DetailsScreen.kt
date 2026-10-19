@@ -69,6 +69,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.ActorData
+import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream4.desktop.meta.compactCount
+import com.lagradost.cloudstream4.desktop.meta.ImdbInfo
+import com.lagradost.cloudstream4.desktop.meta.Imdb
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.EpisodeResponse
@@ -114,6 +119,8 @@ data class DetailsState(
     val unsupported: String? = null,
     /** Open while the user chooses a download source. */
     val picker: DownloadPickerState? = null,
+    /** IMDb rating, credits and facts, loaded after the provider's details. */
+    val imdb: ImdbInfo? = null,
 ) {
     val episodes: List<EpisodeUi> get() = allEpisodes.filter { seasons.isEmpty() || it.playable.season == season }
     val isMovieLike: Boolean get() = response is MovieLoadResponse || response is LiveStreamLoadResponse
@@ -145,6 +152,9 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
     }
 
     private fun apply(response: LoadResponse) {
+        scope.launch {
+            providerCall { Imdb.forTitle(response) }.getOrNull()?.let { info -> update { copy(imdb = info) } }
+        }
         val dubs = (response as? AnimeLoadResponse)?.episodes?.filterValues { it.isNotEmpty() }?.keys?.toList().orEmpty()
         val dub = dubs.firstOrNull()
         update {
@@ -426,7 +436,10 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                     }
                 }
 
-                val cast = response.actors.orEmpty()
+                // The provider's cast, or IMDb's stars when the provider has none
+                val cast = response.actors.orEmpty().ifEmpty {
+                    state.imdb?.stars.orEmpty().map { ActorData(Actor(it.name, it.image)) }
+                }
                 if (cast.isNotEmpty()) {
                     item {
                         ShelfTitle("Cast & Crew", Modifier.padding(start = 16.dp, top = 18.dp))
@@ -461,6 +474,8 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                         }
                     }
                 }
+
+                state.imdb?.let { imdb -> item { InformationSection(imdb) } }
             }
         }
         GlassButton(
@@ -516,7 +531,8 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         if (i > 0) Text("·", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.6f))
                         Text(fact, style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
                     }
-                    response.contentRating?.let { rating ->
+                    state.imdb?.let { imdb -> ImdbBadges(imdb) }
+                    (response.contentRating ?: state.imdb?.certificate)?.let { rating ->
                         Text(
                             rating, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
                             modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
@@ -542,7 +558,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                     }
                     GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(response.url) }
                 }
-                response.plot?.takeIf { it.isNotBlank() }?.let {
+                (response.plot?.takeIf { it.isNotBlank() } ?: state.imdb?.plot)?.let {
                     Spacer(Modifier.height(18.dp))
                     Text(
                         it,
@@ -717,5 +733,86 @@ private fun EpisodeCard(
             Text(it, style = MaterialTheme.typography.bodySmall, color = secondaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         ep.runTimeMinutes?.let { Text("$it min", style = MaterialTheme.typography.labelSmall, color = secondaryText, modifier = Modifier.padding(top = 2.dp)) }
+    }
+}
+
+
+/** IMDb's yellow badge with the rating and vote count, and the Metascore in its colour. */
+@Composable
+private fun ImdbBadges(imdb: ImdbInfo) {
+    imdb.rating?.let { rating ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "IMDb", color = Color.Black, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.background(Color(0xFFF5C518), RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("%.1f".format(rating), style = MaterialTheme.typography.labelLarge, color = Color.White)
+            imdb.votes?.let { Text("  ${compactCount(it)}", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f)) }
+        }
+    }
+    imdb.metascore?.let { score ->
+        val color = when {
+            score >= 61 -> Color(0xFF54A72A)
+            score >= 40 -> Color(0xFFFFCC33)
+            else -> Color(0xFFFF0000)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "$score", color = if (score in 40..60) Color.Black else Color.White, style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.background(color, RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text("Metascore", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f))
+        }
+    }
+}
+
+/**
+ * The Apple TV "Information" block: facts and credits in columns, from IMDb, with a link to
+ * the title's IMDb page.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InformationSection(imdb: ImdbInfo) {
+    val facts = buildList<Pair<String, String>> {
+        imdb.released?.let { add("Released" to it) }
+        if (imdb.endYear != null && imdb.year != null) add("Years" to "${imdb.year}–${imdb.endYear}")
+        imdb.runtimeMinutes?.takeIf { it > 0 }?.let { add("Run Time" to if (it >= 60) "${it / 60} hr ${it % 60} min" else "$it min") }
+        imdb.certificate?.let { add("Rated" to it) }
+        if (imdb.genres.isNotEmpty()) add("Genres" to imdb.genres.joinToString(", "))
+        if (imdb.seasons != null || imdb.episodes != null) {
+            add("Episodes" to listOfNotNull(imdb.seasons?.let { "$it season${if (it > 1) "s" else ""}" }, imdb.episodes?.let { "$it episodes" }).joinToString(", "))
+        }
+        if (imdb.creators.isNotEmpty()) add("Created By" to imdb.creators.joinToString(", ") { it.name })
+        if (imdb.directors.isNotEmpty()) add((if (imdb.directors.size > 1) "Directors" else "Director") to imdb.directors.joinToString(", ") { it.name })
+        if (imdb.writers.isNotEmpty()) add("Writers" to imdb.writers.take(4).joinToString(", ") { it.name })
+        if (imdb.stars.isNotEmpty()) add("Starring" to imdb.stars.take(5).joinToString(", ") { it.name })
+        if (imdb.countries.isNotEmpty()) add("Region of Origin" to imdb.countries.joinToString(", "))
+        if (imdb.languages.isNotEmpty()) add("Languages" to imdb.languages.take(4).joinToString(", "))
+        imdb.awards?.let { add("Awards" to it) }
+        imdb.budget?.let { add("Budget" to it) }
+        imdb.grossWorldwide?.let { add("Box Office" to "$it worldwide") }
+        imdb.rating?.let { r -> add("IMDb Rating" to "%.1f/10".format(r) + (imdb.votes?.let { " from ${compactCount(it)} ratings" } ?: "")) }
+        imdb.popularity?.let { add("Popularity" to "#$it on IMDb") }
+    }
+    Column(Modifier.fillMaxWidth().padding(start = 48.dp, end = 32.dp, top = 28.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Information", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+            SubtleCapsule(Icons.Default.OpenInBrowser, "View on IMDb") { openInBrowser(imdb.url) }
+        }
+        Spacer(Modifier.height(16.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            facts.forEach { (label, value) ->
+                Column(Modifier.width(240.dp)) {
+                    Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                    Spacer(Modifier.height(3.dp))
+                    Text(value, style = MaterialTheme.typography.bodySmall, color = secondaryText)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Information from IMDb", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f))
     }
 }
