@@ -90,7 +90,9 @@ fun SearchResponse.toPoster() = PosterItem(
     posterUrl = posterUrl,
     posterHeaders = posterHeaders,
     badge = quality?.name?.replace("HD", " HD")?.trim()?.takeIf { it.isNotBlank() },
-    subtitle = type?.name,
+    // No type label: like the Android app, since many extensions leave the type at the
+    // library's default (Anime for newAnimeSearchResponse) whatever the title really is
+    subtitle = null,
 )
 
 fun Bookmark.toPoster() = PosterItem(name, url, apiName, posterUrl, posterHeaders, subtitle = apiName)
