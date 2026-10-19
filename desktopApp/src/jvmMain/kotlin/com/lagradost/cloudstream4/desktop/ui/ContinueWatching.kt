@@ -113,7 +113,7 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
             // Where you stopped; the original poster fades in on hover, or when there is no picture yet
             Crossfade(targetState = hovered || snapshot == null, animationSpec = tween(250)) { showPoster ->
                 if (showPoster || snapshot == null) {
-                    RemoteImage(entry.posterUrl, entry.posterHeaders, Modifier.fillMaxSize())
+                    WideImage(entry.posterUrl, entry.posterHeaders, Modifier.fillMaxSize())
                 } else {
                     Image(snapshot, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 }

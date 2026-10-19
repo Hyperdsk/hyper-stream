@@ -46,6 +46,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.BiasAlignment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.isSpecified
+import coil3.compose.AsyncImagePainter
+import coil3.compose.rememberAsyncImagePainter
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.network.NetworkHeaders
@@ -125,6 +138,55 @@ fun RemoteImage(
         contentScale = contentScale,
         modifier = if (placeholder) modifier.background(MaterialTheme.colorScheme.surfaceVariant) else modifier,
     )
+}
+
+/**
+ * An image for a wide frame that may get a portrait poster. A poster much taller than the frame
+ * is shown whole, at [fitAlignment], over a blurred, dimmed fill of itself, instead of being
+ * cropped to a strip across its middle. Other images fill the frame, cropped from near the top
+ * so faces stay in view.
+ */
+@Composable
+fun WideImage(
+    url: String?,
+    headers: Map<String, String>?,
+    modifier: Modifier = Modifier,
+    fitAlignment: Alignment = Alignment.Center,
+) {
+    if (url.isNullOrBlank()) {
+        Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant))
+        return
+    }
+    val context = LocalPlatformContext.current
+    val request = remember(url, headers) {
+        ImageRequest.Builder(context)
+            .data(url)
+            .apply {
+                if (!headers.isNullOrEmpty()) {
+                    httpHeaders(NetworkHeaders.Builder().apply { headers.forEach { (k, v) -> set(k, v) } }.build())
+                }
+            }
+            .build()
+    }
+    val painter = rememberAsyncImagePainter(request)
+    val state by painter.state.collectAsState()
+    BoxWithConstraints(modifier.background(MaterialTheme.colorScheme.surfaceVariant).clipToBounds()) {
+        val size = (state as? AsyncImagePainter.State.Success)?.painter?.intrinsicSize
+        val imageRatio = size?.takeIf { it.isSpecified && it.height > 0f }?.let { it.width / it.height }
+        val frameRatio = if (maxHeight > 0.dp) maxWidth / maxHeight else 16f / 9f
+        val portrait = imageRatio != null && imageRatio < frameRatio * 0.7f
+        AnimatedVisibility(state is AsyncImagePainter.State.Success, enter = fadeIn(tween(300)), exit = fadeOut()) {
+            Box(Modifier.fillMaxSize()) {
+                if (portrait) {
+                    Image(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(28.dp))
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
+                    Image(painter, null, contentScale = ContentScale.Fit, alignment = fitAlignment, modifier = Modifier.fillMaxSize())
+                } else {
+                    Image(painter, null, contentScale = ContentScale.Crop, alignment = BiasAlignment(0f, -0.6f), modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+    }
 }
 
 @Composable

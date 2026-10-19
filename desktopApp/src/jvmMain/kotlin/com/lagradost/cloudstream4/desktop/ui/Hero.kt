@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -78,11 +79,12 @@ fun HeroCarousel(items: List<HeroItem>) {
             Crossfade(targetState = safeIndex, animationSpec = tween(700)) { i ->
                 val item = items[i]
                 val details = item.details
-                RemoteImage(
+                // A portrait poster sits whole on the right, clear of the title text on the left
+                WideImage(
                     details?.backgroundPosterUrl ?: details?.posterUrl ?: item.search.posterUrl,
                     details?.posterHeaders ?: item.search.posterHeaders,
                     Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
+                    fitAlignment = BiasAlignment(0.75f, 0f),
                 )
             }
             Box(Modifier.fillMaxSize().background(leftScrim(background)))
