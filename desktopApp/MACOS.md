@@ -36,6 +36,12 @@ To debug, start with a debugger listening on `127.0.0.1:5005`, then attach from 
 ./gradlew :desktopApp:run -PdebugApp
 ```
 
+`run` loads classes from the build folder, so rebuilding or running tests while it is open can crash it with `ClassNotFoundException`. To keep a session safe while you work, run a packaged copy instead (with `-PdebugApp` it includes the debugger agent):
+
+```bash
+./gradlew :desktopApp:createDistributable -PdebugApp && ./desktopApp/build/compose/binaries/main/app/CloudStream.app/Contents/MacOS/CloudStream
+```
+
 App data lives in `~/Library/Application Support/CloudStream`.
 Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 

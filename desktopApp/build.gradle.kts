@@ -61,6 +61,8 @@ compose.desktop {
                 "java.instrument", "java.management", "java.naming", "java.net.http", "java.scripting", "java.sql",
                 "jdk.crypto.ec", "jdk.dynalink", "jdk.httpserver", "jdk.localedata", "jdk.unsupported",
             )
+            // The debugger agent, only in debug builds (-PdebugApp)
+            if (project.hasProperty("debugApp")) modules("jdk.jdwp.agent")
             packageVersion = "1.0.0"
 
             val iconsRoot = project.file("desktop-icons")
