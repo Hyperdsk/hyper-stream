@@ -16,6 +16,31 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
+/** One IMDb user review. */
+data class ImdbReview(
+    val id: String,
+    val author: String,
+    /** The reviewer's own score out of 10, when they gave one. */
+    val rating: Int?,
+    val title: String?,
+    val text: String,
+    val date: String?,
+    val upVotes: Int,
+    val downVotes: Int,
+    val spoiler: Boolean,
+)
+
+data class ImdbReviewPage(val reviews: List<ImdbReview>, val total: Int, val nextCursor: String?)
+
+enum class ReviewSort(val label: String, val by: String, val order: String) {
+    Helpful("Most helpful", "HELPFULNESS_SCORE", "DESC"),
+    Newest("Newest", "SUBMISSION_DATE", "DESC"),
+    Oldest("Oldest", "SUBMISSION_DATE", "ASC"),
+    Highest("Highest rated", "USER_RATING", "DESC"),
+    Lowest("Lowest rated", "USER_RATING", "ASC"),
+    MostVotes("Most votes", "TOTAL_VOTES", "DESC"),
+}
+
 data class ImdbPerson(
     @JsonProperty("id") val id: String,
     @JsonProperty("name") val name: String,
@@ -49,6 +74,9 @@ data class ImdbInfo(
     @JsonProperty("grossWorldwide") val grossWorldwide: String?,
     @JsonProperty("seasons") val seasons: Int?,
     @JsonProperty("episodes") val episodes: Int?,
+    /** Votes for each score, index 0 is 1 star up to index 9 for 10 stars. */
+    @JsonProperty("ratingHistogram") val ratingHistogram: List<Long> = emptyList(),
+    @JsonProperty("reviewCount") val reviewCount: Int? = null,
 ) {
     val url: String get() = "https://www.imdb.com/title/$id/"
 }
@@ -71,7 +99,7 @@ object Imdb {
     private const val BROWSER_UA =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
-    private val file = jsonFile<Map<String, CachedImdb>>("imdb-cache.json") { emptyMap() }
+    private val file = jsonFile<Map<String, CachedImdb>>("imdb-cache-v2.json") { emptyMap() }
     private val cache = ConcurrentHashMap<String, CachedImdb>(file.read())
 
     /** Details for [response], or null when IMDb has no matching title. Cached for a few days. */
@@ -126,11 +154,13 @@ object Imdb {
           productionBudget { budget { amount currency } }
           lifetimeGross(boxOfficeArea: WORLDWIDE) { total { amount currency } }
           episodes { seasons { number } episodes(first: 0) { total } }
+          aggregateRatingsBreakdown { histogram { histogramValues { rating voteCount } } }
+          reviews(first: 0) { total }
         } }
     """.trimIndent()
 
-    internal fun fetch(id: String): ImdbInfo? {
-        val payload = jsonMapper.writeValueAsString(mapOf("query" to query, "variables" to mapOf("id" to id)))
+    private fun graphql(query: String, variables: Map<String, Any?>): JsonNode? {
+        val payload = jsonMapper.writeValueAsString(mapOf("query" to query, "variables" to variables))
         val request = Request.Builder()
             .url("https://api.graphql.imdb.com/")
             .header("User-Agent", BROWSER_UA)
@@ -139,9 +169,48 @@ object Imdb {
             .post(payload.toRequestBody("application/json".toMediaType()))
             .build()
         val text = app.baseClient.newCall(request).execute().use { if (it.isSuccessful) it.body.string() else return null }
-        val t = jsonMapper.readTree(text).path("data").path("title").takeIf { it.isObject } ?: return null
-        return parse(t)
+        return jsonMapper.readTree(text).path("data").path("title").takeIf { it.isObject }
     }
+
+    internal fun fetch(id: String): ImdbInfo? = graphql(query, mapOf("id" to id))?.let(::parse)
+
+    private val reviewsQuery = """
+        query(${'$'}id: ID!, ${'$'}first: Int!, ${'$'}after: ID, ${'$'}by: ReviewsSortBy!, ${'$'}order: SortOrder!) { title(id: ${'$'}id) {
+          reviews(first: ${'$'}first, after: ${'$'}after, sort: { by: ${'$'}by, order: ${'$'}order }) {
+            total pageInfo { endCursor hasNextPage }
+            edges { node {
+              id author { nickName } authorRating summary { originalText }
+              text { originalText { plainText } } submissionDate helpfulness { upVotes downVotes } spoiler
+            } }
+          }
+        } }
+    """.trimIndent()
+
+    /** A page of user reviews. Pass the previous page's [ImdbReviewPage.nextCursor] to continue. */
+    suspend fun reviews(id: String, sort: ReviewSort = ReviewSort.Helpful, after: String? = null, count: Int = 20): ImdbReviewPage? =
+        withContext(Dispatchers.IO) {
+            val r = graphql(
+                reviewsQuery,
+                mapOf("id" to id, "first" to count, "after" to after, "by" to sort.by, "order" to sort.order),
+            )?.path("reviews") ?: return@withContext null
+            val reviews = r.path("edges").mapNotNull { edge ->
+                val n = edge.path("node")
+                val text = n.textOrNull("text", "originalText", "plainText") ?: return@mapNotNull null
+                ImdbReview(
+                    id = n.path("id").asText(),
+                    author = n.textOrNull("author", "nickName") ?: "IMDb user",
+                    rating = n.path("authorRating").takeIf { it.isNumber }?.asInt(),
+                    title = n.textOrNull("summary", "originalText"),
+                    text = text,
+                    date = n.textOrNull("submissionDate"),
+                    upVotes = n.path("helpfulness").path("upVotes").asInt(0),
+                    downVotes = n.path("helpfulness").path("downVotes").asInt(0),
+                    spoiler = n.path("spoiler").asBoolean(false),
+                )
+            }
+            val next = r.path("pageInfo").takeIf { it.path("hasNextPage").asBoolean(false) }?.textOrNull("endCursor")
+            ImdbReviewPage(reviews, r.path("total").asInt(reviews.size), next)
+        }
 
     private fun JsonNode.textOrNull(vararg path: String): String? =
         path.fold(this) { node, key -> node.path(key) }.takeIf { it.isTextual }?.asText()?.takeIf { it.isNotBlank() }
@@ -212,6 +281,11 @@ object Imdb {
             grossWorldwide = money(t.path("lifetimeGross").path("total")),
             seasons = t.path("episodes").path("seasons").size().takeIf { it > 0 },
             episodes = t.path("episodes").path("episodes").path("total").takeIf { it.isNumber }?.asInt()?.takeIf { it > 0 },
+            ratingHistogram = t.path("aggregateRatingsBreakdown").path("histogram").path("histogramValues").let { values ->
+                val byRating = values.associate { it.path("rating").asInt() to it.path("voteCount").asLong() }
+                if (byRating.isEmpty()) emptyList() else (1..10).map { byRating[it] ?: 0L }
+            },
+            reviewCount = t.path("reviews").path("total").takeIf { it.isNumber }?.asInt(),
         )
     }
 }

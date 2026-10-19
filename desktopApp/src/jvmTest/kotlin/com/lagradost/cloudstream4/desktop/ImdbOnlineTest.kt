@@ -2,6 +2,7 @@ package com.lagradost.cloudstream4.desktop
 
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream4.desktop.meta.Imdb
+import com.lagradost.cloudstream4.desktop.meta.ReviewSort
 import kotlinx.coroutines.runBlocking
 import java.net.URI
 import kotlin.test.Test
@@ -32,5 +33,17 @@ class ImdbOnlineTest {
         val series = assertNotNull(Imdb.fetch(seriesId))
         println("Series: ${series.title} ${series.year}-${series.endYear} ★${series.rating} seasons=${series.seasons} episodes=${series.episodes} creators=${series.creators.map { it.name }}")
         assertTrue(series.type?.contains("Series") == true, "type was ${series.type}")
+
+        // Every score's votes, and reviews in pages and sort orders
+        val bttf = assertNotNull(Imdb.fetch("tt0096874"))
+        assertEquals(10, bttf.ratingHistogram.size)
+        assertTrue(bttf.ratingHistogram.sum() > 100_000)
+        val first = assertNotNull(Imdb.reviews("tt0096874", ReviewSort.Helpful, count = 5))
+        assertEquals(5, first.reviews.size)
+        val second = assertNotNull(Imdb.reviews("tt0096874", ReviewSort.Helpful, after = first.nextCursor, count = 5))
+        assertTrue(second.reviews.none { r -> first.reviews.any { it.id == r.id } }, "second page repeats the first")
+        val lowest = assertNotNull(Imdb.reviews("tt0096874", ReviewSort.Lowest, count = 3))
+        assertTrue(lowest.reviews.all { (it.rating ?: 0) <= 3 }, "lowest rated: ${lowest.reviews.map { it.rating }}")
+        println("Reviews: ${first.total} total, histogram ${bttf.ratingHistogram}, top '${first.reviews.first().title}' by ${first.reviews.first().author}")
     }
 }

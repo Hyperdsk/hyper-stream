@@ -73,6 +73,7 @@ import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream4.desktop.meta.compactCount
 import com.lagradost.cloudstream4.desktop.meta.ImdbInfo
+import com.lagradost.cloudstream4.desktop.meta.ImdbReviewPage
 import com.lagradost.cloudstream4.desktop.meta.Imdb
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
@@ -121,6 +122,8 @@ data class DetailsState(
     val picker: DownloadPickerState? = null,
     /** IMDb rating, credits and facts, loaded after the provider's details. */
     val imdb: ImdbInfo? = null,
+    /** The most helpful IMDb reviews, for the Ratings & Reviews shelf. */
+    val reviews: ImdbReviewPage? = null,
 ) {
     val episodes: List<EpisodeUi> get() = allEpisodes.filter { seasons.isEmpty() || it.playable.season == season }
     val isMovieLike: Boolean get() = response is MovieLoadResponse || response is LiveStreamLoadResponse
@@ -153,7 +156,10 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
 
     private fun apply(response: LoadResponse) {
         scope.launch {
-            providerCall { Imdb.forTitle(response) }.getOrNull()?.let { info -> update { copy(imdb = info) } }
+            providerCall { Imdb.forTitle(response) }.getOrNull()?.let { info ->
+                update { copy(imdb = info) }
+                providerCall { Imdb.reviews(info.id, count = 10) }.getOrNull()?.let { page -> update { copy(reviews = page) } }
+            }
         }
         val dubs = (response as? AnimeLoadResponse)?.episodes?.filterValues { it.isNotEmpty() }?.keys?.toList().orEmpty()
         val dub = dubs.firstOrNull()
@@ -347,6 +353,9 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
     val downloads by DownloadManager.entries.collectAsState()
     val response = state.response
     var showSeasonDialog by remember { mutableStateOf(false) }
+    var showReviews by remember { mutableStateOf(false) }
+
+    if (showReviews) state.imdb?.let { ReviewsDialog(it) { showReviews = false } }
 
     if (showSeasonDialog) {
         val seasonName = state.seasons.firstOrNull { it.first == state.season }?.second
@@ -475,7 +484,10 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                     }
                 }
 
-                state.imdb?.let { imdb -> item { InformationSection(imdb) } }
+                state.imdb?.let { imdb ->
+                    item { RatingsAndReviews(imdb, state.reviews) { showReviews = true } }
+                    item { InformationSection(imdb) }
+                }
             }
         }
         GlassButton(
