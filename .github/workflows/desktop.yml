@@ -1,0 +1,172 @@
+name: Desktop and Android builds
+
+# Builds the desktop app for macOS (Apple silicon and Intel), Linux and Windows, plus the Android
+# app, which also runs on Android TV. Every run uploads the builds as artifacts; pushing a tag
+# like v1.2.0 also publishes them as a GitHub release.
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: builds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Desktop tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Test
+        run: ./gradlew :desktopApp:jvmTest
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: test-reports
+          path: desktopApp/build/reports/tests/
+
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-apple-silicon
+            os: macos-15
+            package: packageDmg
+            output: dmg
+          - name: macos-intel
+            os: macos-15-intel
+            package: packageDmg
+            output: dmg
+          - name: linux-x64
+            os: ubuntu-latest
+            package: packageDeb
+            output: deb
+          - name: windows-x64
+            os: windows-latest
+            package: packageMsi
+            output: msi
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Pick version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build installer and portable app
+        run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ steps.version.outputs.value }}
+
+      - name: Collect files
+        run: |
+          mkdir -p dist
+          out=desktopApp/build/compose/binaries/main
+          for f in "$out/${{ matrix.output }}"/*; do
+            cp "$f" "dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.${f##*.}"
+          done
+          # A portable copy that needs no installer
+          case "${{ matrix.name }}" in
+            windows-*) (cd "$out/app" && 7z a -tzip "$GITHUB_WORKSPACE/dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" CloudStream >/dev/null) ;;
+            linux-*) tar -czf "dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.tar.gz" -C "$out/app" CloudStream ;;
+          esac
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: CloudStream-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  android:
+    name: Android and Android TV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      # Signed with a debug key, so it installs (sideloads) on phones and Android TV without a keystore secret
+      - name: Build APK
+        run: ./gradlew :app:assemblePrereleaseDebug
+
+      - name: Collect files
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/prerelease/debug/*.apk dist/CloudStream-android-and-tv.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: CloudStream-android
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ desktop, android ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            **Desktop** needs [VLC](https://www.videolan.org/vlc/) installed for playback.
+
+            - macOS: `-macos-apple-silicon.dmg` for M-series Macs, `-macos-intel.dmg` for Intel Macs. The app isn't notarized, so the first time, right-click it and choose Open.
+            - Windows: the `.msi` installer, or the portable `.zip`.
+            - Linux: the `.deb` package, or the portable `.tar.gz`.
+
+            **Android and Android TV**: install `CloudStream-android-and-tv.apk` (allow installs from unknown sources).

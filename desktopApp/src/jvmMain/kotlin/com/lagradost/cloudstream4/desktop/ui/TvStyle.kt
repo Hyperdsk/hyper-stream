@@ -48,15 +48,20 @@ import androidx.compose.ui.unit.sp
  * large titles. Shared by every screen so they feel like one app.
  */
 
-/** San Francisco, the macOS system font, in the weights the app uses. */
+/** San Francisco, the macOS system font, in the weights the app uses. Other systems use their default font. */
 @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
-val SystemFontFamily: FontFamily = FontFamily(
-    SystemFont(".AppleSystemUIFont", FontWeight.Normal),
-    SystemFont(".AppleSystemUIFont", FontWeight.Medium),
-    SystemFont(".AppleSystemUIFont", FontWeight.SemiBold),
-    SystemFont(".AppleSystemUIFont", FontWeight.Bold),
-    SystemFont(".AppleSystemUIFont", FontWeight.ExtraBold),
-)
+val SystemFontFamily: FontFamily =
+    if (System.getProperty("os.name").orEmpty().lowercase().contains("mac")) {
+        FontFamily(
+            SystemFont(".AppleSystemUIFont", FontWeight.Normal),
+            SystemFont(".AppleSystemUIFont", FontWeight.Medium),
+            SystemFont(".AppleSystemUIFont", FontWeight.SemiBold),
+            SystemFont(".AppleSystemUIFont", FontWeight.Bold),
+            SystemFont(".AppleSystemUIFont", FontWeight.ExtraBold),
+        )
+    } else {
+        FontFamily.Default
+    }
 
 private fun style(size: Int, weight: FontWeight, tracking: Double, lineHeight: Int) = TextStyle(
     fontFamily = SystemFontFamily,

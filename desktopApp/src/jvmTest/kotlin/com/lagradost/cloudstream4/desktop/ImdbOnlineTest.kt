@@ -10,9 +10,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** IMDb matching and details against the live service. Skipped when offline. */
+/** IMDb matching and details against the live service. Skipped when offline, and on CI, where IMDb often refuses data-center addresses. */
 class ImdbOnlineTest {
-    private fun online() = runCatching {
+    private fun online() = System.getenv("CI") == null && runCatching {
         URI("https://v3.sg.media-imdb.com/suggestion/x/test.json").toURL().openConnection().apply { connectTimeout = 3000 }.getInputStream().close()
     }.isSuccess
 
