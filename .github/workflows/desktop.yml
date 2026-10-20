@@ -37,13 +37,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
 
       - name: Test
-        run: ./gradlew :desktopApp:jvmTest
+        run: ./gradlew :appCore:jvmTest
 
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports
-          path: desktopApp/build/reports/tests/
+          path: appCore/build/reports/tests/
 
   desktop:
     name: Desktop (${{ matrix.name }})
@@ -130,14 +130,24 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
 
-      # Signed with a debug key, so it installs (sideloads) on phones and Android TV without a keystore secret
+      - name: Pick version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The same Compose app as the desktop builds, for phones, tablets and Android TV.
+      # Signed with a debug key, so it installs (sideloads) without a keystore secret
       - name: Build APK
-        run: ./gradlew :app:assemblePrereleaseDebug
+        run: ./gradlew :androidApp:assembleRelease -PappVersion=${{ steps.version.outputs.value }} -PappVersionCode=${{ github.run_number }}
 
       - name: Collect files
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/prerelease/debug/*.apk dist/CloudStream-android-and-tv.apk
+          cp androidApp/build/outputs/apk/release/*.apk dist/CloudStream-${{ steps.version.outputs.value }}-android-and-tv.apk
 
       - uses: actions/upload-artifact@v7
         with:
@@ -169,4 +179,4 @@ jobs:
             - Windows: the `.msi` installer, or the portable `.zip`.
             - Linux: the `.deb` package, or the portable `.tar.gz`.
 
-            **Android and Android TV**: install `CloudStream-android-and-tv.apk` (allow installs from unknown sources).
+            **Android and Android TV**: install the `-android-and-tv.apk` (allow installs from unknown sources). It is the same app as the desktop builds, with a phone layout and TV remote support.

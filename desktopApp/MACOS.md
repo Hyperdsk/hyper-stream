@@ -21,13 +21,13 @@ cross-platform `library` module. It loads the same extensions as the Android app
 ```
 
 ```bash
-./gradlew :desktopApp:jvmTest
+./gradlew :appCore:jvmTest
 ```
 
 To check how many of a folder's extensions load, point the compatibility sweep at it:
 
 ```bash
-CS_COMPAT_DIR="$HOME/Library/Application Support/CloudStream/Extensions" ./gradlew :desktopApp:jvmTest --tests '*Compatibility*'
+CS_COMPAT_DIR="$HOME/Library/Application Support/CloudStream/Extensions" ./gradlew :appCore:jvmTest --tests '*Compatibility*'
 ```
 
 To debug, start with a debugger listening on `127.0.0.1:5005`, then attach from IntelliJ with a Remote JVM Debug configuration:
@@ -50,12 +50,14 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 `src/desktop-icons/icon.svg` is the Android app's cloud logo (`app/src/main/res/drawable/ic_launcher_foreground.xml`) on Apple's icon grid. To regenerate `icon-mac.icns` after changing it:
 
 ```bash
-CS_ICON_DIR=/tmp/cs-icon ./gradlew :desktopApp:jvmTest --tests '*AppIconRender*'
+CS_ICON_DIR=/tmp/cs-icon ./gradlew :appCore:jvmTest --tests '*AppIconRender*'
 ```
 
 Then copy the PNGs into a `CloudStream.iconset` folder with Apple's names (`icon_16x16.png`, `icon_16x16@2x.png` and so on up to `icon_512x512@2x.png`) and run `iconutil -c icns CloudStream.iconset -o desktopApp/src/desktop-icons/icon-mac.icns`.
 
 ## How it works
+
+The screens, extension management, storage and downloads are shared with the Android phone and TV app (see `androidApp/ANDROID.md`). They live in `appCore/src/jvmCommonMain`. Mac-only parts (VLC, the stream proxy, dex2jar and the Android stand-ins) are in `appCore/src/jvmMain`, and `desktopApp` only has the window and menu bar. Paths below are under `com/lagradost/` in those folders.
 
 | Area | Where | Notes |
 | --- | --- | --- |

@@ -1,0 +1,69 @@
+// CloudStream for Android phones, tablets and Android TV, with the same Compose screens as the Mac app.
+// Separate from :app (upstream's View-based Android app), with its own application id so both can be installed.
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.compose.compiler)
+}
+
+android {
+    namespace = "com.lagradost.cloudstream4.android"
+    compileSdk = libs.versions.compileSdk.get().toInt()
+
+    defaultConfig {
+        applicationId = "com.lagradost.cloudstream4.app"
+        minSdk = 26
+        targetSdk = libs.versions.targetSdk.get().toInt()
+        // CI passes its run number, so each build installs over the last one
+        versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 1
+        // CI passes the release tag, e.g. -PappVersion=1.2.0
+        versionName = (findProperty("appVersion") as String?) ?: "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            // Extensions link against the app's and the library's classes by name, so nothing may be renamed or removed
+            isMinifyEnabled = false
+            // Signed with the debug key so the APK sideloads without a keystore
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/INDEX.LIST",
+                "META-INF/*.md", "META-INF/versions/9/previous-compilation-data.bin",
+            )
+            pickFirsts += setOf("META-INF/*.kotlin_module", "**/module-info.class")
+        }
+    }
+
+    lint {
+        // Extensions are loaded from app storage on purpose
+        disable += setOf("DynamicCodeLoading")
+        // The shared screens live in :appCore, so check its code for Android API levels too
+        checkDependencies = true
+        abortOnError = false
+    }
+}
+
+dependencies {
+    implementation(project(":appCore"))
+    implementation(libs.bundles.compose)
+    implementation(libs.activity.compose)
+    implementation(libs.appcompat) // Extensions cast their load context to AppCompatActivity
+    implementation(libs.core.ktx)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:${libs.versions.kotlinxCoroutines.get()}")
+    implementation(libs.compose.material.icons.extended.get().toString()) {
+        exclude(group = "org.jetbrains.compose.material", module = "material")
+    }
+}

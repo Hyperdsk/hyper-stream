@@ -20,7 +20,8 @@ import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
-import com.lagradost.cloudstream4.desktop.ui.LocalWindowState
+import com.lagradost.cloudstream4.desktop.ui.LocalFullscreen
+import com.lagradost.cloudstream4.desktop.ui.WindowFullscreen
 import com.lagradost.cloudstream4.desktop.ui.TvTypography
 import com.lagradost.cloudstream4.desktop.ui.ModelStore
 import com.lagradost.cloudstream4.desktop.ui.Route
@@ -85,7 +86,7 @@ fun main() {
                 MaterialTheme(colorScheme = MaterialTheme.colorScheme, typography = TvTypography) {
                 CompositionLocalProvider(
                     LocalFocusOutlineDefault provides false,
-                    LocalWindowState provides windowState,
+                    LocalFullscreen provides remember(windowState) { WindowFullscreen(windowState) },
                 ) {
                     Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                         CloudStreamApp(nav, store, vlc)
