@@ -243,8 +243,20 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             }
         }
 
-        // Center status: loading links, buffering or errors
-        Box(Modifier.align(Alignment.Center)) {
+        // Center status: loading links, buffering or errors, on a dark panel so it reads over any picture
+        val showsStatus = player == null || ui.error != null || (ui.current == null && ui.loadingLinks) ||
+            (playback.buffering && ui.current != null)
+        Box(
+            Modifier.align(Alignment.Center).then(
+                if (showsStatus) Modifier
+                    .padding(24.dp)
+                    .widthIn(max = 520.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 28.dp, vertical = 22.dp)
+                else Modifier
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
             when {
                 player == null -> NoVlc(ui, model)
                 ui.error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
