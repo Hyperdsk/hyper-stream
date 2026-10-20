@@ -396,8 +396,8 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                 if (!state.isMovieLike && state.allEpisodes.isNotEmpty()) {
                     item {
                         // Season and dub tabs, Apple style: plain text, the chosen one bright
-                        Row(Modifier.fillMaxWidth().padding(start = appLayout.pageMargin, end = appLayout.gutter, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                        val tabs: @Composable (Modifier) -> Unit = { modifier ->
+                            LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
                                 if (state.dubOptions.size > 1) {
                                     items(state.dubOptions) { dub ->
                                         TabText(dub.name, dub == state.dub) { model.selectDub(dub) }
@@ -411,6 +411,8 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                                     item { Text("Episodes", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground) }
                                 }
                             }
+                        }
+                        val downloadButton: @Composable () -> Unit = {
                             val remaining = state.episodes.count { ep ->
                                 downloads.none { it.id == DownloadManager.idFor(route.apiName, ep.playable.data) }
                             }
@@ -419,6 +421,20 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                                 (if (state.seasons.size > 1) "Download season" else "Download all") +
                                     if (remaining in 1 until state.episodes.size) " ($remaining left)" else "",
                             ) { showSeasonDialog = true }
+                        }
+                        if (appLayout.compact) {
+                            // Phones: the tabs get the full width, the button goes under them
+                            Column(Modifier.fillMaxWidth().padding(start = appLayout.pageMargin, end = appLayout.gutter, top = 8.dp)) {
+                                tabs(Modifier.fillMaxWidth())
+                                Spacer(Modifier.height(12.dp))
+                                downloadButton()
+                            }
+                        } else {
+                            Row(Modifier.fillMaxWidth().padding(start = appLayout.pageMargin, end = appLayout.gutter, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                tabs(Modifier.weight(1f))
+                                Spacer(Modifier.width(24.dp))
+                                downloadButton()
+                            }
                         }
                     }
                     item {
@@ -677,7 +693,7 @@ private fun SubtleCapsule(icon: ImageVector, text: String, onClick: () -> Unit) 
     ) {
         Icon(icon, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(6.dp))
-        Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
+        Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
     }
 }
 
