@@ -2,6 +2,8 @@ package com.lagradost.cloudstream4.desktop.player
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -72,16 +74,39 @@ internal class ParallelStream(
     private var lastRefusal = 0L
 
     /** One per open player request. */
-    private class Reader {
+    private class Reader(val lowPriority: Boolean) {
         @Volatile var chunk = 0
+        /** Bytes this request has delivered, which sets how far ahead to fetch for it. */
+        @Volatile var delivered = 0L
+
+        /**
+         * Read-ahead grows as the request keeps reading, like TCP slow start. VLC probes the
+         * header and the index with short requests it then drops, so those get the bandwidth
+         * for themselves instead of sharing it with read-ahead that is thrown away.
+         */
+        val window: Int
+            get() = when {
+                lowPriority -> 1
+                delivered < 1L shl 20 -> 1
+                delivered < 8L shl 20 -> 4
+                else -> WINDOW
+            }
+    }
+
+    /** A 2 MB piece, filled as it downloads so the player gets bytes as soon as they arrive. */
+    private class Chunk(val length: Int) {
+        val bytes = ByteArray(length)
+        val filled = MutableStateFlow(0)
+        val result = CompletableDeferred<Unit>()
+        val ready get() = result.isCompleted && !result.isCancelled && filled.value == length
     }
     private val readers = CopyOnWriteArraySet<Reader>()
 
     private val lock = Any()
     /** Requested chunks, fetched or not. Access-ordered so the least recently used goes first. */
-    private val chunks = object : LinkedHashMap<Int, CompletableDeferred<ByteArray>>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CompletableDeferred<ByteArray>>) =
-            size > MAX_CACHED && eldest.value.isCompleted
+    private val chunks = object : LinkedHashMap<Int, Chunk>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Chunk>) =
+            size > MAX_CACHED && eldest.value.result.isCompleted
     }
     private val queued = LinkedHashSet<Int>()
     private val running = HashSet<Int>()
@@ -93,22 +118,22 @@ internal class ParallelStream(
     @Volatile
     private var readPosition = 0L
 
-    private fun request(index: Int): CompletableDeferred<ByteArray> {
-        val deferred = synchronized(lock) {
-            chunks[index] ?: CompletableDeferred<ByteArray>().also {
+    private fun request(index: Int): Chunk {
+        val chunk = synchronized(lock) {
+            chunks[index] ?: Chunk(minOf(CHUNK, total - index * CHUNK).toInt()).also {
                 chunks[index] = it
                 queued += index
             }
         }
         startWorkers()
-        return deferred
+        return chunk
     }
 
     private fun startWorkers() {
         while (true) {
             val current = workers.get()
             val (hasWork, blocked) = synchronized(lock) {
-                val positions = readers.map { it.chunk }
+                val positions = readers.filter { !it.lowPriority }.map { it.chunk }
                 queued.isNotEmpty() to queued.count { it in positions }
             }
             // A reader blocked on a chunk nobody has started gets a connection beyond the limit,
@@ -121,21 +146,22 @@ internal class ParallelStream(
     private suspend fun work() {
         try {
             while (true) {
-                val blocked = synchronized(lock) { readers.count { it.chunk in queued } }
+                val blocked = synchronized(lock) { readers.count { !it.lowPriority && it.chunk in queued } }
                 if (workers.get() > connectionLimit + blocked) return
                 val index = synchronized(lock) { pickNext() } ?: return
-                val deferred = synchronized(lock) { chunks[index] }
+                val chunk = synchronized(lock) { chunks[index] } ?: continue
                 try {
                     val started = System.nanoTime()
-                    val bytes = fetch(index)
-                    adapt(bytes.size * 1e9 / (System.nanoTime() - started).coerceAtLeast(1))
-                    deferred?.complete(bytes)
+                    val before = chunk.filled.value
+                    fetch(index, chunk)
+                    adapt((chunk.length - before) * 1e9 / (System.nanoTime() - started).coerceAtLeast(1))
+                    chunk.result.complete(Unit)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    deferred?.completeExceptionally(e)
+                    chunk.result.completeExceptionally(e)
                     // Forget it, so a reader asking again fetches it again
-                    synchronized(lock) { if (chunks[index] === deferred) chunks.remove(index) }
+                    synchronized(lock) { if (chunks[index] === chunk) chunks.remove(index) }
                 } finally {
                     synchronized(lock) {
                         running -= index
@@ -153,11 +179,13 @@ internal class ParallelStream(
     /** The next chunk to fetch, under [lock]. Drops chunks no reader is heading for. */
     private fun pickNext(): Int? {
         dropStale()
-        val positions = readers.map { it.chunk }
-        if (positions.isEmpty()) return null
-        // A chunk a reader is blocked on first, then the closest one ahead of any reader
-        val next = queued.firstOrNull { it in positions }
-            ?: queued.minByOrNull { q -> positions.filter { q >= it }.minOf { q - it } }
+        if (readers.isEmpty()) return null
+        val main = readers.filter { !it.lowPriority }.map { it.chunk }
+        val all = readers.map { it.chunk }
+        // A chunk a player request is blocked on first, then the closest one ahead of any reader
+        val next = queued.firstOrNull { it in main }
+            ?: queued.firstOrNull { it in all }
+            ?: queued.minByOrNull { q -> all.filter { q >= it }.minOfOrNull { q - it } ?: Int.MAX_VALUE }
             ?: return null
         queued -= next
         running += next
@@ -171,10 +199,12 @@ internal class ParallelStream(
                 ceiling++
                 lastRefusal = System.currentTimeMillis()
             }
+            val before = connectionLimit
             when {
                 bytesPerSecond >= FAST && connectionLimit < ceiling -> connectionLimit++
                 bytesPerSecond < SLOW && connectionLimit > 2 -> connectionLimit--
             }
+            if (before != connectionLimit) StreamLog.log("connections $before -> $connectionLimit (chunk at ${(bytesPerSecond / 1024).toInt()} KB/s)")
         }
         startWorkers()
     }
@@ -189,17 +219,20 @@ internal class ParallelStream(
         connectionLimit = maxOf(1, minOf(connectionLimit / 2, ceiling))
     }
 
-    private suspend fun fetch(index: Int): ByteArray {
-        val start = index * CHUNK
-        val length = minOf(CHUNK, total - start).toInt()
+    /** Fills [chunk], resuming after what it already holds. */
+    private suspend fun fetch(index: Int, chunk: Chunk) {
+        val chunkStart = index * CHUNK
+        val length = chunk.length
         var attempt = 0
         while (true) {
             try {
                 StreamProxy.meter.open()
                 try {
+                    val from = chunk.filled.value
+                    if (from >= length) return
                     val request = Request.Builder().url(url).apply {
                         headers.forEach { (k, v) -> header(k, v) }
-                        header("Range", "bytes=$start-${start + length - 1}")
+                        header("Range", "bytes=${chunkStart + from}-${chunkStart + length - 1}")
                     }.build()
                     val call = client.newCall(request)
                     synchronized(lock) {
@@ -210,17 +243,17 @@ internal class ParallelStream(
                         if (response.code == 200) throw NoRangeSupport()
                         if (response.code == 429 || response.code == 503) throw Throttled(response.code)
                         if (response.code != 206) throw IOException("HTTP ${response.code}")
-                        val bytes = ByteArray(length)
                         response.body.byteStream().use { input ->
-                            var read = 0
+                            var read = chunk.filled.value
                             while (read < length) {
-                                val n = input.read(bytes, read, length - read)
+                                val n = input.read(chunk.bytes, read, minOf(64 * 1024, length - read))
                                 if (n < 0) throw IOException("Connection closed early")
                                 read += n
+                                chunk.filled.value = read
                                 StreamProxy.meter.add(n)
                             }
                         }
-                        return bytes
+                        return
                     }
                 } finally {
                     StreamProxy.meter.close()
@@ -233,6 +266,7 @@ internal class ParallelStream(
             } catch (e: IOException) {
                 // Stopped on purpose: not the host's fault, don't slow down or retry
                 if (e is Abandoned || synchronized(lock) { index in abandoned }) throw Abandoned()
+                StreamLog.log("chunk $index attempt ${attempt + 1} failed: $e (connections ${connectionLimit})")
                 // Fewer connections: the host is refusing or failing under the load
                 backOff(refused = e is Throttled)
                 if (++attempt >= 4) throw e
@@ -247,8 +281,8 @@ internal class ParallelStream(
         var bytes = 0L
         while (index < chunkCount) {
             val chunk = chunks[index] ?: break
-            if (!chunk.isCompleted || chunk.isCancelled) break
-            bytes += minOf(CHUNK, total - index * CHUNK)
+            bytes += chunk.filled.value
+            if (!chunk.ready) break
             index++
         }
         (bytes - (readPosition - (readPosition / CHUNK) * CHUNK)).coerceAtLeast(0)
@@ -258,8 +292,8 @@ internal class ParallelStream(
      * Writes bytes [start]..[end] (inclusive) to [out], fetching ahead in parallel. Returns when done
      * or throws when the player hangs up (it does on every seek) or the host keeps failing.
      */
-    fun serve(start: Long, end: Long, out: OutputStream) {
-        val reader = Reader().apply { chunk = (start / CHUNK).toInt() }
+    fun serve(start: Long, end: Long, out: OutputStream, lowPriority: Boolean = false) {
+        val reader = Reader(lowPriority).apply { chunk = (start / CHUNK).toInt() }
         readers += reader
         try {
             var position = start
@@ -267,18 +301,32 @@ internal class ParallelStream(
                 readPosition = position
                 val index = (position / CHUNK).toInt()
                 reader.chunk = index
-                val needed = request(index)
-                // Keep the window ahead of the reader requested
-                for (k in index + 1 until minOf(index + WINDOW, chunkCount)) request(k)
-                val bytes = runBlocking {
-                    withTimeoutOrNull(120_000) { needed.await() }
-                } ?: throw IOException("The host sent nothing for two minutes")
+                val chunk = request(index)
+                // Read-ahead for this request, as far as its window allows
+                for (k in index + 1 until minOf(index + reader.window, chunkCount)) request(k)
                 val offset = (position - index * CHUNK).toInt()
-                val count = minOf(bytes.size - offset.toLong(), end - position + 1).toInt()
-                out.write(bytes, offset, count)
+                // Wait for at least one new byte, not the whole chunk
+                val available = runBlocking {
+                    withTimeoutOrNull(120_000) {
+                        while (chunk.filled.value <= offset) {
+                            if (chunk.result.isCompleted) {
+                                chunk.result.await() // throws when the fetch failed
+                                if (chunk.filled.value <= offset) throw IOException("Chunk ended early")
+                            }
+                            withTimeoutOrNull(250) { chunk.filled.first { it > offset } }
+                        }
+                        chunk.filled.value
+                    }
+                } ?: run {
+                    StreamLog.log("reader at chunk $index waited 2 minutes; ${chunk.filled.value} of ${chunk.length} bytes")
+                    throw IOException("The host sent nothing for two minutes")
+                }
+                val count = minOf((available - offset).toLong(), end - position + 1).toInt()
+                out.write(chunk.bytes, offset, count)
+                out.flush()
                 position += count
+                reader.delivered += count
             }
-            out.flush()
         } finally {
             readers -= reader
             // Drop read-ahead nobody will use now
@@ -291,11 +339,11 @@ internal class ParallelStream(
      * chunks outside every reader's window, freeing their connections for what is needed now.
      */
     private fun dropStale() {
-        val positions = readers.map { it.chunk }
-        fun wanted(q: Int) = positions.any { q >= it && q < it + WINDOW }
+        val windows = readers.map { it.chunk to it.window }
+        fun wanted(q: Int) = windows.any { (at, size) -> q >= at && q < at + size }
         queued.filter { !wanted(it) || chunks[it] == null }.forEach { q ->
             queued -= q
-            chunks[q]?.takeIf { !it.isCompleted }?.let { chunks.remove(q); it.cancel() }
+            chunks[q]?.takeIf { !it.result.isCompleted }?.let { chunks.remove(q); it.result.cancel() }
         }
         running.filter { !wanted(it) && it !in abandoned }.forEach { q ->
             abandoned += q

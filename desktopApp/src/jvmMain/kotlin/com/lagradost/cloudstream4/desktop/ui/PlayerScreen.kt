@@ -131,7 +131,12 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val preview = remember(player) { player?.createPreview() }
     DisposableEffect(preview) { onDispose { preview?.release() } }
     val currentUrl = player?.currentUrl
-    LaunchedEffect(preview, currentUrl) { preview?.open(currentUrl) }
+    // Open the preview player only once the video plays, and at low priority ("?preview"), so it
+    // never competes with the main player for bandwidth while that is starting up
+    val startedPlaying = playback.playing || playback.timeMs > 0
+    LaunchedEffect(preview, currentUrl, startedPlaying) {
+        preview?.open(currentUrl?.takeIf { startedPlaying }?.let { if (it.startsWith("http://127.0.0.1")) "$it?preview" else it })
+    }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }

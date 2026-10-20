@@ -220,7 +220,9 @@ object StreamProxy {
 
         val range = exchange.requestHeaders.getFirst("Range")
         if (connections > 1 && exchange.requestMethod == "GET") {
-            if (session in parallelSessions && target == original && serveParallel(exchange, session, target, headers, range)) return
+            // The seek-bar preview player asks with "?preview": it must not slow the main player
+            val lowPriority = exchange.requestURI.rawQuery == "preview"
+            if (session in parallelSessions && target == original && serveParallel(exchange, session, target, headers, range, lowPriority)) return
             if (range == null && serveSegment(exchange, session, target, headers)) return
         }
 
@@ -290,7 +292,14 @@ object StreamProxy {
     }
 
     /** Serves a video file through [ParallelStream]. False when the host can't do ranges. */
-    private fun serveParallel(exchange: HttpExchange, session: String, target: String, headers: Map<String, String>, range: String?): Boolean {
+    private fun serveParallel(
+        exchange: HttpExchange,
+        session: String,
+        target: String,
+        headers: Map<String, String>,
+        range: String?,
+        lowPriority: Boolean = false,
+    ): Boolean {
         val stream = streams.computeIfAbsent("$session|$target") {
             runCatching {
                 val probe = Request.Builder().url(target).apply {
@@ -300,13 +309,21 @@ object StreamProxy {
                 streamClient.newCall(probe).execute().use { r ->
                     val total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull()
                     val type = r.header("Content-Type")
+                    StreamLog.log(
+                        "probe ${StreamLog.host(target)} -> HTTP ${r.code} ${r.protocol} type=$type total=$total " +
+                            "range=${r.header("Content-Range")} final=${StreamLog.host(r.request.url.toString())}"
+                    )
                     // Small files and pages aren't worth splitting
                     if (r.code == 206 && total != null && total >= 4L shl 20 && type?.startsWith("text/") != true) {
                         ParallelStream(streamClient, target, headers, total, type, connections)
                     } else NoStream
                 }
             }.getOrDefault(NoStream)
-        } as? ParallelStream ?: return false
+        } as? ParallelStream ?: run {
+            StreamLog.log("request ${range ?: "whole file"} -> one connection (no ranges)")
+            return false
+        }
+        StreamLog.log("request ${range ?: "whole file"}${if (lowPriority) " (preview)" else ""}")
 
         val total = stream.total
         val (start, end) = parseRange(range, total) ?: run {
@@ -314,16 +331,25 @@ object StreamProxy {
             exchange.sendResponseHeaders(416, -1)
             return true
         }
-        lastStream = stream
-        lastSegment = null
+        if (!lowPriority) {
+            lastStream = stream
+            lastSegment = null
+        }
         stream.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
         exchange.responseHeaders.set("Accept-Ranges", "bytes")
         if (range != null) exchange.responseHeaders.set("Content-Range", "bytes $start-$end/$total")
         exchange.sendResponseHeaders(if (range != null) 206 else 200, end - start + 1)
+        val t = System.nanoTime()
         try {
-            exchange.responseBody.use { stream.serve(start, end, it) }
-        } catch (_: IOException) {
-            // The player hung up, it does that on every seek
+            exchange.responseBody.use { stream.serve(start, end, it, lowPriority) }
+        } catch (e: IOException) {
+            // The player hangs up on every seek; anything else is worth knowing
+            if (e.message?.contains("Broken pipe") != true && e.message?.contains("closed") != true) {
+                StreamLog.log("request $start- ended after ${(System.nanoTime() - t) / 1_000_000} ms: $e")
+            }
+        } catch (e: Throwable) {
+            StreamLog.log("request $start- failed: $e")
+            throw e
         }
         return true
     }
