@@ -2,6 +2,7 @@ package com.lagradost.cloudstream4.desktop.ui
 
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -11,7 +12,9 @@ import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.Snapshots
 import com.lagradost.cloudstream4.desktop.download.DownloadManager
+import com.lagradost.cloudstream4.desktop.player.SkipStamps
 import com.lagradost.cloudstream4.desktop.player.StreamProxy
+import com.lagradost.cloudstream4.desktop.player.VideoSkipStamp
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.PersistentSet
@@ -40,6 +43,8 @@ data class PlayerUiState(
     val error: String? = null,
     /** Set when playing a downloaded file instead of streaming. */
     val offlineFile: String? = null,
+    /** Intro, recap and credit sections of this episode, from the online skip databases. */
+    val skips: PersistentList<VideoSkipStamp> = persistentListOf(),
 )
 
 fun ExtractorLink.label(): String =
@@ -60,10 +65,30 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
     val hasNext: Boolean get() = current.index < current.episodes.lastIndex
     val hasPrevious: Boolean get() = current.index > 0
 
+    /** The show, for the ids skip databases need. From the details page, or loaded on demand. */
+    private var loadResponse: LoadResponse? = request.loadResponse
+    private val autoSkipped = mutableSetOf<VideoSkipStamp>()
+
     init {
         loadEpisode(request.index, request.startMs)
         loadEpisodeList()
         player?.let { p ->
+            // Once the video's length is known, look up its skip times
+            scope.launch {
+                p.state.distinctUntilChangedBy { it.lengthMs > 0 }.collect { s ->
+                    if (s.lengthMs > 0) findSkips(s.lengthMs)
+                }
+            }
+            // Jump over intros and recaps when auto-skip is on, once per section
+            scope.launch {
+                p.state.distinctUntilChangedBy { it.timeMs / 500 }.collect { s ->
+                    if (!SettingsStore.state.value.autoSkipIntros || !s.playing) return@collect
+                    val stamp = current.skips.firstOrNull { it.stamp.type.isIntro && s.timeMs in it && it !in autoSkipped }
+                        ?: return@collect
+                    autoSkipped += stamp
+                    p.seekTo(stamp.stamp.endMs)
+                }
+            }
             // Save progress every few seconds while playing
             scope.launch {
                 while (true) {
@@ -93,6 +118,7 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         player?.stop()
         StreamProxy.clear()
         pendingStartMs = startMs
+        autoSkipped.clear()
         update { PlayerUiState(index, episodes) }
 
         // Play the downloaded file when there is one, like the Android app
@@ -160,6 +186,7 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         val api = providerByName(request.apiName) ?: return
         scope.launch {
             val response = providerCall { api.load(request.parentUrl) }.getOrNull() ?: return@launch
+            if (loadResponse == null) loadResponse = response
             val raw = when (response) {
                 is TvSeriesLoadResponse -> response.episodes
                 // The dub list that contains this episode
@@ -230,6 +257,34 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         } else if (!current.loadingLinks) {
             update { copy(error = "None of the ${links.size} sources could be played.") }
         }
+    }
+
+    private fun findSkips(durationMs: Long) {
+        if (!SettingsStore.state.value.skipButtons) return
+        val index = current.index
+        val episode = current.episodes[index]
+        scope.launch {
+            val show = loadResponse ?: providerByName(request.apiName)
+                ?.let { api -> providerCall { api.load(request.parentUrl) }.getOrNull() }
+                ?.also { loadResponse = it }
+                ?: return@launch
+            val skips = SkipStamps.find(show, episode, durationMs, hasNextEpisode = index < current.episodes.lastIndex)
+            // Ignore results that arrive after the user moved to another episode
+            if (current.index == index) update { copy(skips = skips.toPersistentList()) }
+        }
+    }
+
+    /** The section the playhead is in, if any. */
+    fun activeSkip(positionMs: Long): VideoSkipStamp? = current.skips.firstOrNull { positionMs in it }
+
+    /** Skips a section: to its end, or to the next episode when it runs to the end of the video. */
+    fun skip(stamp: VideoSkipStamp) {
+        if (stamp.skipToNextEpisode && hasNext) next() else player?.seekTo(stamp.stamp.endMs)
+    }
+
+    /** The Android player's "Skip OP" button: jump 85 seconds, the length of a typical anime opening. */
+    fun skipOpening() {
+        player?.seekBy(85_000)
     }
 
     fun next() {

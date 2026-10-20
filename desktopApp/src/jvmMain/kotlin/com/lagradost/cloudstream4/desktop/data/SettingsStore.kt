@@ -16,6 +16,10 @@ data class AppSettings(
     /** Highest quality picked automatically, in pixels of height. Null means best available. */
     @JsonProperty("preferredQuality") val preferredQuality: Int? = null,
     @JsonProperty("autoPlayNext") val autoPlayNext: Boolean = true,
+    /** Look up intro, recap and credit times online and show skip buttons, like the Android app. */
+    @JsonProperty("skipButtons") val skipButtons: Boolean = true,
+    /** Jump over intros and recaps without pressing the button. */
+    @JsonProperty("autoSkipIntros") val autoSkipIntros: Boolean = false,
     /** Start with the first source found instead of waiting for all of them. The rest load in the background. */
     @JsonProperty("playFirstSource") val playFirstSource: Boolean = false,
     @JsonProperty("seekSeconds") val seekSeconds: Int = 10,

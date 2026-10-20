@@ -26,6 +26,8 @@ data class PlayRequest(
     val episodes: List<PlayableEpisode>,
     val index: Int,
     val startMs: Long = 0,
+    /** The show as loaded on its page, for its ids (skip times). Loaded later when missing. */
+    val loadResponse: com.lagradost.cloudstream3.LoadResponse? = null,
 )
 
 sealed interface Route {

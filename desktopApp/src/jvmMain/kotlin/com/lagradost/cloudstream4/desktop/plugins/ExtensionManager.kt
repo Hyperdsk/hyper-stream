@@ -79,6 +79,8 @@ object ExtensionManager {
         APIHolder.allProviders.filter { it.sourcePlugin != null }.sortedBy { it.name.lowercase() }
 
     fun start() {
+        // Before any extension loads, so ids they add are stored under the right keys
+        com.lagradost.cloudstream4.desktop.LibrarySetup.init()
         _state.update {
             it.copy(
                 repositories = reposFile.read().map { r -> RepositoryState(r) }.toPersistentList(),

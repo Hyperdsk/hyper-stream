@@ -97,6 +97,16 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
         Toggle("Play next episode automatically", settings.autoPlayNext) { v -> SettingsStore.update { it.copy(autoPlayNext = v) } }
         Toggle("Start playing as soon as a source is found", settings.playFirstSource) { v -> SettingsStore.update { it.copy(playFirstSource = v) } }
+        Toggle("Show skip intro buttons", settings.skipButtons) { v -> SettingsStore.update { it.copy(skipButtons = v) } }
+        Toggle("Skip intros and recaps automatically", settings.autoSkipIntros && settings.skipButtons) { v ->
+            SettingsStore.update { it.copy(autoSkipIntros = v, skipButtons = it.skipButtons || v) }
+        }
+        Text(
+            "Intro, recap and credit times come from AniSkip, TheIntroDB and IntroDB, the same sources as the Android app. " +
+                "Not every episode has them. Press S in the player to skip.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(
             "Other sources keep loading in the background and appear under Sources. When off, the player waits for all sources, or up to 8 seconds.",
             style = MaterialTheme.typography.bodySmall,

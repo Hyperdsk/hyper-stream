@@ -234,6 +234,7 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
             episodes = list,
             index = index,
             startMs = startMs,
+            loadResponse = response,
         )
     }
 

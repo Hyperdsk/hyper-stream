@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.material3.Surface
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -186,6 +187,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     Key.F -> toggleFullscreen()
                     Key.M -> player.toggleMute()
                     Key.N -> model.next()
+                    Key.S -> model.activeSkip(playback.timeMs)?.let(model::skip) ?: return@onPreviewKeyEvent false
                     // Escape closes the panel first, then leaves fullscreen, then the player
                     Key.Escape -> when {
                         openMenu != null -> openMenu = null
@@ -312,6 +314,28 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             }
         }
 
+        // "Skip Intro" button while the playhead is inside a section from the skip databases.
+        // Like Android it shows for 6 seconds when the section starts, and whenever the controls show.
+        val activeSkip = model.activeSkip(playback.timeMs)
+        var skipFresh by remember { mutableStateOf(false) }
+        LaunchedEffect(activeSkip) {
+            skipFresh = activeSkip != null
+            if (activeSkip != null) {
+                delay(6_000)
+                skipFresh = false
+            }
+        }
+        val autoSkipping = activeSkip != null && settings.autoSkipIntros && activeSkip.stamp.type.isIntro
+        AnimatedVisibility(
+            visible = activeSkip != null && !autoSkipping && (skipFresh || controlsVisible) && openMenu == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 136.dp),
+        ) {
+            val stamp = activeSkip ?: return@AnimatedVisibility
+            SkipButton(stamp.buttonText) { model.skip(stamp) }
+        }
+
         // Sources, subtitles and audio, in a side panel instead of long menus
         openMenu?.takeIf { it.startsWith("panel:") }?.let { id ->
             val tab = PanelTab.entries.firstOrNull { it.name == id.removePrefix("panel:") } ?: PanelTab.Sources
@@ -369,6 +393,10 @@ private fun BottomControls(
             ControlButton(if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play or pause", size = 40) { player.togglePause() }
             ControlButton(Icons.Default.Forward10, "Forward ${seekMs / 1000}s") { player.seekBy(seekMs) }
             ControlButton(Icons.Default.SkipNext, "Next episode", enabled = model.hasNext) { model.next() }
+            if (ui.episodes.size > 1) {
+                // Same as the Android player's "Skip OP" button
+                ControlButton(Icons.Default.FastForward, "Skip opening (85 seconds)") { model.skipOpening() }
+            }
 
             Spacer(Modifier.width(12.dp))
             ControlButton(if (playback.muted || playback.volume == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp, "Mute") {
@@ -568,6 +596,23 @@ internal fun SeekBar(
                     modifier = Modifier.background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SkipButton(text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White,
+        contentColor = Color.Black,
+        shadowElevation = 6.dp,
+    ) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(text, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Default.SkipNext, null, modifier = Modifier.size(20.dp))
         }
     }
 }
