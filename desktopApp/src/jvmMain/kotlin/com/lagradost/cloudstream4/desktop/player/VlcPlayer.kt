@@ -169,7 +169,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
         frame = null
         _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = true) }
         val options = buildList {
-            add(":network-caching=1500")
+            add(":network-caching=$NETWORK_CACHING_MS")
             if (startMs > 0) add(":start-time=${startMs / 1000.0}")
         }
         player.media().play(url, *options.toTypedArray())
@@ -219,6 +219,12 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
         refreshTracks()
     }
 
+    /** Adds a subtitle file (a local file uri) and shows it. */
+    fun addSubtitle(uri: String) {
+        VlcLog.log("add subtitle file")
+        player.media().addSlave(MediaSlaveType.SUBTITLE, uri, true)
+    }
+
     fun setSubtitleTrack(id: Int) {
         player.subpictures().setTrack(id)
         refreshTracks()
@@ -245,6 +251,9 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
     }
 
     companion object {
+        /** How much video VLC buffers before it starts, in milliseconds. */
+        const val NETWORK_CACHING_MS = 1500L
+
         /** VLC's own log (warnings and errors) in logs/vlc.log, to see why a stream won't play. */
         private var nativeLog: uk.co.caprica.vlcj.log.NativeLog? = null
 

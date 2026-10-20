@@ -1,5 +1,8 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream4.desktop.player.SubtitleFiles
+import kotlinx.collections.immutable.persistentMapOf
+import kotlinx.collections.immutable.PersistentMap
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.LoadResponse
@@ -29,6 +32,12 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import java.io.File
 
+sealed interface SubtitleLoad {
+    data object Loading : SubtitleLoad
+    data object Loaded : SubtitleLoad
+    data class Failed(val reason: String) : SubtitleLoad
+}
+
 /** Marks [PlayerUiState.current] while a downloaded file plays. */
 const val OFFLINE = -1
 
@@ -44,6 +53,8 @@ data class PlayerUiState(
     val error: String? = null,
     /** Set when playing a downloaded file instead of streaming. */
     val offlineFile: String? = null,
+    /** Provider subtitles the user picked, by url. */
+    val loadedSubtitles: PersistentMap<String, SubtitleLoad> = persistentMapOf(),
     /** Intro, recap and credit sections of this episode, from the online skip databases. */
     val skips: PersistentList<VideoSkipStamp> = persistentListOf(),
 )
@@ -236,13 +247,27 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         update { copy(current = index, error = null) }
         // Single video files stream over several connections, playlists stream segment by segment
         val url = StreamProxy.proxiedUrl(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO)
-        val subs = current.subtitles.map { StreamProxy.proxiedUrl(it.url, null, it.headers ?: emptyMap()) }
-        p.open(url, start, subs)
+        // No provider subtitles here: VLC would fetch every one before starting the video.
+        // They load one at a time when picked, see loadSubtitle.
+        p.open(url, start)
+        update { copy(loadedSubtitles = persistentMapOf()) }
     }
 
-    /** Adds subtitles that arrived after playback began. */
-    fun reloadSubtitlesIntoPlayer() {
-        current.current?.let { playLink(it) }
+    /** Downloads [sub] and shows it in the player. */
+    fun loadSubtitle(sub: SubtitleFile) {
+        val p = player ?: return
+        if (current.loadedSubtitles[sub.url] == SubtitleLoad.Loading) return
+        update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loading)) }
+        scope.launch {
+            runCatching { SubtitleFiles.fetch(sub) }
+                .onSuccess { file ->
+                    p.addSubtitle(file.toPath().toUri().toString())
+                    update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loaded)) }
+                }
+                .onFailure { e ->
+                    update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Failed(e.message ?: "Couldn't load it"))) }
+                }
+        }
     }
 
     private fun onSourceFailed() {

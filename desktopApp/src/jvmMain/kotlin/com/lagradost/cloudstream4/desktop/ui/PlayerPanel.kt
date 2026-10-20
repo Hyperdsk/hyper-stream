@@ -345,16 +345,28 @@ private fun SubtitlesTab(ui: PlayerUiState, playback: PlaybackState, model: Play
         if (ui.subtitles.isNotEmpty()) {
             item {
                 Text(
-                    "${ui.subtitles.size} subtitle files from the provider: " + ui.subtitles.joinToString { it.lang }.take(200),
+                    "From the provider, loaded when you pick one",
                     color = dim,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 12.dp, start = 4.dp, end = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 16.dp, start = 4.dp, bottom = 4.dp),
                 )
-                if (tracks.count { it.id >= 0 } == 0) {
-                    OutlinedButton(onClick = { model.reloadSubtitlesIntoPlayer() }, modifier = Modifier.padding(top = 8.dp)) {
-                        Text("Load them into the player", color = Color.White)
-                    }
+            }
+            // Same language several times: number them
+            val counts = mutableMapOf<String, Int>()
+            val labelled = ui.subtitles.sortedBy { it.lang.lowercase() }.map { sub ->
+                val n = (counts[sub.lang] ?: 0) + 1
+                counts[sub.lang] = n
+                sub to if (n > 1) "${sub.lang} $n" else sub.lang
+            }
+            items(labelled, key = { "provider-${it.first.url}" }) { (sub, label) ->
+                val state = ui.loadedSubtitles[sub.url]
+                val status = when (state) {
+                    SubtitleLoad.Loading -> " · loading…"
+                    SubtitleLoad.Loaded -> " · added"
+                    is SubtitleLoad.Failed -> " · ${state.reason}"
+                    null -> ""
                 }
+                TrackRow(label + status, false) { if (state != SubtitleLoad.Loaded) model.loadSubtitle(sub) }
             }
         } else if (tracks.count { it.id >= 0 } == 0) {
             item { Text("This source has no subtitles.", color = dim, modifier = Modifier.padding(8.dp)) }

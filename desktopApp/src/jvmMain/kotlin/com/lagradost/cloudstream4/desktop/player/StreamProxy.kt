@@ -54,6 +54,8 @@ data class StreamStats(
     /** Video already fetched and waiting in memory ahead of the player. */
     val aheadBytes: Long = 0,
     val totalBytes: Long = 0,
+    /** Size of the video file being streamed, when known (not for HLS). */
+    val streamSize: Long = 0,
 )
 
 object StreamProxy {
@@ -83,7 +85,7 @@ object StreamProxy {
                 speed = if (speed == 0.0) instant else speed * 0.6 + instant * 0.4
                 lastBytes = bytes
                 lastTime = now
-                _stats.value = StreamStats(speed.toLong(), meter.connections.get().coerceAtLeast(0), aheadBytes(), bytes)
+                _stats.value = StreamStats(speed.toLong(), meter.connections.get().coerceAtLeast(0), aheadBytes(), bytes, lastStream?.total ?: 0)
             }
         }
         _stats.asStateFlow()

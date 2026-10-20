@@ -122,6 +122,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val stats by StreamProxy.stats.collectAsState()
     // Seconds spent buffering at a crawl, for the "slow source" hint
     var slowSeconds by remember { mutableIntStateOf(0) }
+    // Seconds spent buffering at all
+    var slowSecondsAny by remember { mutableIntStateOf(0) }
     val window = LocalWindowState.current
     val focus = remember { FocusRequester() }
     val holdScope = rememberCoroutineScope()
@@ -278,8 +280,10 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                 playback.buffering && ui.current != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     LaunchedEffect(ui.current) {
                         slowSeconds = 0
+                        slowSecondsAny = 0
                         while (true) {
                             delay(1_000)
+                            slowSecondsAny++
                             val crawling = ui.offlineFile == null && StreamProxy.stats.value.bytesPerSecond < SLOW_SOURCE_BYTES
                             slowSeconds = if (crawling) slowSeconds + 1 else 0
                         }
@@ -296,6 +300,23 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                             Spacer(Modifier.height(4.dp))
                             Text(it, color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    // How much the player needs before it can start, from the file's bitrate and VLC's buffer.
+                    // When that is already in memory and it still waits, the hold-up isn't the network.
+                    val needed = if (ui.offlineFile == null && playback.lengthMs > 0 && stats.streamSize > 0) {
+                        stats.streamSize * VlcPlayer.NETWORK_CACHING_MS / playback.lengthMs
+                    } else null
+                    if (needed != null) {
+                        val ready = stats.aheadBytes >= needed
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (ready && slowSecondsAny >= 5) "Has the ${formatBytes(needed)} it needs to start, the player is still preparing it"
+                            else "Needs about ${formatBytes(needed)} to start" +
+                                if (stats.aheadBytes > 0) ", ${formatBytes(minOf(stats.aheadBytes, needed))} ready" else "",
+                            color = Color.White.copy(alpha = 0.75f),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                        )
                     }
                     // Stuck at a crawl: say so, and offer the other sources
                     if (slowSeconds >= 10 && ui.links.size > 1) {
