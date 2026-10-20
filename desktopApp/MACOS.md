@@ -70,7 +70,7 @@ The screens, extension management, storage and downloads are shared with the And
 | Player | `desktop/player/VlcPlayer.kt` | vlcj renders frames into Compose. Tracks, subtitles, speed, resume. |
 | Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
 | Screens | `desktop/ui/` | Home, Search, Details, Player, Library, Extensions, Settings. One immutable state per screen, as `COMPOSE.md` asks. |
-| Downloads | `desktop/download/DownloadManager.kt` | Direct files resume with Range requests. HLS uses the library's `M3u8Helper2` like Android, including AES-128. Saved to `~/Movies/CloudStream` by default, with subtitles alongside. Downloaded episodes play offline. |
+| Downloads | `desktop/download/DownloadManager.kt`, `HlsPackage.kt` | Direct files resume with Range requests. HLS uses the library's `M3u8Helper2` like Android, including AES-128. Streams with audio in a separate playlist save both tracks plus local playlists. Saved to `~/Movies/CloudStream` by default, with subtitles alongside. Downloaded episodes play offline. |
 | Parallel streaming | `desktop/player/ParallelStream.kt`, `StreamProxy.kt` | Direct video files are fetched ahead in 2 MB chunks over up to 16 connections, and HLS segments are prefetched in parallel. Set under Player, Streaming connections. |
 | Skip intros | `desktop/player/SkipStamps.kt` | Same free sources as Android: AniSkip, TheIntroDB, IntroDB. Skip button, optional auto-skip, S key, and the fixed 85-second "Skip opening" button. |
 | Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
@@ -78,7 +78,7 @@ The screens, extension management, storage and downloads are shared with the And
 ## Not done yet
 
 - Chromecast, account sync (AniList, MAL, Simkl) and subtitle search.
-- DASH streams and HLS streams with separate audio tracks can't be downloaded, as on Android.
+- DASH streams can't be downloaded, as on Android. HLS streams with separate audio tracks download as a folder of local playlists (`Title.hls/master.m3u8`), which VLC and ExoPlayer play offline.
 - Extensions that need a WebView (Cloudflare checks) fail, because `WebViewResolver` has no JVM implementation upstream.
 - Extension settings screens are Android UI and stay off. The Extensions screen says so for each affected extension.
 - Torrent links are skipped.

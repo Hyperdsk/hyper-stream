@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.M3u8Helper2
+import com.lagradost.cloudstream3.utils.HlsPlaylistParser
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.jsonFile
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
@@ -106,6 +107,14 @@ data class DownloadEntry(
 
     @get:JsonIgnore
     val file: File? get() = filePath?.let(::File)
+
+    /** Saved as a folder of playlists and tracks (HLS with separate audio), not one file. */
+    @get:JsonIgnore
+    val isPackage: Boolean get() = file?.let(HlsPackage::isPackage) == true
+
+    /** Space used on disk, the whole folder for a package. */
+    @get:JsonIgnore
+    val sizeOnDisk: Long get() = file?.let { f -> if (isPackage) f.parentFile?.listFiles()?.sumOf { it.length() } ?: 0L else f.length() } ?: 0L
 }
 
 /** What the details screen hands over to start a download. */
@@ -252,7 +261,7 @@ object DownloadManager {
     fun delete(id: String) {
         jobs.remove(id)?.cancel()
         val entry = _entries.value.firstOrNull { it.id == id } ?: return
-        entry.file?.delete()
+        if (entry.isPackage) entry.file?.parentFile?.deleteRecursively() else entry.file?.delete()
         entry.file?.let { File(it.path + ".part").delete() }
         entry.subtitles.forEach { File(it).delete() }
         // Remove the title's folder once it is empty
@@ -532,7 +541,14 @@ object DownloadManager {
     private suspend fun downloadHls(id: String, link: SavedLink) {
         val entry = current(id) ?: return
         val stream = M3u8Helper.M3u8Stream(link.url, link.quality, headersFor(link))
-        val items = M3u8Helper2.hslLazy(stream, selectBest = true, requireAudio = true)
+        val items = try {
+            M3u8Helper2.hslLazy(stream, selectBest = true, requireAudio = true)
+        } catch (e: IllegalStateException) {
+            // Audio in its own playlist: download both tracks and save them as a local HLS package
+            if (e.message?.contains("no video with audio") != true) throw e
+            downloadHlsSeparateAudio(id, link)
+            return
+        }
         val base = targetBase(entry)
         // Extension is decided at the end from the data, "ts" or "mp4"
         val part = File(base.path + ".hls.part")
@@ -569,6 +585,96 @@ object DownloadManager {
         val firstByte = part.inputStream().use { it.read() }
         val target = File(base.path + if (firstByte == 0x47) ".ts" else ".mp4")
         finish(id, part, target)
+    }
+
+    /**
+     * For streams that keep their audio in a separate playlist: the best video variant and its
+     * default audio are downloaded side by side into a folder that plays offline as HLS.
+     * Subtitles listed in the playlist are saved next to it too.
+     */
+    private suspend fun downloadHlsSeparateAudio(id: String, link: SavedLink) {
+        val entry = current(id) ?: return
+        val headers = headersFor(link)
+        val text = app.get(link.url, headers = headers, verify = false).text
+        val master = HlsPlaylistParser.parse(link.url, text) ?: throw IOException("The stream's playlist couldn't be read.")
+        val variant = master.variants.filter { !it.isTrickPlay() }
+            .maxByOrNull { (it.format.width * it.format.height).toLong() * 1000L + it.format.averageBitrate.toLong() }
+            ?: throw IOException("The stream has no video.")
+        val group = master.audios.filter { it.groupId == variant.audioGroupId && it.url != null }
+        val audio = group.firstOrNull { it.format.selectionFlags and 1 != 0 } ?: group.firstOrNull()
+            ?: throw IOException("The stream's audio couldn't be found.")
+
+        val video = M3u8Helper2.hslLazy(M3u8Helper.M3u8Stream(variant.url.toString(), variant.format.height.takeIf { it > 0 }, headers), selectBest = true, requireAudio = false)
+        val sound = M3u8Helper2.hslLazy(M3u8Helper.M3u8Stream(audio.url.toString(), null, headers), selectBest = true, requireAudio = false)
+
+        val base = targetBase(entry)
+        val dir = HlsPackage.folderFor(base)
+        val total = video.size + sound.size
+        // A different source or segment count means the old folder belongs to another stream
+        if (!(entry.link?.url == link.url && entry.segmentsTotal == total)) dir.deleteRecursively()
+        dir.mkdirs()
+        val videoTrack = HlsTrack(dir, "video").apply { load() }
+        val audioTrack = HlsTrack(dir, "audio").apply { load() }
+        set(id) { it.copy(filePath = File(dir, HlsPackage.MASTER).path, segmentsTotal = total) }
+
+        val meter = SpeedMeter(videoTrack.bytes + audioTrack.bytes)
+        suspend fun fetch(items: M3u8Helper2.LazyHlsDownloadData, track: HlsTrack, label: String) {
+            while (track.segments.size < items.size) {
+                coroutineScope { ensureActive() }
+                val start = track.segments.size
+                val window = (start until minOf(start + PARALLEL_SEGMENTS, items.size)).toList()
+                val chunks = coroutineScope { window.map { i -> async { items.resolveLinkSafe(i) } }.awaitAll() }
+                chunks.forEachIndexed { k, chunk ->
+                    val i = window[k]
+                    if (chunk == null) throw IOException("$label segment ${i + 1} of ${items.size} failed to download.")
+                    track.append(chunk, items.allTsLinks[i].time ?: 10.0)
+                }
+                val done = videoTrack.segments.size + audioTrack.segments.size
+                val bytes = videoTrack.bytes + audioTrack.bytes
+                val speed = meter.tick(bytes)
+                set(id) { it.copy(segmentsDone = done, bytesDone = bytes, speed = speed ?: it.speed) }
+                if (speed != null) save()
+            }
+        }
+        fetch(video, videoTrack, "Video")
+        fetch(sound, audioTrack, "Audio")
+
+        HlsPackage.writeMaster(
+            dir, videoTrack, audioTrack,
+            audioName = audio.name.ifBlank { audio.format.label ?: "Audio" },
+            audioLanguage = audio.format.language,
+            width = variant.format.width.takeIf { it > 0 },
+            height = variant.format.height.takeIf { it > 0 },
+        )
+        saveHlsSubtitles(id, master, variant.subtitleGroupId, headers, base)
+        set(id) { it.copy(filePath = File(dir, HlsPackage.MASTER).path) }
+    }
+
+    /** Subtitles the playlist lists as a single file each (usually WebVTT), saved like provider subtitles. */
+    private suspend fun saveHlsSubtitles(
+        id: String,
+        master: HlsPlaylistParser.HlsMultivariantPlaylist,
+        groupId: String?,
+        headers: Map<String, String>,
+        base: File,
+    ) {
+        val renditions = master.subtitles.filter { it.url != null && (groupId == null || it.groupId == groupId) }.take(12)
+        val saved = renditions.mapNotNull { r ->
+            runCatching {
+                val playlistUrl = r.url.toString()
+                val playlist = app.get(playlistUrl, headers = headers, verify = false).text
+                val files = playlist.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+                // Segmented subtitles would need joining; most sites list one file
+                val only = files.singleOrNull() ?: return@runCatching null
+                val url = java.net.URI(playlistUrl).resolve(only).toString()
+                val lang = safeName(r.name.ifBlank { r.format.language ?: "Subtitles" }).take(30)
+                val ext = extensionFrom(url)?.takeIf { it in setOf("srt", "vtt", "ass", "ssa") } ?: "vtt"
+                val file = File("${base.path}.$lang.$ext")
+                file.writeBytes(app.get(url, headers = headers, verify = false).body.bytes())
+                file.path
+            }.getOrNull()
+        }
+        if (saved.isNotEmpty()) set(id) { it.copy(subtitles = (it.subtitles + saved).distinct()) }
     }
 
     private fun finish(id: String, part: File, target: File) {

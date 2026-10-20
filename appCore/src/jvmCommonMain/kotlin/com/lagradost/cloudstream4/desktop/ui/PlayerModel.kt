@@ -168,7 +168,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             val file = downloaded.file!!
             update { copy(loadingLinks = false, current = OFFLINE, offlineFile = file.path) }
             // file:/// form: VLC can't open the file:/ urls that File.toURI() makes
-            player.open(StreamSource(file.toPath().toUri().toString()), startMs, downloaded.subtitles.map { File(it).toPath().toUri().toString() })
+            player.open(StreamSource(file.toPath().toUri().toString(), mimeType = if (file.extension == "m3u8") StreamSource.HLS else null), startMs, downloaded.subtitles.map { File(it).toPath().toUri().toString() })
             return
         }
 

@@ -69,7 +69,7 @@ fun DownloadsScreen() {
         .values
         .sortedByDescending { group -> group.maxOf { it.addedAt } }
         .map { group -> group.sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 })) }
-    val used = entries.filter { it.status == DownloadStatus.Completed }.sumOf { it.file?.length() ?: 0L }
+    val used = entries.filter { it.status == DownloadStatus.Completed }.sumOf { it.sizeOnDisk }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -230,8 +230,8 @@ private fun statusText(entry: DownloadEntry): String {
         DownloadStatus.Paused -> listOfNotNull("Paused", percent, size).joinToString(" · ")
         DownloadStatus.Failed -> entry.error ?: "Failed"
         DownloadStatus.Completed -> listOfNotNull(
-            entry.file?.length()?.let(::formatBytes),
-            entry.file?.extension?.uppercase(),
+            entry.sizeOnDisk.takeIf { it > 0 }?.let(::formatBytes),
+            if (entry.isPackage) "HLS" else entry.file?.extension?.uppercase(),
             entry.subtitles.size.takeIf { it > 0 }?.let { "$it subtitles" },
             if (entry.file?.exists() == false) "file missing" else null,
         ).joinToString(" · ")
