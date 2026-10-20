@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -128,15 +130,52 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Label("Preferred quality")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(null to "Best", 2160 to "4K", 1080 to "1080p", 720 to "720p", 480 to "480p", 360 to "360p").forEach { (q, label) ->
+        Label("Play first")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(null to "Highest (4K first)", 1080 to "1080p", 720 to "720p", 480 to "480p", 360 to "360p").forEach { (q, label) ->
                 FilterChip(
                     selected = settings.preferredQuality == q,
                     onClick = { SettingsStore.update { it.copy(preferredQuality = q) } },
                     label = { Text(label) },
                 )
             }
+        }
+        Text(
+            "A chosen quality plays first, then the nearest lower one, then higher ones.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Label("Order sources by")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("quality" to "Quality, then my servers", "servers" to "My servers, then quality").forEach { (v, label) ->
+                FilterChip(
+                    selected = settings.sourceOrder == v,
+                    onClick = { SettingsStore.update { it.copy(sourceOrder = v) } },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Toggle("Wait for a source that matches these", settings.waitForPreferred) { v -> SettingsStore.update { it.copy(waitForPreferred = v) } }
+        Text(
+            "Instead of starting with the first source found, wait up to 30 seconds for one of your servers or the quality above.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Label("My servers")
+        if (settings.preferredSources.isEmpty() && settings.avoidedSources.isEmpty()) {
+            Text(
+                "Star a server in the player's Sources panel to try it first, or block one to try it last.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        settings.preferredSources.forEachIndexed { i, name ->
+            ServerRow("${i + 1}. $name", "Preferred", canMoveUp = i > 0, onMoveUp = { SourcePreferences.moveUp(name) }) {
+                SourcePreferences.togglePreferred(name)
+            }
+        }
+        settings.avoidedSources.forEach { name ->
+            ServerRow(name, "Avoided", canMoveUp = false, onMoveUp = {}) { SourcePreferences.toggleAvoided(name) }
         }
         Label("Seek step")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -262,5 +301,19 @@ private fun chooseFolder(): String? {
         dialog.file?.let { java.io.File(dialog.directory, it).path }
     } finally {
         System.setProperty("apple.awt.fileDialogForDirectories", "false")
+    }
+}
+
+@Composable
+private fun ServerRow(name: String, kind: String, canMoveUp: Boolean, onMoveUp: () -> Unit, onRemove: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(name, Modifier.weight(1f))
+        Text(kind, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.material3.IconButton(onClick = onMoveUp, enabled = canMoveUp) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.KeyboardArrowUp, "Move up")
+        }
+        androidx.compose.material3.IconButton(onClick = onRemove) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Remove")
+        }
     }
 }

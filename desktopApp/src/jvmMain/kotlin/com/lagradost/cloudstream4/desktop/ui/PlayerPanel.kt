@@ -1,5 +1,10 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.runtime.collectAsState
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.TooltipPlacement
@@ -154,7 +159,12 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
                     .any { it.lowercase().contains(word) }
             })
     }
-    val groups = shown.groupBy { it.third }.toSortedMap(compareBy { bucketOrder.indexOf(it) })
+    val settings by SettingsStore.state.collectAsState()
+    // Best first by the user's preferences; starred servers also get their own group at the top
+    val rank = SourcePreferences.order(ui.links, shown.map { it.first }, settings).withIndex().associate { it.value to it.index }
+    val ordered = shown.sortedBy { rank[it.first] ?: Int.MAX_VALUE }
+    val starred = ordered.filter { SourcePreferences.preferredRank(it.second, settings) != null }
+    val groups = ordered.filter { it !in starred }.groupBy { it.third }.toSortedMap(compareBy { bucketOrder.indexOf(it) })
 
     Column(Modifier.fillMaxSize()) {
         if (ui.loadingLinks) {
@@ -197,7 +207,8 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
         }
 
         LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp)) {
-            groups.forEach { (b, rows) ->
+            val sections = (if (starred.isNotEmpty()) listOf("Your servers" to starred) else emptyList()) + groups.toList()
+            sections.forEach { (b, rows) ->
                 item(key = "header-$b") {
                     Text(
                         "$b · ${rows.size}",
@@ -213,6 +224,8 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
                         rawName = ui.links[index].name,
                         playing = index == ui.current,
                         failed = index in ui.failed,
+                        preferred = SourcePreferences.preferredRank(info, settings) != null,
+                        avoided = SourcePreferences.isAvoided(info, settings),
                     ) {
                         model.playLink(index)
                         onClose()
@@ -238,7 +251,15 @@ private fun QualityChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SourceRow(info: SourceInfo, rawName: String, playing: Boolean, failed: Boolean, onClick: () -> Unit) {
+private fun SourceRow(
+    info: SourceInfo,
+    rawName: String,
+    playing: Boolean,
+    failed: Boolean,
+    preferred: Boolean = false,
+    avoided: Boolean = false,
+    onClick: () -> Unit,
+) {
     val primary = MaterialTheme.colorScheme.primary
     TooltipArea(
         tooltip = {
@@ -253,7 +274,7 @@ private fun SourceRow(info: SourceInfo, rawName: String, playing: Boolean, faile
         Surface(
             shape = RoundedCornerShape(10.dp),
             color = if (playing) primary.copy(alpha = 0.22f) else rowColor,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).alpha(if (failed && !playing) 0.55f else 1f),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).alpha(if ((failed || avoided) && !playing) 0.55f else 1f),
             onClick = onClick,
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.Top) {
@@ -280,15 +301,36 @@ private fun SourceRow(info: SourceInfo, rawName: String, playing: Boolean, faile
                         Text(it, color = dim, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                info.quality?.let {
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        it,
-                        color = Color.Black,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                Column(horizontalAlignment = Alignment.End) {
+                    info.quality?.let {
+                        Text(
+                            it,
+                            color = Color.Black,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 10.dp).background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                    // Prefer or avoid this server for every title: by provider name ("MovieBox")
+                    val name = info.provider
+                    Row {
+                        IconButton(onClick = { SourcePreferences.togglePreferred(name) }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                if (preferred) Icons.Default.Star else Icons.Default.StarBorder,
+                                if (preferred) "Stop preferring $name" else "Prefer $name",
+                                tint = if (preferred) Color(0xFFFFC107) else dim,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        IconButton(onClick = { SourcePreferences.toggleAvoided(name) }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Default.Block,
+                                if (avoided) "Stop avoiding $name" else "Avoid $name",
+                                tint = if (avoided) MaterialTheme.colorScheme.error else dim,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -15,6 +15,14 @@ data class AppSettings(
     @JsonProperty("homeProvider") val homeProvider: String? = null,
     /** Highest quality picked automatically, in pixels of height. Null means best available. */
     @JsonProperty("preferredQuality") val preferredQuality: Int? = null,
+    /** Servers to try first, in order, matched against a source's provider or server name. */
+    @JsonProperty("preferredSources") val preferredSources: List<String> = emptyList(),
+    /** Servers to try only when nothing else is left. */
+    @JsonProperty("avoidedSources") val avoidedSources: List<String> = emptyList(),
+    /** "quality": best quality first, preferred servers break ties. "servers": preferred servers first. */
+    @JsonProperty("sourceOrder") val sourceOrder: String = "quality",
+    /** Don't start early with a source that misses the preferences; wait up to 30 s for one that matches. */
+    @JsonProperty("waitForPreferred") val waitForPreferred: Boolean = true,
     @JsonProperty("autoPlayNext") val autoPlayNext: Boolean = true,
     /** Look up intro, recap and credit times online and show skip buttons, like the Android app. */
     @JsonProperty("skipButtons") val skipButtons: Boolean = true,

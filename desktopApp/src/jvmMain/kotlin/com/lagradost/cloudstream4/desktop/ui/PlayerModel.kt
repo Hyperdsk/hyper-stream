@@ -169,11 +169,16 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
             // "play first source" setting is on, or when some links are in and loading is slow.
             // The remaining links keep loading in the background either way.
             val started = System.currentTimeMillis()
-            val playFirst = SettingsStore.state.value.playFirstSource
+            val settings = SettingsStore.state.value
+            val playFirst = settings.playFirstSource
             while (loader.isActive) {
                 if (current.current != null) break
                 val waited = System.currentTimeMillis() - started
-                if (current.links.isNotEmpty() && (api.instantLinkLoading || playFirst || waited > 8_000)) break
+                val early = current.links.isNotEmpty() && (api.instantLinkLoading || playFirst || waited > 8_000)
+                // Starting early: only with a source that matches the preferences, unless it's taking long
+                val acceptable = !settings.waitForPreferred || waited > 30_000 ||
+                    sortedCandidates().firstOrNull()?.let { SourcePreferences.matches(current.links[it], settings) } == true
+                if (early && acceptable) break
                 delay(200)
             }
             if (current.current == null) playBest()
@@ -219,18 +224,9 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         if (current.current == null && current.links.isNotEmpty()) playBest()
     }
 
-    private fun sortedCandidates(): List<Int> {
-        val preferred = SettingsStore.state.value.preferredQuality
-        return current.links.indices
-            .filter { it !in current.failed }
-            .sortedWith(
-                compareBy<Int> { i ->
-                    val q = current.links[i].quality
-                    // Links within the preferred quality first, then anything above it
-                    if (preferred != null && q > preferred) 1 else 0
-                }.thenByDescending { current.links[it].quality }
-            )
-    }
+    /** Untried sources, best first by the user's source preferences. */
+    private fun sortedCandidates(): List<Int> =
+        SourcePreferences.order(current.links, current.links.indices.filter { it !in current.failed })
 
     private fun playBest() {
         val best = sortedCandidates().firstOrNull() ?: return
