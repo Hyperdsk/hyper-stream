@@ -25,6 +25,8 @@ class VlcStreamingTest {
     fun startsPlayingQuickly() {
         val path = System.getenv("CLOUDSTREAM_VLC_TEST") ?: return println("Skipping, set CLOUDSTREAM_VLC_TEST to a video file")
         val video = File(path)
+        val progress = File(System.getenv("CLOUDSTREAM_VLC_LOG") ?: "/tmp/cs-vlc-progress.txt").apply { writeText("") }
+        fun say(line: String) { println(line); progress.appendText(line + "\n") }
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-vlc").toString())
         SettingsStore.update { it.copy(streamConnections = 16) }
 
@@ -90,33 +92,46 @@ class VlcStreamingTest {
         val player = VlcPlayer.create() ?: return println("Skipping, VLC not found")
         val preview = player.createPreview()
         try {
-            val url = StreamProxy.proxiedUrl("http://127.0.0.1:${server.address.port}/movie.${video.extension}", null, emptyMap(), parallel = true)
+            // CLOUDSTREAM_VLC_DIRECT=1 plays the file from disk, to tell codec problems from network ones
+            val url = if (System.getenv("CLOUDSTREAM_VLC_DIRECT") == "1") video.toPath().toUri().toString()
+            else StreamProxy.proxiedUrl("http://127.0.0.1:${server.address.port}/movie.${video.extension}", null, emptyMap(), parallel = true)
+            say("Opening $url")
             player.open(url)
 
             var playingAt: Long? = null
+            // CLOUDSTREAM_VLC_EARLY_PREVIEW=1: open the preview on VLC's first "playing" event, before any frame
+            val earlyPreview = System.getenv("CLOUDSTREAM_VLC_EARLY_PREVIEW") == "1"
+            var previewOpened = false
             while (now() < 90_000) {
                 val s = player.state.value
+                if (earlyPreview && !previewOpened && s.playing) {
+                    previewOpened = true
+                    say("${now()} ms: opening preview early (time=${s.timeMs})")
+                    preview.open("${player.currentUrl ?: url}?preview")
+                }
                 if (s.playing && s.timeMs > 1_000) { playingAt = now(); break }
                 if (now() % 2000 < 250) {
                     val st = StreamProxy.stats.value
-                    println("${now()} ms: playing=${s.playing} time=${s.timeMs} buffering=${s.buffering} ${s.bufferPercent}% · ${st.bytesPerSecond / 1024} KB/s · proxy ${st.connections} conns · host ${active.get()} conns · ${st.aheadBytes / 1024 / 1024} MB ahead")
+                    say("${now()} ms: playing=${s.playing} time=${s.timeMs} buffering=${s.buffering} ${s.bufferPercent}% · ${st.bytesPerSecond / 1024} KB/s · proxy ${st.connections} conns · host ${active.get()} conns · ${st.aheadBytes / 1024 / 1024} MB ahead")
                 }
                 Thread.sleep(250)
             }
-            log.forEach { println(it) }
-            println("Playing after ${playingAt ?: "never (90 s)"} ms")
+            log.forEach { say(it) }
+            say("Playing after ${playingAt ?: "never (90 s)"} ms")
             assertTrue(playingAt != null && playingAt < 20_000, "took ${playingAt ?: "over 90000"} ms to start playing")
 
             // Like the app: the seek-bar preview opens once playing, at low priority. Playback must go on.
-            preview.open("${player.currentUrl ?: url}?preview")
+            if (!previewOpened) preview.open("${player.currentUrl ?: url}?preview")
             val t0 = player.state.value.timeMs
             Thread.sleep(5_000)
             val advanced = player.state.value.timeMs - t0
-            println("With the preview open, playback advanced ${advanced} ms in 5 s")
+            say("With the preview open, playback advanced ${advanced} ms in 5 s")
             assertTrue(advanced > 3_000, "playback stalled with the preview open: advanced $advanced ms")
         } finally {
-            preview.release()
-            player.release()
+            // VLC can hang in stop when it is stuck; don't let that hold up the test run
+            val releaser = Thread { preview.release(); player.release() }.apply { isDaemon = true; start() }
+            releaser.join(10_000)
+            if (releaser.isAlive) say("VLC did not stop within 10 s (stuck)")
             StreamProxy.clear()
             server.stop(0)
         }

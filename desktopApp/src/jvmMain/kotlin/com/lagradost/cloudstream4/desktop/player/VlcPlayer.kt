@@ -110,26 +110,41 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
         )
 
         player.events().addMediaPlayerEventListener(object : MediaPlayerEventAdapter() {
-            override fun playing(mediaPlayer: MediaPlayer) =
+            override fun opening(mediaPlayer: MediaPlayer) { VlcLog.log("event opening") }
+            override fun videoOutput(mediaPlayer: MediaPlayer, newCount: Int) { VlcLog.log("event video outputs: $newCount") }
+            override fun mediaPlayerReady(mediaPlayer: MediaPlayer) { VlcLog.log("event ready") }
+
+            override fun playing(mediaPlayer: MediaPlayer) {
+                VlcLog.log("event playing")
                 _state.update { it.copy(playing = true, buffering = false, ended = false, error = null) }
+            }
 
             override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
             override fun stopped(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
             override fun finished(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, ended = true) }
-            override fun error(mediaPlayer: MediaPlayer) =
+            override fun error(mediaPlayer: MediaPlayer) {
+                VlcLog.log("event error")
+                onError()
+            }
+
+            private fun onError() =
                 _state.update { it.copy(playing = false, buffering = false, error = "This source could not be played.") }
 
             override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) =
                 _state.update { it.copy(buffering = newCache < 100f, bufferPercent = newCache) }
 
-            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) =
+            override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
+                if (_state.value.timeMs == 0L && newTime > 0) VlcLog.log("event first frame time: $newTime ms")
                 _state.update { it.copy(timeMs = newTime, buffering = false) }
+            }
 
             override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) =
                 _state.update { it.copy(lengthMs = newLength) }
 
-            override fun elementaryStreamAdded(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
+            override fun elementaryStreamAdded(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) {
+                VlcLog.log("event track added: $type $id")
                 refreshTracks()
+            }
 
             override fun elementaryStreamDeleted(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
                 refreshTracks()
@@ -150,6 +165,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
 
     /** @param subtitles local proxy urls of external subtitle files */
     fun open(url: String, startMs: Long = 0, subtitles: List<String> = emptyList()) {
+        VlcLog.log("open ${if (url.startsWith("http://127.0.0.1")) "proxied stream" else url.substringBefore(':')} at $startMs ms")
         frame = null
         _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = true) }
         val options = buildList {
@@ -229,12 +245,26 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
     }
 
     companion object {
+        /** VLC's own log (warnings and errors) in logs/vlc.log, to see why a stream won't play. */
+        private var nativeLog: uk.co.caprica.vlcj.log.NativeLog? = null
+
+        internal fun attachLog(factory: MediaPlayerFactory) {
+            runCatching {
+                nativeLog = factory.application().newLog().apply {
+                    level = uk.co.caprica.vlcj.log.LogLevel.WARNING
+                    addLogListener { level, module, _, _, _, _, _, message ->
+                        VlcLog.log("$level $module: $message")
+                    }
+                }
+            }
+        }
+
         /** Finds libVLC, usually inside /Applications/VLC.app. Returns null when VLC is not installed. */
         fun create(): VlcPlayer? {
             val found = runCatching { NativeDiscovery().discover() }.getOrDefault(false)
             if (!found) return null
             return runCatching {
-                VlcPlayer(MediaPlayerFactory("--no-video-title-show", "--quiet"))
+                VlcPlayer(MediaPlayerFactory("--no-video-title-show").also { attachLog(it) })
             }.onFailure { it.printStackTrace() }.getOrNull()
         }
     }

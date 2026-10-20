@@ -133,7 +133,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val currentUrl = player?.currentUrl
     // Open the preview player only once the video plays, and at low priority ("?preview"), so it
     // never competes with the main player for bandwidth while that is starting up
-    val startedPlaying = playback.playing || playback.timeMs > 0
+    // VLC reports "playing" before it has a frame; wait for the clock to actually move
+    val startedPlaying = playback.timeMs > 0
     LaunchedEffect(preview, currentUrl, startedPlaying) {
         preview?.open(currentUrl?.takeIf { startedPlaying }?.let { if (it.startsWith("http://127.0.0.1")) "$it?preview" else it })
     }

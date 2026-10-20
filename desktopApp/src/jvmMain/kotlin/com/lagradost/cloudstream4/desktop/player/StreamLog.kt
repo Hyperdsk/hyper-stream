@@ -11,8 +11,13 @@ import java.time.format.DateTimeFormatter
  * the previous one in stream.log.1), so a stream that won't start can be diagnosed afterwards.
  * Urls are shortened to their host, so it holds no tokens.
  */
-object StreamLog {
-    private val file by lazy { File(AppDirs.root, "logs").apply { mkdirs() }.resolve("stream.log") }
+object StreamLog : RotatingLog("stream.log")
+
+/** VLC's own warnings and errors plus player events, in logs/vlc.log. */
+object VlcLog : RotatingLog("vlc.log")
+
+open class RotatingLog(name: String) {
+    private val file by lazy { File(AppDirs.root, "logs").apply { mkdirs() }.resolve(name) }
     private val time = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 
     @Synchronized
