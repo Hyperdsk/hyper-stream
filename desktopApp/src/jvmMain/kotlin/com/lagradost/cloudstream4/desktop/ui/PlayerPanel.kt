@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.material3.TextButton
+import com.lagradost.cloudstream4.desktop.player.SubtitleFiles
 import androidx.compose.runtime.collectAsState
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import androidx.compose.material.icons.filled.Block
@@ -385,30 +387,51 @@ private fun SubtitlesTab(ui: PlayerUiState, playback: PlaybackState, model: Play
             TrackRow(t.name, t.id == playback.subtitleTrack) { player.setSubtitleTrack(t.id) }
         }
         if (ui.subtitles.isNotEmpty()) {
+            // Working ones first by language; ones whose site failed are tucked away at the end
+            val failed = ui.subtitles.filter { ui.loadedSubtitles[it.url] is SubtitleLoad.Failed }
+            val usable = ui.subtitles.filter { it !in failed }.sortedBy { it.lang.lowercase() }
+            val checking = usable.count { ui.loadedSubtitles[it.url] == null || ui.loadedSubtitles[it.url] == SubtitleLoad.Loading }
             item {
                 Text(
-                    "From the provider, loaded when you pick one",
+                    if (checking > 0) "From the provider · checking $checking…" else "From the provider",
                     color = dim,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.padding(top = 16.dp, start = 4.dp, bottom = 4.dp),
                 )
             }
-            // Same language several times: number them
             val counts = mutableMapOf<String, Int>()
-            val labelled = ui.subtitles.sortedBy { it.lang.lowercase() }.map { sub ->
+            val labelled = usable.map { sub ->
                 val n = (counts[sub.lang] ?: 0) + 1
                 counts[sub.lang] = n
                 sub to if (n > 1) "${sub.lang} $n" else sub.lang
             }
             items(labelled, key = { "provider-${it.first.url}" }) { (sub, label) ->
-                val state = ui.loadedSubtitles[sub.url]
-                val status = when (state) {
+                val status = when (ui.loadedSubtitles[sub.url]) {
                     SubtitleLoad.Loading -> " · loading…"
                     SubtitleLoad.Loaded -> " · added"
-                    is SubtitleLoad.Failed -> " · ${state.reason}"
-                    null -> ""
+                    is SubtitleLoad.Ready -> ""
+                    else -> " · checking…"
                 }
-                TrackRow(label + status, false) { if (state != SubtitleLoad.Loaded) model.loadSubtitle(sub) }
+                SubtitleRow(label + status, SubtitleFiles.host(sub)) { model.loadSubtitle(sub) }
+            }
+            if (failed.isNotEmpty()) {
+                item {
+                    var open by remember { mutableStateOf(false) }
+                    Column {
+                        TextButton(onClick = { open = !open }) {
+                            Text("Unavailable (${failed.size}) ${if (open) "▾" else "▸"}", color = dim)
+                        }
+                        if (open) failed.forEach { sub ->
+                            val reason = (ui.loadedSubtitles[sub.url] as? SubtitleLoad.Failed)?.reason ?: ""
+                            Text(
+                                "${sub.lang} · ${SubtitleFiles.host(sub)} · $reason",
+                                color = dim,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
             }
         } else if (tracks.count { it.id >= 0 } == 0) {
             item { Text("This source has no subtitles.", color = dim, modifier = Modifier.padding(8.dp)) }
@@ -426,6 +449,21 @@ private fun AudioTab(playback: PlaybackState, model: PlayerModel) {
         }
         items(tracks, key = { "audio-${it.id}" }) { t ->
             TrackRow(t.name, t.id == playback.audioTrack) { player.setAudioTrack(t.id) }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleRow(label: String, host: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = rowColor,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        onClick = onClick,
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(label, color = Color.White)
+            if (host.isNotEmpty()) Text(host, color = dim, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

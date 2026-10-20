@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.flow.first
 import com.lagradost.cloudstream4.desktop.player.SubtitleFiles
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.PersistentMap
@@ -34,6 +36,8 @@ import java.io.File
 
 sealed interface SubtitleLoad {
     data object Loading : SubtitleLoad
+    /** Downloaded and checked, ready to show instantly. */
+    data class Ready(val file: java.io.File) : SubtitleLoad
     data object Loaded : SubtitleLoad
     data class Failed(val reason: String) : SubtitleLoad
 }
@@ -131,6 +135,7 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         StreamProxy.clear()
         pendingStartMs = startMs
         autoSkipped.clear()
+        subtitleCheck?.cancel()
         update { PlayerUiState(index, episodes) }
 
         // Play the downloaded file when there is one, like the Android app
@@ -247,12 +252,21 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         // They load one at a time when picked, see loadSubtitle.
         p.open(url, start)
         update { copy(loadedSubtitles = persistentMapOf()) }
+        checkSubtitles()
     }
 
-    /** Downloads [sub] and shows it in the player. */
+    /** Shows [sub] in the player, downloading it first unless the background check already did. */
     fun loadSubtitle(sub: SubtitleFile) {
         val p = player ?: return
-        if (current.loadedSubtitles[sub.url] == SubtitleLoad.Loading) return
+        when (val state = current.loadedSubtitles[sub.url]) {
+            is SubtitleLoad.Ready -> {
+                p.addSubtitle(state.file.toPath().toUri().toString())
+                update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loaded)) }
+                return
+            }
+            SubtitleLoad.Loading, SubtitleLoad.Loaded -> return
+            else -> Unit
+        }
         update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loading)) }
         scope.launch {
             runCatching { SubtitleFiles.fetch(sub) }
@@ -263,6 +277,45 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                 .onFailure { e ->
                     update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Failed(e.message ?: "Couldn't load it"))) }
                 }
+        }
+    }
+
+    /**
+     * Once the video shows its first frame, downloads the provider's subtitles in the background,
+     * a few at a time, so the list shows which ones work and picking one is instant. Waiting for
+     * the first frame keeps this from slowing the start of the video.
+     */
+    private var subtitleCheck: Job? = null
+
+    private fun checkSubtitles() {
+        val p = player ?: return
+        subtitleCheck?.cancel()
+        subtitleCheck = scope.launch {
+            p.state.first { it.timeMs > 0 }
+            val limit = kotlinx.coroutines.sync.Semaphore(4)
+            val started = mutableSetOf<String>()
+            // Subtitles keep arriving while the remaining sources load
+            state.collect { ui ->
+                ui.subtitles.filter { it.url !in started && ui.loadedSubtitles[it.url] == null }.forEach { sub ->
+                    started += sub.url
+                    launch {
+                        limit.withPermit {
+                            if (current.loadedSubtitles[sub.url] != null) return@withPermit
+                            val result = runCatching { SubtitleFiles.fetch(sub) }
+                            update {
+                                // Don't overwrite a pick the user made meanwhile
+                                if (loadedSubtitles[sub.url] != null) this
+                                else copy(
+                                    loadedSubtitles = loadedSubtitles.put(
+                                        sub.url,
+                                        result.fold({ SubtitleLoad.Ready(it) }, { SubtitleLoad.Failed(it.message ?: "Couldn't load it") }),
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

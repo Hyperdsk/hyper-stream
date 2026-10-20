@@ -26,6 +26,27 @@ import java.util.zip.ZipInputStream
 object SubtitleFiles {
     private val folder by lazy { File(AppDirs.root, "subtitles").apply { mkdirs() } }
 
+    /** Short limits: a subtitle host that hangs shouldn't keep the list waiting. */
+    private val client by lazy {
+        app.baseClient.newBuilder().callTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+    }
+
+    private class HostAnswered(val code: Int) : IOException(
+        if (code >= 500) "The subtitle site is having problems (HTTP $code)." else "The subtitle site refused it (HTTP $code)."
+    )
+
+    /** A plain reason for a failed download. */
+    private fun reason(e: IOException): String = when {
+        e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException -> "The subtitle site didn't answer."
+        e is javax.net.ssl.SSLException -> "Couldn't connect securely to the subtitle site."
+        e is java.net.UnknownHostException -> "The subtitle site can't be found."
+        e.message?.contains("reset", ignoreCase = true) == true -> "The subtitle site dropped the connection."
+        else -> e.message ?: "Couldn't download it."
+    }
+
+    /** The site a subtitle comes from, to show in the list. */
+    fun host(sub: SubtitleFile): String = runCatching { java.net.URI(sub.url).host.removePrefix("www.") }.getOrNull() ?: ""
+
     suspend fun fetch(sub: SubtitleFile): File = withContext(Dispatchers.IO) {
         val key = MessageDigest.getInstance("SHA-1").digest(sub.url.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
         folder.listFiles()?.firstOrNull { it.nameWithoutExtension == key }?.let { return@withContext it }
@@ -34,11 +55,24 @@ object SubtitleFiles {
             header("User-Agent", USER_AGENT)
             sub.headers?.forEach { (k, v) -> header(k, v) }
         }.build()
-        val raw = app.baseClient.newCall(request).execute().use { r ->
-            if (!r.isSuccessful) throw IOException("The subtitle host answered with HTTP ${r.code}.")
-            val bytes = r.body.bytes()
-            if (bytes.size > 20 shl 20) throw IOException("The subtitle file is too large.")
-            bytes
+        // One retry for blips (reset connection, failed handshake, timeout); not for answers like 404
+        var attempt = 0
+        val raw = run {
+            while (true) {
+                try {
+                    return@run client.newCall(request).execute().use { r ->
+                        if (!r.isSuccessful) throw HostAnswered(r.code)
+                        val bytes = r.body.bytes()
+                        if (bytes.size > 20 shl 20) throw IOException("The file is too large.")
+                        bytes
+                    }
+                } catch (e: HostAnswered) {
+                    if (e.code < 500 || ++attempt >= 2) throw IOException(e.message)
+                } catch (e: IOException) {
+                    if (++attempt >= 2) throw IOException(reason(e), e)
+                }
+            }
+            @Suppress("UNREACHABLE_CODE") ByteArray(0)
         }
         val bytes = unpack(raw)
         val ext = formatOf(bytes) ?: throw IOException("That isn't a subtitle file VLC can read.")
