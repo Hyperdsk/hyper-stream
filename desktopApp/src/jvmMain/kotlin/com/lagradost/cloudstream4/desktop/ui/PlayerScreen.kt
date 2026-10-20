@@ -120,6 +120,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val playback by (player?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(PlaybackState()) }).collectAsState()
     val settings by SettingsStore.state.collectAsState()
     val stats by StreamProxy.stats.collectAsState()
+    // Seconds spent buffering at a crawl, for the "slow source" hint
+    var slowSeconds by remember { mutableIntStateOf(0) }
     val window = LocalWindowState.current
     val focus = remember { FocusRequester() }
     val holdScope = rememberCoroutineScope()
@@ -268,6 +270,14 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                 }
 
                 playback.buffering && ui.current != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    LaunchedEffect(ui.current) {
+                        slowSeconds = 0
+                        while (true) {
+                            delay(1_000)
+                            val crawling = ui.offlineFile == null && StreamProxy.stats.value.bytesPerSecond < SLOW_SOURCE_BYTES
+                            slowSeconds = if (crawling) slowSeconds + 1 else 0
+                        }
+                    }
                     CircularProgressIndicator(color = Color.White)
                     Spacer(Modifier.height(12.dp))
                     Text(
@@ -280,6 +290,18 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                             Spacer(Modifier.height(4.dp))
                             Text(it, color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    // Stuck at a crawl: say so, and offer the other sources
+                    if (slowSeconds >= 10 && ui.links.size > 1) {
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "This source is very slow right now. Another one may play sooner.",
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.widthIn(max = 420.dp),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(onClick = { openMenu = "panel:Sources" }) { Text("Try another source", color = Color.White) }
                     }
                 }
             }
@@ -654,3 +676,6 @@ private fun statsLine(stats: StreamStats): String? {
         stats.aheadBytes.takeIf { it > 0 }?.let { "${formatBytes(it)} ahead" },
     ).joinToString(" · ")
 }
+
+/** Below this while buffering, for 10 seconds, the player suggests another source. */
+private const val SLOW_SOURCE_BYTES = 200L * 1024

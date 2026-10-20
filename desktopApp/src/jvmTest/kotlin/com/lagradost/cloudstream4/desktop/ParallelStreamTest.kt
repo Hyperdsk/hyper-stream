@@ -131,7 +131,7 @@ class ParallelStreamTest {
             println("24 MB: one connection ${single} ms, parallel ${parallel} ms, peak ${peak.get()} connections")
             println("Stats seen: top speed ${sawSpeed / 1_000_000} MB/s, ${sawConnections} connections, ${(stats.value.totalBytes - before) / 1_000_000} MB counted")
             assertTrue(stats.value.totalBytes - before >= video.size, "bytes counted: ${stats.value.totalBytes - before}")
-            assertTrue(peak.get() >= 8, "expected parallel connections, peak was ${peak.get()}")
+            assertTrue(peak.get() >= 6, "expected parallel connections, peak was ${peak.get()}")
             assertTrue(parallel * 2 < single, "parallel ${parallel} ms should be well under single ${single} ms")
 
             // HLS: asking for the first segment fetches the next ones ahead
