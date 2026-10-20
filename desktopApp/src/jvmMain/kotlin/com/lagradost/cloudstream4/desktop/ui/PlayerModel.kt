@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream4.desktop.data.LinkCache
 import com.lagradost.cloudstream4.desktop.data.RememberedSource
 import com.lagradost.cloudstream4.desktop.data.SourceMemory
 import kotlinx.coroutines.sync.withPermit
@@ -59,6 +60,10 @@ data class PlayerUiState(
     val error: String? = null,
     /** Set when playing a downloaded file instead of streaming. */
     val offlineFile: String? = null,
+    /** When this list of sources was found (older than now when it came from the cache). */
+    val foundAt: Long? = null,
+    /** A "Search again" running while the video keeps playing. */
+    val refreshing: Boolean = false,
     /** Provider subtitles the user picked, by url. */
     val loadedSubtitles: PersistentMap<String, SubtitleLoad> = persistentMapOf(),
     /** Intro, recap and credit sections of this episode, from the online skip databases. */
@@ -122,6 +127,9 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                     val link = current.links.getOrNull(index) ?: return@collect
                     val info = link.info()
                     SourceMemory.put(memoryKey, RememberedSource(info.provider, info.server, link.quality))
+                    LinkCache.markPlayed(request.apiName, current.episodes[current.index].data, link.url)
+                    // It plays, so a later failure is a normal one, not an expired cache
+                    startedFromCache = false
                 }
             }
             scope.launch {
@@ -140,7 +148,10 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         }
     }
 
-    fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true) {
+    /** True while playing a link from the cache: if it fails, search again instead of trying the rest. */
+    private var startedFromCache = false
+
+    fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true, useCache: Boolean = true) {
         saveProgress()
         linksJob?.cancel()
         player?.stop()
@@ -160,12 +171,28 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
             return
         }
 
+        val data = current.episodes[index].data
+
+        // Sources found for this episode recently: start with the link that played last, no search
+        val cached = if (useCache && player != null) LinkCache.get(request.apiName, data) else null
+        if (cached != null) {
+            startedFromCache = true
+            linksJob = scope.launch {
+                val links = cached.links.map { it.toLink() }
+                val subs = cached.subtitles.map { it.toSubtitle() }
+                update { copy(links = links.toPersistentList(), subtitles = subs.toPersistentList(), loadingLinks = false, foundAt = cached.savedAt) }
+                val pick = links.indexOfFirst { it.url == cached.lastPlayedUrl }.takeIf { it >= 0 } ?: sortedCandidates().firstOrNull()
+                if (pick != null) playLink(pick) else loadEpisode(index, startMs, allowOffline, useCache = false)
+            }
+            return
+        }
+        startedFromCache = false
+
         val api = providerByName(request.apiName)
         if (api == null) {
             update { copy(loadingLinks = false, error = "The ${request.apiName} extension isn't loaded.") }
             return
         }
-        val data = current.episodes[index].data
         linksJob = scope.launch {
             var failure: Throwable? = null
             val loader = launch(Dispatchers.IO) {
@@ -197,7 +224,9 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                 // Starting early: only with a source that matches the preferences, unless it's taking long
                 val acceptable = !settings.waitForPreferred || waited > 30_000 ||
                     sortedCandidates().firstOrNull()?.let { SourcePreferences.matches(current.links[it], settings) } == true
-                if (early && acceptable) break
+                // A source played for this title before: give it 30 s to turn up before picking another
+                val waitingForLast = SourceMemory.get(memoryKey) != null && waited < 30_000
+                if (early && acceptable && !waitingForLast) break
                 delay(200)
             }
             if (current.current == null) playBest()
@@ -209,6 +238,50 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                 )
             }
             if (current.current == null && current.links.isNotEmpty()) playBest()
+            update { copy(foundAt = System.currentTimeMillis()) }
+            LinkCache.put(request.apiName, data, current.links, current.subtitles, playingUrl())
+        }
+    }
+
+    private fun playingUrl(): String? = current.current?.takeIf { it != OFFLINE }?.let { current.links.getOrNull(it)?.url }
+
+    /**
+     * Looks for sources again while the video keeps playing; the new list replaces the old one
+     * when the search is done.
+     */
+    fun searchAgain() {
+        val api = providerByName(request.apiName) ?: return
+        val index = current.index
+        val data = current.episodes[index].data
+        if (current.refreshing || current.loadingLinks) return
+        // Nothing is playing (the cached link failed): a normal search that also starts a source
+        if (current.current == null || current.current == OFFLINE) {
+            loadEpisode(index, player?.state?.value?.timeMs?.takeIf { it > 0 } ?: pendingStartMs, useCache = false)
+            return
+        }
+        update { copy(refreshing = true) }
+        scope.launch {
+            val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
+            val subs = java.util.Collections.synchronizedList(mutableListOf<SubtitleFile>())
+            providerCall {
+                api.loadLinks(data, false, { subs += it }, { if (it.type.name != "TORRENT" && it.type.name != "MAGNET") links += it })
+            }
+            if (current.index != index) return@launch
+            val playing = playingUrl()
+            val found = links.toList().distinctBy { it.url }.toMutableList()
+            // Keep the link that's playing in the list, even if this search didn't return it
+            current.current?.let { i -> current.links.getOrNull(i) }?.takeIf { p -> found.none { it.url == p.url } }?.let { found += it }
+            update {
+                copy(
+                    links = found.toPersistentList(),
+                    subtitles = (subs.toList() + subtitles).distinctBy { it.url }.toPersistentList(),
+                    current = found.indexOfFirst { it.url == playing }.takeIf { it >= 0 } ?: current,
+                    failed = persistentSetOf(),
+                    foundAt = System.currentTimeMillis(),
+                    refreshing = false,
+                )
+            }
+            LinkCache.put(request.apiName, data, current.links, current.subtitles, playing)
         }
     }
 
@@ -255,8 +328,19 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
 
     private fun matchesRemembered(link: ExtractorLink, last: RememberedSource): Boolean {
         val info = link.info()
-        return info.provider == last.provider && info.server == last.server && link.quality == last.quality
+        if (link.quality != last.quality || plain(info.provider) != plain(last.provider)) return false
+        val a = serverKey(info.server)
+        val b = serverKey(last.server)
+        return a == null || b == null || a == b
     }
+
+    /** Names often use decorative letters ("𝗕𝗼𝗹𝗹𝘆𝗳𝗹𝗶𝘅") and punctuation: compare plain letters and digits. */
+    private fun plain(name: String?): String =
+        java.text.Normalizer.normalize(name ?: "", java.text.Normalizer.Form.NFKC).lowercase().filter { it.isLetterOrDigit() }
+
+    /** The server's name without what varies between searches ("GDFlix[Cloud…" -> "gdflix"). */
+    private fun serverKey(server: String?): String? =
+        server?.substringBefore('[')?.substringBefore('(')?.let(::plain)?.takeIf { it.isNotEmpty() }
 
     /** Whether the source that played last time for this title is among the links found so far. */
     private fun rememberedFound(): Boolean {
@@ -354,6 +438,14 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         // A downloaded file that won't play falls back to streaming
         if (current.offlineFile != null) {
             loadEpisode(current.index, player?.state?.value?.timeMs ?: 0, allowOffline = false)
+            return
+        }
+        // The cached link stopped working (expired): search the sites again
+        if (startedFromCache) {
+            startedFromCache = false
+            LinkCache.remove(request.apiName, current.episodes[current.index].data)
+            update { copy(current = null) }
+            searchAgain()
             return
         }
         val failedIndex = current.current ?: return

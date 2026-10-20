@@ -169,14 +169,24 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
     val groups = ordered.filter { it !in starred }.groupBy { it.third }.toSortedMap(compareBy { bucketOrder.indexOf(it) })
 
     Column(Modifier.fillMaxSize()) {
-        if (ui.loadingLinks) {
+        if (ui.loadingLinks || ui.refreshing) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(2.dp))
             Text(
-                "Still finding sources, ${ui.links.size} so far",
+                if (ui.refreshing) "Searching again, the video keeps playing…" else "Still finding sources, ${ui.links.size} so far",
                 color = dim,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
+        } else if (ui.foundAt != null) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Found ${foundAgo(ui.foundAt)}",
+                    color = dim,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { model.searchAgain() }) { Text("Search again") }
+            }
         }
         if (ui.links.size > 6) {
             OutlinedTextField(
@@ -465,5 +475,15 @@ private fun SubtitleRow(label: String, host: String, onClick: () -> Unit) {
             Text(label, color = Color.White)
             if (host.isNotEmpty()) Text(host, color = dim, style = MaterialTheme.typography.labelSmall)
         }
+    }
+}
+
+private fun foundAgo(at: Long): String {
+    val minutes = (System.currentTimeMillis() - at) / 60_000
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 120 -> "an hour ago"
+        else -> "${minutes / 60} hours ago"
     }
 }
