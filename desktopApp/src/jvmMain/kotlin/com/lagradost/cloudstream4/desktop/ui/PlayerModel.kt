@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream4.desktop.data.RememberedSource
+import com.lagradost.cloudstream4.desktop.data.SourceMemory
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.first
 import com.lagradost.cloudstream4.desktop.player.SubtitleFiles
@@ -112,6 +114,16 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
                     if (p.state.value.playing) saveProgress(snapshot = false)
                 }
             }
+            // Remember the source once it actually plays, so this title starts with it next time
+            scope.launch {
+                p.state.distinctUntilChangedBy { it.timeMs > 0 }.collect { s ->
+                    val index = current.current ?: return@collect
+                    if (s.timeMs <= 0 || index == OFFLINE) return@collect
+                    val link = current.links.getOrNull(index) ?: return@collect
+                    val info = link.info()
+                    SourceMemory.put(memoryKey, RememberedSource(info.provider, info.server, link.quality))
+                }
+            }
             scope.launch {
                 p.state.distinctUntilChangedBy { it.ended }.collect { s ->
                     if (s.ended) {
@@ -178,6 +190,8 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
             val playFirst = settings.playFirstSource
             while (loader.isActive) {
                 if (current.current != null) break
+                // The source that played last time is here: start with it, no waiting or asking
+                if (rememberedFound()) break
                 val waited = System.currentTimeMillis() - started
                 val early = current.links.isNotEmpty() && (api.instantLinkLoading || playFirst || waited > 8_000)
                 // Starting early: only with a source that matches the preferences, unless it's taking long
@@ -229,9 +243,26 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         if (current.current == null && current.links.isNotEmpty()) playBest()
     }
 
-    /** Untried sources, best first by the user's source preferences. */
-    private fun sortedCandidates(): List<Int> =
-        SourcePreferences.order(current.links, current.links.indices.filter { it !in current.failed })
+    /** Untried sources, best first: the one that played last time for this title, then the user's preferences. */
+    private fun sortedCandidates(): List<Int> {
+        val ranked = SourcePreferences.order(current.links, current.links.indices.filter { it !in current.failed })
+        val last = SourceMemory.get(memoryKey) ?: return ranked
+        val (same, other) = ranked.partition { matchesRemembered(current.links[it], last) }
+        return same + other
+    }
+
+    private val memoryKey = SourceMemory.key(request.apiName, request.parentUrl)
+
+    private fun matchesRemembered(link: ExtractorLink, last: RememberedSource): Boolean {
+        val info = link.info()
+        return info.provider == last.provider && info.server == last.server && link.quality == last.quality
+    }
+
+    /** Whether the source that played last time for this title is among the links found so far. */
+    private fun rememberedFound(): Boolean {
+        val last = SourceMemory.get(memoryKey) ?: return false
+        return current.links.withIndex().any { (i, l) -> i !in current.failed && matchesRemembered(l, last) }
+    }
 
     private fun playBest() {
         val best = sortedCandidates().firstOrNull() ?: return

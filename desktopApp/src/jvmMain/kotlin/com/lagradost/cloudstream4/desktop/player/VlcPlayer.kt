@@ -69,12 +69,16 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
     private var current = 0
     private var info: ImageInfo? = null
     private var pixels = ByteArray(0)
+    /** The video's real size, without decoder padding. */
+    @Volatile
+    private var visibleSize: java.awt.Dimension? = null
 
     init {
         player.videoSurface().set(
             factory.videoSurfaces().newVideoSurface(
                 object : BufferFormatCallback {
                     override fun getBufferFormat(sourceWidth: Int, sourceHeight: Int): BufferFormat {
+                        visibleSize = null
                         info = ImageInfo(sourceWidth, sourceHeight, ColorType.BGRA_8888, ColorAlphaType.PREMUL)
                         pixels = ByteArray(sourceWidth * sourceHeight * 4)
                         bitmaps.forEach { it.allocPixels(info!!) }
@@ -101,7 +105,15 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
                         buffer.rewind()
                         current = 1 - current
                         val bitmap = bitmaps[current]
-                        bitmap.installPixels(imageInfo, pixels, imageInfo.minRowBytes)
+                        // FFmpeg pads decoded pictures (a 720-line H.264 video arrives as 738 lines) and VLC
+                        // passes the padded size on. Show only the video's real size, asked once per format.
+                        val size = visibleSize ?: mediaPlayer.video().videoDimension()?.also { visibleSize = it }
+                        val w = size?.width?.takeIf { it in 1..imageInfo.width } ?: imageInfo.width
+                        val h = size?.height?.takeIf { it in 1..imageInfo.height } ?: imageInfo.height
+                        val visible = if (w < imageInfo.width || h < imageInfo.height) {
+                            ImageInfo(w, h, imageInfo.colorType, imageInfo.colorAlphaType)
+                        } else imageInfo
+                        bitmap.installPixels(visible, pixels, imageInfo.minRowBytes)
                         frame = bitmap.asComposeImageBitmap()
                     }
                 },
@@ -251,6 +263,14 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
     }
 
     companion object {
+        /**
+         * FFmpeg decoding first, without hardware decoding. With VideoToolbox, frames arrive as
+         * CoreVideo buffers that VLC can't blend subtitles into ("no matching alpha blending
+         * routine YUVA -> CVPN"), so subtitles never showed in the frames drawn by the app.
+         * "all" keeps every other decoder as a fallback, for audio and subtitle formats.
+         */
+        private val FACTORY_ARGS = arrayOf("--no-video-title-show", "--codec=avcodec,all", "--avcodec-hw=none")
+
         /** How much video VLC buffers before it starts, in milliseconds. */
         const val NETWORK_CACHING_MS = 1500L
 
@@ -260,7 +280,9 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
         internal fun attachLog(factory: MediaPlayerFactory) {
             runCatching {
                 nativeLog = factory.application().newLog().apply {
-                    level = uk.co.caprica.vlcj.log.LogLevel.WARNING
+                    // CLOUDSTREAM_VLC_DEBUG=1 logs everything, to see which decoder and converters VLC picks
+                    level = if (System.getenv("CLOUDSTREAM_VLC_DEBUG") == "1") uk.co.caprica.vlcj.log.LogLevel.DEBUG
+                    else uk.co.caprica.vlcj.log.LogLevel.WARNING
                     addLogListener { level, module, _, _, _, _, _, message ->
                         VlcLog.log("$level $module: $message")
                     }
@@ -273,7 +295,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
             val found = runCatching { NativeDiscovery().discover() }.getOrDefault(false)
             if (!found) return null
             return runCatching {
-                VlcPlayer(MediaPlayerFactory("--no-video-title-show").also { attachLog(it) })
+                VlcPlayer(MediaPlayerFactory(*FACTORY_ARGS).also { attachLog(it) })
             }.onFailure { it.printStackTrace() }.getOrNull()
         }
     }
