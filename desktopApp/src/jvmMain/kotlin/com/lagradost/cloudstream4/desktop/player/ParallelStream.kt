@@ -60,6 +60,8 @@ internal class ParallelStream(
                     headers.forEach { (k, v) -> header(k, v) }
                     header("Range", "bytes=$start-${start + length - 1}")
                 }.build()
+                StreamProxy.meter.open()
+                try {
                 client.newCall(request).execute().use { response ->
                     if (response.code == 200) throw NoRangeSupport()
                     if (response.code != 206) throw IOException("HTTP ${response.code}")
@@ -70,9 +72,13 @@ internal class ParallelStream(
                             val n = input.read(bytes, read, length - read)
                             if (n < 0) throw IOException("Connection closed early")
                             read += n
+                            StreamProxy.meter.add(n)
                         }
                     }
                     return bytes
+                }
+                } finally {
+                    StreamProxy.meter.close()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -90,9 +96,27 @@ internal class ParallelStream(
      * Writes bytes [start]..[end] (inclusive) to [out], fetching ahead in parallel. Returns when done
      * or throws when the player hangs up (it does on every seek) or the host keeps failing.
      */
+    /** Where the player is reading, for [aheadBytes]. */
+    @Volatile
+    private var readPosition = 0L
+
+    /** Bytes already fetched and waiting in memory past where the player is reading. */
+    fun aheadBytes(): Long = synchronized(chunks) {
+        var index = (readPosition / CHUNK).toInt()
+        var bytes = 0L
+        while (index < chunkCount) {
+            val chunk = chunks[index] ?: break
+            if (!chunk.isCompleted || chunk.isCancelled) break
+            bytes += minOf(CHUNK, total - index * CHUNK)
+            index++
+        }
+        (bytes - (readPosition - (readPosition / CHUNK) * CHUNK)).coerceAtLeast(0)
+    }
+
     fun serve(start: Long, end: Long, out: OutputStream) {
         var position = start
         while (position <= end) {
+            readPosition = position
             val index = (position / CHUNK).toInt()
             // Keep the window ahead of the reader in flight
             for (k in index until minOf(index + WINDOW, chunkCount)) chunk(k)

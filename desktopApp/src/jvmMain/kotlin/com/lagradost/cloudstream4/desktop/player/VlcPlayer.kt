@@ -33,6 +33,8 @@ data class Track(val id: Int, val name: String)
 data class PlaybackState(
     val playing: Boolean = false,
     val buffering: Boolean = true,
+    /** VLC's buffer fill while buffering, 0 to 100. */
+    val bufferPercent: Float = 0f,
     val timeMs: Long = 0,
     val lengthMs: Long = 0,
     val volume: Int = 100,
@@ -118,7 +120,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) {
                 _state.update { it.copy(playing = false, buffering = false, error = "This source could not be played.") }
 
             override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) =
-                _state.update { it.copy(buffering = newCache < 100f) }
+                _state.update { it.copy(buffering = newCache < 100f, bufferPercent = newCache) }
 
             override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) =
                 _state.update { it.copy(timeMs = newTime, buffering = false) }

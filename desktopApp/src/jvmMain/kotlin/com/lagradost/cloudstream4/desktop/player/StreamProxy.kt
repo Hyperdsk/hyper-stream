@@ -13,7 +13,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import okhttp3.ConnectionPool
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Protocol
@@ -38,8 +45,69 @@ import java.util.concurrent.Executors
  *
  * Only listens on the loopback address and only serves urls registered by this app.
  */
+/** What the player shows while streaming. */
+data class StreamStats(
+    /** Download speed from the hosts, smoothed. */
+    val bytesPerSecond: Long = 0,
+    /** Upstream connections open right now. */
+    val connections: Int = 0,
+    /** Video already fetched and waiting in memory ahead of the player. */
+    val aheadBytes: Long = 0,
+    val totalBytes: Long = 0,
+)
+
 object StreamProxy {
     private val sessions = ConcurrentHashMap<String, Map<String, String>>()
+
+    /** Counts bytes and open connections to the hosts, for [stats]. */
+    internal object meter {
+        val bytes = AtomicLong()
+        val connections = AtomicInteger()
+        fun add(n: Int) { bytes.addAndGet(n.toLong()) }
+        fun open() { connections.incrementAndGet() }
+        fun close() { connections.decrementAndGet() }
+    }
+
+    private val _stats = MutableStateFlow(StreamStats())
+    val stats: StateFlow<StreamStats> by lazy {
+        // Twice a second: speed as a moving average, so the number doesn't jump around
+        segmentScope.launch {
+            var lastBytes = meter.bytes.get()
+            var lastTime = System.nanoTime()
+            var speed = 0.0
+            while (true) {
+                delay(500)
+                val now = System.nanoTime()
+                val bytes = meter.bytes.get()
+                val instant = (bytes - lastBytes) * 1e9 / (now - lastTime).coerceAtLeast(1)
+                speed = if (speed == 0.0) instant else speed * 0.6 + instant * 0.4
+                lastBytes = bytes
+                lastTime = now
+                _stats.value = StreamStats(speed.toLong(), meter.connections.get().coerceAtLeast(0), aheadBytes(), bytes)
+            }
+        }
+        _stats.asStateFlow()
+    }
+
+    /** The stream or HLS position the player read last, for the "ahead" figure. */
+    @Volatile
+    private var lastStream: ParallelStream? = null
+    @Volatile
+    private var lastSegment: Pair<List<String>, Int>? = null
+
+    private fun aheadBytes(): Long {
+        lastStream?.let { return it.aheadBytes() }
+        val (order, position) = lastSegment ?: return 0
+        var bytes = 0L
+        synchronized(segments) {
+            for (url in order.drop(position + 1)) {
+                val segment = segments[url] ?: break
+                if (!segment.isCompleted || segment.isCancelled) break
+                bytes += runCatching { segment.getCompleted().bytes.size.toLong() }.getOrDefault(0)
+            }
+        }
+        return bytes
+    }
 
     /** Sessions whose main url is a single video file, streamed over several connections. */
     private val parallelSessions = ConcurrentHashMap.newKeySet<String>()
@@ -116,6 +184,8 @@ object StreamProxy {
         streams.clear()
         segmentOrder.clear()
         synchronized(segments) { segments.clear() }
+        lastStream = null
+        lastSegment = null
     }
 
     private fun local(session: String, url: String): String {
@@ -160,6 +230,15 @@ object StreamProxy {
             if (exchange.requestMethod == "HEAD") head()
         }.build()
 
+        meter.open()
+        try {
+            passThrough(exchange, request, session)
+        } finally {
+            meter.close()
+        }
+    }
+
+    private fun passThrough(exchange: HttpExchange, request: Request, session: String) {
         app.baseClient.newCall(request).execute().use { response ->
             val body = response.body
             val contentType = response.header("Content-Type") ?: ""
@@ -196,7 +275,17 @@ object StreamProxy {
             }
             // 0 means chunked when the length is unknown
             exchange.sendResponseHeaders(response.code, length ?: 0)
-            exchange.responseBody.use { out -> body.byteStream().use { it.copyTo(out, 64 * 1024) } }
+            exchange.responseBody.use { out ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        meter.add(n)
+                        out.write(buffer, 0, n)
+                    }
+                }
+            }
         }
     }
 
@@ -225,6 +314,8 @@ object StreamProxy {
             exchange.sendResponseHeaders(416, -1)
             return true
         }
+        lastStream = stream
+        lastSegment = null
         stream.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
         exchange.responseHeaders.set("Accept-Ranges", "bytes")
         if (range != null) exchange.responseHeaders.set("Content-Range", "bytes $start-$end/$total")
@@ -256,6 +347,8 @@ object StreamProxy {
      */
     private fun serveSegment(exchange: HttpExchange, session: String, target: String, headers: Map<String, String>): Boolean {
         val (order, position) = segmentOrder[session]?.get(target) ?: return false
+        lastSegment = order to position
+        lastStream = null
         val ahead = (connections / 2).coerceIn(2, 8)
         for (next in order.subList(position + 1, minOf(order.size, position + 1 + ahead))) segment(next, headers)
         val segment = try {
@@ -277,14 +370,31 @@ object StreamProxy {
         segments.getOrPut(url) { segmentScope.async { segmentPermits.withPermit { fetchSegment(url, headers) } } }
     }
 
+    private fun countedBytes(input: java.io.InputStream): ByteArray = input.use {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val n = it.read(buffer)
+            if (n < 0) break
+            meter.add(n)
+            out.write(buffer, 0, n)
+        }
+        out.toByteArray()
+    }
+
     private suspend fun fetchSegment(url: String, headers: Map<String, String>): Segment {
         var attempt = 0
         while (true) {
             try {
                 val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
-                streamClient.newCall(request).execute().use { r ->
-                    if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
-                    return Segment(r.header("Content-Type"), r.body.bytes())
+                meter.open()
+                try {
+                    streamClient.newCall(request).execute().use { r ->
+                        if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+                        return Segment(r.header("Content-Type"), countedBytes(r.body.byteStream()))
+                    }
+                } finally {
+                    meter.close()
                 }
             } catch (e: IOException) {
                 if (++attempt >= 3) throw e

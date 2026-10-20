@@ -105,6 +105,18 @@ class ParallelStreamTest {
             SettingsStore.update { it.copy(streamConnections = 16) }
             peak.set(0)
             url = StreamProxy.proxiedUrl("$base/video.mp4", null, emptyMap(), parallel = true)
+            // Watch the stats while it streams: speed and connections are reported as they happen
+            val stats = StreamProxy.stats
+            var sawSpeed = 0L
+            var sawConnections = 0
+            val watcher = Thread {
+                while (!Thread.currentThread().isInterrupted) {
+                    sawSpeed = maxOf(sawSpeed, stats.value.bytesPerSecond)
+                    sawConnections = maxOf(sawConnections, stats.value.connections)
+                    try { Thread.sleep(50) } catch (_: InterruptedException) { break }
+                }
+            }.apply { start() }
+            val before = stats.value.totalBytes
             t = System.nanoTime()
             val (code, whole) = get(url)
             val parallel = (System.nanoTime() - t) / 1_000_000
@@ -114,7 +126,11 @@ class ParallelStreamTest {
             val (code2, tail) = get(url, "bytes=10000000-")
             assertEquals(206, code2)
             assertContentEquals(video.copyOfRange(10_000_000, video.size), tail)
+            Thread.sleep(700)
+            watcher.interrupt()
             println("24 MB: one connection ${single} ms, parallel ${parallel} ms, peak ${peak.get()} connections")
+            println("Stats seen: top speed ${sawSpeed / 1_000_000} MB/s, ${sawConnections} connections, ${(stats.value.totalBytes - before) / 1_000_000} MB counted")
+            assertTrue(stats.value.totalBytes - before >= video.size, "bytes counted: ${stats.value.totalBytes - before}")
             assertTrue(peak.get() >= 8, "expected parallel connections, peak was ${peak.get()}")
             assertTrue(parallel * 2 < single, "parallel ${parallel} ms should be well under single ${single} ms")
 

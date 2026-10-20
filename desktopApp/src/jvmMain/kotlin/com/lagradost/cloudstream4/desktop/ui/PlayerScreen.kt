@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream4.desktop.player.StreamStats
+import com.lagradost.cloudstream4.desktop.player.StreamProxy
 import androidx.compose.material3.Surface
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -117,6 +119,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val player = model.player
     val playback by (player?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(PlaybackState()) }).collectAsState()
     val settings by SettingsStore.state.collectAsState()
+    val stats by StreamProxy.stats.collectAsState()
     val window = LocalWindowState.current
     val focus = remember { FocusRequester() }
     val holdScope = rememberCoroutineScope()
@@ -264,7 +267,21 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     }
                 }
 
-                playback.buffering && ui.current != null -> CircularProgressIndicator(color = Color.White)
+                playback.buffering && ui.current != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        if (playback.bufferPercent > 0f) "Buffering ${playback.bufferPercent.toInt()}%" else "Loading video…",
+                        color = Color.White,
+                    )
+                    // Speed, connections and what's fetched ahead, so a slow host is visible
+                    if (ui.offlineFile == null) {
+                        statsLine(stats)?.let {
+                            Spacer(Modifier.height(4.dp))
+                            Text(it, color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         }
 
@@ -281,6 +298,17 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         val ep = ui.episodes[ui.index]
                         if (ep.season != null || ep.episode != null || ep.name != null) {
                             Text(ep.label, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (ui.offlineFile == null && ui.current != null) {
+                        statsLine(stats)?.let {
+                            Text(
+                                it,
+                                color = Color.White.copy(alpha = 0.75f),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
                         }
                     }
                     ui.current?.let { i ->
@@ -615,4 +643,14 @@ private fun SkipButton(text: String, onClick: () -> Unit) {
             Icon(Icons.Default.SkipNext, null, modifier = Modifier.size(20.dp))
         }
     }
+}
+
+/** "8.2 MB/s · 16 connections · 48 MB ahead", or null before anything has been fetched. */
+private fun statsLine(stats: StreamStats): String? {
+    if (stats.totalBytes == 0L) return null
+    return listOfNotNull(
+        "${formatBytes(stats.bytesPerSecond)}/s",
+        stats.connections.takeIf { it > 0 }?.let { if (it == 1) "1 connection" else "$it connections" },
+        stats.aheadBytes.takeIf { it > 0 }?.let { "${formatBytes(it)} ahead" },
+    ).joinToString(" · ")
 }
