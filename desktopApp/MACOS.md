@@ -69,6 +69,7 @@ Then copy the PNGs into a `CloudStream.iconset` folder with Apple's names (`icon
 | Stream proxy | `desktop/player/StreamProxy.kt` | Loopback-only HTTP proxy that adds each link's headers and rewrites HLS playlists, since VLC can't send arbitrary headers. |
 | Screens | `desktop/ui/` | Home, Search, Details, Player, Library, Extensions, Settings. One immutable state per screen, as `COMPOSE.md` asks. |
 | Downloads | `desktop/download/DownloadManager.kt` | Direct files resume with Range requests. HLS uses the library's `M3u8Helper2` like Android, including AES-128. Saved to `~/Movies/CloudStream` by default, with subtitles alongside. Downloaded episodes play offline. |
+| Parallel streaming | `desktop/player/ParallelStream.kt`, `StreamProxy.kt` | Direct video files are fetched ahead in 2 MB chunks over up to 16 connections, and HLS segments are prefetched in parallel. Set under Player, Streaming connections. |
 | Skip intros | `desktop/player/SkipStamps.kt` | Same free sources as Android: AniSkip, TheIntroDB, IntroDB. Skip button, optional auto-skip, S key, and the fixed 85-second "Skip opening" button. |
 | Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
 

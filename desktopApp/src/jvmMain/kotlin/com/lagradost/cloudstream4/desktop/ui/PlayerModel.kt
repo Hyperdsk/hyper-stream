@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
@@ -233,7 +234,8 @@ class PlayerModel(val request: PlayRequest, val player: VlcPlayer?) :
         val link = current.links.getOrNull(index) ?: return
         val start = if (current.current == null) pendingStartMs else p.state.value.timeMs
         update { copy(current = index, error = null) }
-        val url = StreamProxy.proxiedUrl(link.url, link.referer, link.headers)
+        // Single video files stream over several connections, playlists stream segment by segment
+        val url = StreamProxy.proxiedUrl(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO)
         val subs = current.subtitles.map { StreamProxy.proxiedUrl(it.url, null, it.headers ?: emptyMap()) }
         p.open(url, start, subs)
     }

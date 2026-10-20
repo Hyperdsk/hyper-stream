@@ -97,6 +97,22 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
         Toggle("Play next episode automatically", settings.autoPlayNext) { v -> SettingsStore.update { it.copy(autoPlayNext = v) } }
         Toggle("Start playing as soon as a source is found", settings.playFirstSource) { v -> SettingsStore.update { it.copy(playFirstSource = v) } }
+        Label("Streaming connections")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1, 4, 8, 16).forEach { n ->
+                FilterChip(
+                    selected = settings.streamConnections == n,
+                    onClick = { SettingsStore.update { it.copy(streamConnections = n) } },
+                    label = { Text(if (n == 1) "1 (off)" else "$n") },
+                )
+            }
+        }
+        Text(
+            "Fetches the video ahead over several connections at once, like downloads, so playback isn't held back " +
+                "by one slow connection. Lower this if a host refuses or playback stalls.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Toggle("Show skip intro buttons", settings.skipButtons) { v -> SettingsStore.update { it.copy(skipButtons = v) } }
         Toggle("Skip intros and recaps automatically", settings.autoSkipIntros && settings.skipButtons) { v ->
             SettingsStore.update { it.copy(autoSkipIntros = v, skipButtons = it.skipButtons || v) }

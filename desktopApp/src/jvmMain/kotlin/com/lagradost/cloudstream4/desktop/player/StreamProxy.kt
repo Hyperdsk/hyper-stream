@@ -2,10 +2,24 @@ package com.lagradost.cloudstream4.desktop.player
 
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
+import okhttp3.ConnectionPool
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Protocol
 import okhttp3.Request
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
@@ -26,6 +40,36 @@ import java.util.concurrent.Executors
  */
 object StreamProxy {
     private val sessions = ConcurrentHashMap<String, Map<String, String>>()
+
+    /** Sessions whose main url is a single video file, streamed over several connections. */
+    private val parallelSessions = ConcurrentHashMap.newKeySet<String>()
+
+    /** "session|url" to its stream, or [NoStream] when the host can't do ranges. */
+    private val streams = ConcurrentHashMap<String, Any>()
+    private object NoStream
+
+    /** For each session's HLS media playlists: segment url to (all segment urls, its position). */
+    private val segmentOrder = ConcurrentHashMap<String, ConcurrentHashMap<String, Pair<List<String>, Int>>>()
+    private class Segment(val contentType: String?, val bytes: ByteArray)
+    private val segmentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val segmentPermits = Semaphore(16)
+    private val segments = object : LinkedHashMap<String, Deferred<Segment>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Deferred<Segment>>) = size > 40
+    }
+
+    /**
+     * Separate HTTP/1.1 connections, like the downloader: over HTTP/2 every parallel request
+     * would share one connection, and per-connection speed limits are what this gets around.
+     */
+    private val streamClient by lazy {
+        app.baseClient.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectionPool(ConnectionPool(48, 2, TimeUnit.MINUTES))
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val connections: Int get() = SettingsStore.state.value.streamConnections
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
@@ -45,8 +89,11 @@ object StreamProxy {
         }
     }
 
-    /** Registers a set of headers and returns the local url VLC should open for [url]. */
-    fun proxiedUrl(url: String, referer: String?, headers: Map<String, String>): String {
+    /**
+     * Registers a set of headers and returns the local url VLC should open for [url].
+     * [parallel]: [url] is a single video file, stream it over several connections.
+     */
+    fun proxiedUrl(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean = false): String {
         val all = buildMap {
             put("User-Agent", USER_AGENT)
             if (!referer.isNullOrBlank()) put("Referer", referer)
@@ -58,10 +105,18 @@ object StreamProxy {
         }
         val session = UUID.randomUUID().toString().replace("-", "")
         sessions[session] = all
+        if (parallel) parallelSessions += session
         return local(session, url)
     }
 
-    fun clear() = sessions.clear()
+    fun clear() {
+        sessions.clear()
+        parallelSessions.clear()
+        streams.values.forEach { (it as? ParallelStream)?.close() }
+        streams.clear()
+        segmentOrder.clear()
+        synchronized(segments) { segments.clear() }
+    }
 
     private fun local(session: String, url: String): String {
         // Keep the original file name at the end, so VLC can guess the format from it
@@ -93,9 +148,15 @@ object StreamProxy {
             return
         }
 
+        val range = exchange.requestHeaders.getFirst("Range")
+        if (connections > 1 && exchange.requestMethod == "GET") {
+            if (session in parallelSessions && target == original && serveParallel(exchange, session, target, headers, range)) return
+            if (range == null && serveSegment(exchange, session, target, headers)) return
+        }
+
         val request = Request.Builder().url(target).apply {
             headers.forEach { (k, v) -> header(k, v) }
-            exchange.requestHeaders.getFirst("Range")?.let { header("Range", it) }
+            range?.let { header("Range", it) }
             if (exchange.requestMethod == "HEAD") head()
         }.build()
 
@@ -139,12 +200,113 @@ object StreamProxy {
         }
     }
 
+    /** Serves a video file through [ParallelStream]. False when the host can't do ranges. */
+    private fun serveParallel(exchange: HttpExchange, session: String, target: String, headers: Map<String, String>, range: String?): Boolean {
+        val stream = streams.computeIfAbsent("$session|$target") {
+            runCatching {
+                val probe = Request.Builder().url(target).apply {
+                    headers.forEach { (k, v) -> header(k, v) }
+                    header("Range", "bytes=0-0")
+                }.build()
+                streamClient.newCall(probe).execute().use { r ->
+                    val total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull()
+                    val type = r.header("Content-Type")
+                    // Small files and pages aren't worth splitting
+                    if (r.code == 206 && total != null && total >= 4L shl 20 && type?.startsWith("text/") != true) {
+                        ParallelStream(streamClient, target, headers, total, type, connections)
+                    } else NoStream
+                }
+            }.getOrDefault(NoStream)
+        } as? ParallelStream ?: return false
+
+        val total = stream.total
+        val (start, end) = parseRange(range, total) ?: run {
+            exchange.responseHeaders.set("Content-Range", "bytes */$total")
+            exchange.sendResponseHeaders(416, -1)
+            return true
+        }
+        stream.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
+        exchange.responseHeaders.set("Accept-Ranges", "bytes")
+        if (range != null) exchange.responseHeaders.set("Content-Range", "bytes $start-$end/$total")
+        exchange.sendResponseHeaders(if (range != null) 206 else 200, end - start + 1)
+        try {
+            exchange.responseBody.use { stream.serve(start, end, it) }
+        } catch (_: IOException) {
+            // The player hung up, it does that on every seek
+        }
+        return true
+    }
+
+    /** "bytes=a-b", "bytes=a-" or "bytes=-n" to an inclusive range, or null when it's past the end. */
+    internal fun parseRange(range: String?, total: Long): Pair<Long, Long>? {
+        if (range == null) return 0L to total - 1
+        val spec = range.removePrefix("bytes=").substringBefore(',').trim()
+        val a = spec.substringBefore('-').trim()
+        val b = spec.substringAfter('-', "").trim()
+        val (start, end) = when {
+            a.isEmpty() -> (total - (b.toLongOrNull() ?: return null)).coerceAtLeast(0) to total - 1
+            else -> (a.toLongOrNull() ?: return null) to (b.toLongOrNull()?.coerceAtMost(total - 1) ?: (total - 1))
+        }
+        return if (start in 0..end && start < total) start to end else null
+    }
+
+    /**
+     * Serves an HLS segment, fetching the next few in parallel while the player plays this one.
+     * False when [target] isn't a known segment or fetching failed, so it goes the normal way.
+     */
+    private fun serveSegment(exchange: HttpExchange, session: String, target: String, headers: Map<String, String>): Boolean {
+        val (order, position) = segmentOrder[session]?.get(target) ?: return false
+        val ahead = (connections / 2).coerceIn(2, 8)
+        for (next in order.subList(position + 1, minOf(order.size, position + 1 + ahead))) segment(next, headers)
+        val segment = try {
+            runBlocking { withTimeout(60_000) { segment(target, headers).await() } }
+        } catch (_: Throwable) {
+            synchronized(segments) { segments.remove(target) }
+            return false
+        }
+        segment.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
+        exchange.sendResponseHeaders(200, segment.bytes.size.toLong())
+        try {
+            exchange.responseBody.use { it.write(segment.bytes) }
+        } catch (_: IOException) {
+        }
+        return true
+    }
+
+    private fun segment(url: String, headers: Map<String, String>): Deferred<Segment> = synchronized(segments) {
+        segments.getOrPut(url) { segmentScope.async { segmentPermits.withPermit { fetchSegment(url, headers) } } }
+    }
+
+    private suspend fun fetchSegment(url: String, headers: Map<String, String>): Segment {
+        var attempt = 0
+        while (true) {
+            try {
+                val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+                streamClient.newCall(request).execute().use { r ->
+                    if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+                    return Segment(r.header("Content-Type"), r.body.bytes())
+                }
+            } catch (e: IOException) {
+                if (++attempt >= 3) throw e
+                kotlinx.coroutines.delay(500L * attempt)
+            }
+        }
+    }
+
     private val uriAttribute = Regex("URI=\"([^\"]+)\"")
 
     /** Points every uri in the playlist at this proxy, resolved against the playlist's own url. */
     internal fun rewritePlaylist(text: String, playlistUrl: String, session: String): String {
         val base = URI(playlistUrl)
         fun resolve(ref: String): String = local(session, base.resolve(ref.trim()).toString())
+
+        // A media playlist: remember the segment order, for fetching ahead
+        if (text.contains("#EXTINF")) {
+            val order = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+                .mapNotNull { runCatching { base.resolve(it).toString() }.getOrNull() }.toList()
+            val index = segmentOrder.getOrPut(session) { ConcurrentHashMap() }
+            order.forEachIndexed { i, url -> index[url] = order to i }
+        }
 
         return text.lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()

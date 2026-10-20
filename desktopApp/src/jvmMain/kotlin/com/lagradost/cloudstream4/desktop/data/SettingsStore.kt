@@ -32,6 +32,8 @@ data class AppSettings(
     @JsonProperty("downloadFolder") val downloadFolder: String? = null,
     /** Connections per download for hosts that allow it, like Internet Download Manager. */
     @JsonProperty("downloadConnections") val downloadConnections: Int = 8,
+    /** Connections used to stream one video, fetching ahead in parallel. 1 turns it off. */
+    @JsonProperty("streamConnections") val streamConnections: Int = 16,
     /** Files downloading at the same time. The rest wait and start in order as others finish. */
     @JsonProperty("parallelDownloads") val parallelDownloads: Int = 2,
 )
