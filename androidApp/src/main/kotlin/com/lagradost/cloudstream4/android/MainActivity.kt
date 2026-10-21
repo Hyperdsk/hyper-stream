@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         AndroidHost.attach(this)
         enableEdgeToEdge()
+        // Volume buttons change the media volume, the same one the player's swipe changes
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         val app = application as CloudStreamApplication
         app.startExtensions()
         val engine = app.engine

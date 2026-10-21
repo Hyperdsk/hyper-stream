@@ -116,6 +116,9 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             )
         }
         Toggle("Play next episode automatically", settings.autoPlayNext) { v -> SettingsStore.update { it.copy(autoPlayNext = v) } }
+        if (Platform.isTouch) {
+            Toggle("Swipe for brightness (left) and volume (right)", settings.swipeControls) { v -> SettingsStore.update { it.copy(swipeControls = v) } }
+        }
         Toggle("Start playing as soon as a source is found", settings.playFirstSource) { v -> SettingsStore.update { it.copy(playFirstSource = v) } }
         Label("Streaming connections")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

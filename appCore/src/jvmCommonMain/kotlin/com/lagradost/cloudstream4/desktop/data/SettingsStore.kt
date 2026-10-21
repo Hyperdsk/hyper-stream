@@ -46,6 +46,8 @@ data class AppSettings(
     @JsonProperty("parallelDownloads") val parallelDownloads: Int = 2,
     /** How the picture fills the screen: a VideoFit name. Kept between videos, like the Android app's resize mode. */
     @JsonProperty("videoFit") val videoFit: String = "Fit",
+    /** Touch screens: swipe up and down on the left of the player for brightness, on the right for volume. */
+    @JsonProperty("swipeControls") val swipeControls: Boolean = true,
 )
 
 object SettingsStore {

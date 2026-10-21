@@ -1,9 +1,15 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.filled.BrightnessMedium
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import com.lagradost.cloudstream4.desktop.player.DeviceControls
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.Offset
 import com.lagradost.cloudstream4.desktop.player.VideoFit
@@ -192,6 +198,18 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
         pan = clampPan(pan, zoom)
         if (announce) pictureFlash = "Zoom ${(zoom * 100).roundToInt()}%" to System.nanoTime()
     }
+    // Brightness and volume swipes: which one (true = brightness) and its level, while it shows
+    var level by remember { mutableStateOf<Pair<Boolean, Float>?>(null) }
+    var levelShownAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(levelShownAt) {
+        if (levelShownAt != 0L) {
+            delay(900)
+            level = null
+        }
+    }
+    // Brightness is only for watching: the phone's setting comes back when the player closes
+    DisposableEffect(Unit) { onDispose { DeviceControls.resetBrightness() } }
+
     fun setFit(f: VideoFit) {
         SettingsStore.update { it.copy(videoFit = f.name) }
         zoom = 1f
@@ -303,13 +321,53 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                 Modifier.fillMaxSize()
                     // Touch: pinch to zoom, and drag a zoomed picture around
                     .then(
-                        if (touch) Modifier.pointerInput(player) {
-                            detectTransformGestures { _, change, zoomChange, _ ->
-                                if (zoomChange == 1f && zoom <= 1f) return@detectTransformGestures
-                                // A pinch or drag isn't a hold for 2x
-                                hold.release(player)
-                                setZoom(zoom * zoomChange, announce = false)
-                                pan = clampPan(pan + change, zoom)
+                        if (touch) Modifier.pointerInput(player, settings.swipeControls) {
+                            val swipes = settings.swipeControls
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val brightnessSide = down.position.x < size.width / 2
+                                // 0: not decided yet, 1: brightness or volume swipe, 2: pinch or pan
+                                var mode = 0
+                                var moved = Offset.Zero
+                                var value = 0f
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val fingers = event.changes.count { it.pressed }
+                                    if (mode != 1 && (fingers >= 2 || zoom > 1f)) {
+                                        // Pinch to zoom, and drag a zoomed picture around
+                                        val zoomChange = event.calculateZoom()
+                                        val change = event.calculatePan()
+                                        if (zoomChange != 1f || change != Offset.Zero) {
+                                            mode = 2
+                                            // A pinch or drag isn't a hold for 2x
+                                            hold.release(player)
+                                            setZoom(zoom * zoomChange, announce = false)
+                                            pan = clampPan(pan + change, zoom)
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    } else if (mode != 2 && swipes) {
+                                        val change = event.calculatePan()
+                                        moved += change
+                                        if (mode == 0 && kotlin.math.abs(moved.y) > viewConfiguration.touchSlop &&
+                                            kotlin.math.abs(moved.y) > kotlin.math.abs(moved.x) * 1.5f
+                                        ) {
+                                            val start = if (brightnessSide) DeviceControls.brightness() else DeviceControls.volume()
+                                            if (start != null) {
+                                                mode = 1
+                                                value = start
+                                                hold.release(player)
+                                            }
+                                        }
+                                        if (mode == 1) {
+                                            // A full-height swipe goes from nothing to full
+                                            value = (value - change.y / size.height * 1.2f).coerceIn(0f, 1f)
+                                            if (brightnessSide) DeviceControls.setBrightness(value) else DeviceControls.setVolume(value)
+                                            level = brightnessSide to value
+                                            levelShownAt = System.nanoTime()
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                } while (event.changes.any { it.pressed })
                             }
                         } else Modifier
                     )
@@ -364,6 +422,19 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     .clickable { setZoom(1f) }
                     .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
                     .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+
+        level?.let { (brightness, value) ->
+            LevelIndicator(
+                icon = when {
+                    brightness -> Icons.Default.BrightnessMedium
+                    value == 0f -> Icons.AutoMirrored.Filled.VolumeOff
+                    else -> Icons.AutoMirrored.Filled.VolumeUp
+                },
+                value = value,
+                // Next to the side being swiped
+                modifier = Modifier.align(if (brightness) Alignment.CenterStart else Alignment.CenterEnd).padding(horizontal = 40.dp),
             )
         }
 
@@ -939,3 +1010,20 @@ private const val SLOW_SOURCE_BYTES = 200L * 1024
 
 /** Zoom levels in the menu and for the Z key. */
 private val ZOOM_STEPS = listOf(1f, 1.25f, 1.5f, 2f, 3f)
+
+/** The level bar shown while swiping for brightness or volume. */
+@Composable
+private fun LevelIndicator(icon: ImageVector, value: Float, modifier: Modifier) {
+    Column(
+        modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp)).padding(horizontal = 12.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("${(value * 100).roundToInt()}", color = Color.White, style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(8.dp))
+        Box(Modifier.width(6.dp).height(140.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(3.dp)), contentAlignment = Alignment.BottomCenter) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(value.coerceIn(0f, 1f)).background(Color.White, RoundedCornerShape(3.dp)))
+        }
+        Spacer(Modifier.height(10.dp))
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
+    }
+}
