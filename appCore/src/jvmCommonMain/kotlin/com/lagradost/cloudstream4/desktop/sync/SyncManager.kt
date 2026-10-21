@@ -64,6 +64,8 @@ data class SyncUiState(
     val tvCodeExpiresAt: Long? = null,
     val lastSyncedAt: Long? = null,
     val error: String? = null,
+    /** A short confirmation, such as a saved password. */
+    val notice: String? = null,
 ) {
     val signedIn: Boolean get() = email != null
 }
@@ -188,6 +190,52 @@ object SyncManager {
             throw e
         } catch (t: Throwable) {
             _ui.update { it.copy(busy = false, error = t.message ?: "That code didn't work.") }
+        }
+    }
+
+    /** Signs in with email and password, or creates the account when [create]. */
+    fun signInWithPassword(email: String, password: String, create: Boolean) = scope.launch {
+        val address = email.trim()
+        when {
+            !address.contains('@') -> { _ui.update { it.copy(error = "Enter your email address.") }; return@launch }
+            password.length < 6 -> { _ui.update { it.copy(error = "Use a password of at least 6 characters.") }; return@launch }
+        }
+        _ui.update { it.copy(busy = true, error = null) }
+        try {
+            val session = if (create) SupabaseClient.signUp(address, password) else SupabaseClient.signInWithPassword(address, password)
+            signedIn(session, address)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            val message = t.message.orEmpty()
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    error = when {
+                        "Invalid login" in message -> "Wrong email or password. Accounts made with an email link have no password until you set one."
+                        "already registered" in message -> "There's already an account for this email. Sign in instead."
+                        else -> (if (create) "Couldn't create the account: " else "Couldn't sign in: ") + message
+                    },
+                )
+            }
+        }
+    }
+
+    /** Gives a signed-in account a password, for signing in on devices without email. */
+    fun setPassword(password: String) = scope.launch {
+        if (password.length < 6) {
+            _ui.update { it.copy(error = "Use a password of at least 6 characters.") }
+            return@launch
+        }
+        val session = session() ?: return@launch
+        _ui.update { it.copy(busy = true, error = null) }
+        try {
+            SupabaseClient.setPassword(session, password)
+            _ui.update { it.copy(busy = false, notice = "Password saved. You can sign in with it on your other devices.") }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _ui.update { it.copy(busy = false, error = "Couldn't save the password: ${t.message}") }
         }
     }
 

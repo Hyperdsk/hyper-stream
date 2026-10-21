@@ -14,6 +14,8 @@ class CloudStreamApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidHost.init(this)
+        // The library's web view helpers (WebViewResolver, used by CloudflareKiller and many extensions) need a context
+        com.lagradost.api.setContext(this)
         // Continue watching on the TV home screen
         com.lagradost.cloudstream4.desktop.WatchNext.start()
         // Read settings and history, and set up the JSON parser, while the first screen is being

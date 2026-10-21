@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.bundles.compose)
     implementation(libs.activity.compose)
     implementation(libs.appcompat) // Extensions cast their load context to AppCompatActivity
+    implementation(libs.material) // Extensions build their settings screens with Material Components (bottom sheets)
     implementation(libs.core.ktx)
     implementation(libs.kotlinx.collections.immutable)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:${libs.versions.kotlinxCoroutines.get()}")

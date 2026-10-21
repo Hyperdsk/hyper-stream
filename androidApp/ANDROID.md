@@ -32,5 +32,5 @@ One APK runs on phones, tablets and Android TV (it shows in the TV launcher with
 - Seek bar thumbnails (the Mac app uses a second VLC player).
 - Parallel connections while streaming: ExoPlayer fetches over one connection.
 - Choosing a download folder.
-- Extensions that use app classes beyond `Plugin`, `CommonActivity` and `RepositoryManager` fail to load, with the missing class named on the Extensions screen.
+- Extensions that use CloudStream app classes this app doesn't provide fail to load, with the missing class named on the Extensions screen. Provided: `Plugin`, `CommonActivity`, `RepositoryManager`, `CloudStreamApp` (context and saved values), `DataStore`, `MainActivity` events, `CloudflareKiller` and signed-out account-sync classes, plus AppCompat and Material Components for extension settings screens.
 - Picture-in-picture, Chromecast, account sync.

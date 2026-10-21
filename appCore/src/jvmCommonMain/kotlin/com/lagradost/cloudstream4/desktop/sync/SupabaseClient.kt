@@ -99,6 +99,21 @@ object SupabaseClient {
         )
     }
 
+    /** Creates an account with a password. Email confirmation is off in the project, so it's ready at once. */
+    suspend fun signUp(email: String, password: String): SyncSession {
+        val result = call(request("/auth/v1/signup").post(body(mapOf("email" to email, "password" to password))))
+        if (result?.get("access_token") == null) throw IOException("Account created. Confirm it from the email Supabase sent, then sign in.")
+        return session(result, email)
+    }
+
+    suspend fun signInWithPassword(email: String, password: String): SyncSession =
+        session(call(request("/auth/v1/token?grant_type=password").post(body(mapOf("email" to email, "password" to password)))), email)
+
+    /** Sets or changes this account's password, so it can sign in with one on other devices. */
+    suspend fun setPassword(session: SyncSession, password: String) {
+        call(request("/auth/v1/user").header("Authorization", "Bearer ${session.accessToken}").put(body(mapOf("password" to password))))
+    }
+
     /** A one-time 8-digit code that signs a TV in to this account, for 10 minutes. */
     suspend fun createTvCode(session: SyncSession): String =
         call(request("/rest/v1/rpc/hs_create_tv_code").header("Authorization", "Bearer ${session.accessToken}").post(body(emptyMap<String, String>())))

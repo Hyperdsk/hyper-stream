@@ -36,6 +36,9 @@ fun SyncSettings() {
     val ui by SyncManager.ui.collectAsState()
     var email by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
+    // Signed out: "link" (or "code" on a TV) or "password"
+    var mode by remember { mutableStateOf(if (com.lagradost.cloudstream4.desktop.Platform.isTv) "code" else "link") }
+    var settingPassword by remember { mutableStateOf(false) }
     val body = MaterialTheme.typography.bodySmall
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
 
@@ -59,8 +62,18 @@ fun SyncSettings() {
                     if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
                         OutlinedButton(onClick = { SyncManager.showTvCode() }, enabled = !ui.busy) { Text("Sign in a TV") }
                     }
+                    if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
+                        OutlinedButton(onClick = { settingPassword = !settingPassword }) { Text("Set a password") }
+                    }
                     OutlinedButton(onClick = { SyncManager.signOut() }) { Text("Sign out") }
                 }
+                if (settingPassword) {
+                    var password by remember { mutableStateOf("") }
+                    Text("For signing in on devices without your email, such as a TV.", style = body, color = dim)
+                    PasswordField(password, { password = it }, onDone = { SyncManager.setPassword(password) })
+                    Button(onClick = { SyncManager.setPassword(password); settingPassword = false }, enabled = password.length >= 6 && !ui.busy) { Text("Save password") }
+                }
+                ui.notice?.let { Text(it, style = body, color = MaterialTheme.colorScheme.primary) }
                 val code = ui.tvCode
                 val expires = ui.tvCodeExpiresAt
                 if (code != null && expires != null) {
@@ -81,7 +94,31 @@ fun SyncSettings() {
                 }
             }
 
+            mode == "password" -> {
+                ModeChips(mode) { mode = it }
+                Text("Sign in with your email and password, or create an account. No email is sent.", style = body, color = dim)
+                TvTextFieldBox(Modifier.widthIn(max = 480.dp).fillMaxWidth()) { fieldModifier ->
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                        modifier = fieldModifier,
+                    )
+                }
+                PasswordField(code, { code = it }, onDone = { SyncManager.signInWithPassword(email, code, create = false) })
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val ready = email.contains('@') && code.length >= 6 && !ui.busy
+                    Button(onClick = { SyncManager.signInWithPassword(email, code, create = false) }, enabled = ready) {
+                        Text(if (ui.busy) "Signing in…" else "Sign in")
+                    }
+                    OutlinedButton(onClick = { SyncManager.signInWithPassword(email, code, create = true) }, enabled = ready) { Text("Create account") }
+                }
+            }
+
             com.lagradost.cloudstream4.desktop.Platform.isTv -> {
+                ModeChips(mode) { mode = it }
                 // TVs can't open an email, so a signed-in phone or Mac gives them a code
                 Text(
                     "Sign in with your phone or Mac: open Hyper Stream there, go to Settings, Sync, and choose Sign in a TV. " +
@@ -131,6 +168,7 @@ fun SyncSettings() {
             }
 
             else -> {
+                ModeChips(mode) { mode = it }
                 Text(
                     "Keep watch progress, your library, settings and extensions the same on your Mac, phone and TV. " +
                         "Optional: everything works without it.",
@@ -163,5 +201,36 @@ private fun ago(ms: Long): String {
         minutes < 60 -> "$minutes min ago"
         minutes < 24 * 60 -> "${minutes / 60} h ago"
         else -> "${minutes / (24 * 60)} days ago"
+    }
+}
+
+/** How to sign in: an emailed link (a code from a phone or Mac on TVs), or a password. */
+@Composable
+private fun ModeChips(mode: String, onMode: (String) -> Unit) {
+    val tv = com.lagradost.cloudstream4.desktop.Platform.isTv
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val first = if (tv) "code" else "link"
+        androidx.compose.material3.FilterChip(
+            selected = mode == first,
+            onClick = { onMode(first) },
+            label = { Text(if (tv) "Code from phone or Mac" else "Email link") },
+        )
+        androidx.compose.material3.FilterChip(selected = mode == "password", onClick = { onMode("password") }, label = { Text("Password") })
+    }
+}
+
+@Composable
+private fun PasswordField(value: String, onValue: (String) -> Unit, onDone: () -> Unit) {
+    TvTextFieldBox(Modifier.widthIn(max = 480.dp).fillMaxWidth()) { fieldModifier ->
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValue,
+            label = { Text("Password") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (value.length >= 6) onDone() }),
+            modifier = fieldModifier,
+        )
     }
 }

@@ -47,6 +47,9 @@ class SyncManagerTest {
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-1", "email" to "me@example.com")))
         }
         createContext("/auth/v1/user") { ex -> ex.json(mapOf("id" to "user-1", "email" to "me@example.com")) }
+        createContext("/auth/v1/signup") { ex ->
+            ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-2", "email" to "new@example.com")))
+        }
         createContext("/rest/v1/rpc/hs_push") { ex ->
             val items = jsonMapper.readTree(ex.requestBody)["items"]
             synchronized(rows) {
@@ -135,6 +138,12 @@ class SyncManagerTest {
 
             SyncManager.signOut().join()
             assertTrue(!SyncManager.ui.value.signedIn)
+
+            // An account with a password, for people who can't get emails
+            SyncManager.signInWithPassword("new@example.com", "secret1", create = true).join()
+            withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
+            assertEquals("new@example.com", SyncManager.ui.value.email)
+            SyncManager.signOut().join()
 
             // Opening the emailed link on the Mac: it returns to the app's local page, which hands over the session
             com.lagradost.cloudstream4.desktop.sync.SignInRedirect.prepare()

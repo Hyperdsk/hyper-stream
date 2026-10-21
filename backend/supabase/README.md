@@ -23,9 +23,12 @@ code (or the sign-in link from the email, pasted in).
   (`functions/tv-sign-in`, deployed with "Verify JWT" off), which signs the TV in to the same account.
 - "Confirm email" is off (Authentication, Sign In / Providers), so a new account works right away.
 
+- **Password:** anyone can create an account with an email and password in the app, on any device,
+  with no email sent. Accounts made with a link can set a password under Settings, Sync.
+
 Supabase's built-in email sender only sends to members of the project's organization, a few per
-hour. For other people to sign in, set up custom SMTP under Authentication, Emails (Resend, Brevo
-and others have free plans).
+hour, so other people should use a password, or you can set up custom SMTP under Authentication,
+Emails (Resend, Brevo and others have free plans) to send them links.
 
 ## How sync works
 
