@@ -62,7 +62,10 @@ More detail:
 - [Android, tablets and TV](androidApp/ANDROID.md): what differs from the desktop app, and what isn't done yet.
 - [Sync backend](backend/supabase/README.md): setting up your own Supabase project.
 
-Pushes to `master` build every platform on GitHub Actions; a `v*` tag also publishes a release.
+Pushes to `master` build every platform on GitHub Actions, as downloadable artifacts. Releases are
+built on a Mac and published with `scripts/release.sh` (see `scripts/release.sh --help`), without
+GitHub Actions: it makes the macOS apps and the Android APK, bumps the version, tags it and
+publishes the release. Windows and Linux builds come from GitHub Actions only.
 
 ### Project layout
 
