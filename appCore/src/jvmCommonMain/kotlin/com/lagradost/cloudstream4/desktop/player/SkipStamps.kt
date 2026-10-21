@@ -1,7 +1,6 @@
 package com.lagradost.cloudstream4.desktop.player
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.getImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.getMalId
@@ -10,11 +9,14 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.isMovie
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
+import com.lagradost.cloudstream4.desktop.meta.Imdb
 import com.lagradost.cloudstream4.desktop.ui.PlayableEpisode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.ConcurrentHashMap
 
 /** Same kinds of sections as the Android app's videoskip package. */
@@ -46,10 +48,43 @@ data class VideoSkipStamp(
  * the same free sources in the same order: AniSkip (anime, by MyAnimeList id), TheIntroDB (by TMDB
  * or IMDb id) and IntroDB (series, by IMDb id). The first source with results wins.
  * Anime-Skip is left out because it needs an account.
+ *
+ * Unlike the Android app, a title without ids still gets skip times: most extensions give none, so
+ * the IMDb id comes from the IMDb match the details page uses, and an anime's MyAnimeList id from
+ * an AniList search by title.
  */
 object SkipStamps {
     private abstract class Source(val name: String, val types: Set<TvType>) {
-        abstract suspend fun stamps(data: LoadResponse, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>?
+        abstract suspend fun stamps(data: LoadResponse, ids: Ids, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>?
+    }
+
+    /** The title's ids, from the extension or looked up the first time a source asks. */
+    private class Ids(private val data: LoadResponse, private val season: Int?) {
+        private var mal: Int? = null
+        private var malDone = false
+        private var imdb: String? = null
+        private var imdbDone = false
+
+        val tmdb: String? get() = runCatching { data.getTMDbId() }.getOrNull()?.takeIf { it.isNotBlank() }
+
+        suspend fun mal(): Int? {
+            if (!malDone) {
+                malDone = true
+                mal = runCatching { data.getMalId() }.getOrNull()?.toIntOrNull()
+                    // Each anime season has its own MyAnimeList entry, so a title search only fits the first
+                    ?: if ((season ?: 1) == 1) aniListMalId(data.name, data.year) else null
+            }
+            return mal
+        }
+
+        suspend fun imdb(): String? {
+            if (!imdbDone) {
+                imdbDone = true
+                imdb = runCatching { data.getImdbId() }.getOrNull()?.takeIf { it.startsWith("tt") }
+                    ?: runCatching { Imdb.forTitle(data)?.id }.getOrNull()
+            }
+            return imdb
+        }
     }
 
     private val sources = listOf(AniSkip, TheIntroDb, IntroDb)
@@ -63,11 +98,12 @@ object SkipStamps {
     ): List<VideoSkipStamp> = withContext(Dispatchers.IO) {
         val key = "${data.apiName}|${episode.data}"
         cache[key]?.let { return@withContext it }
+        val ids = Ids(data, episode.season)
         for (source in sources) {
             if (data.type !in source.types) continue
             val stamps = try {
                 // A slow source must not hold up the others
-                withTimeoutOrNull(10_000) { source.stamps(data, episode, durationMs) }
+                withTimeoutOrNull(10_000) { source.stamps(data, ids, episode, durationMs) }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -86,14 +122,33 @@ object SkipStamps {
 
     private suspend inline fun <reified T> get(url: String): T = jsonMapper.readValue(app.get(url).text, T::class.java)
 
+    private fun normalize(title: String) = title.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+
+    /** The MyAnimeList id of the anime called [name], from AniList's free API, when the title matches. */
+    private suspend fun aniListMalId(name: String, year: Int?): Int? {
+        val query = "query(\$s: String) { Page(perPage: 5) { media(search: \$s, type: ANIME) { idMal seasonYear title { romaji english } synonyms } } }"
+        val body = jsonMapper.writeValueAsString(mapOf("query" to query, "variables" to mapOf("s" to name)))
+        val json = jsonMapper.readTree(
+            app.post(
+                "https://graphql.anilist.co",
+                requestBody = body.toRequestBody("application/json".toMediaType()),
+            ).text,
+        )
+        val target = normalize(name)
+        return json.path("data").path("Page").path("media").firstOrNull { m ->
+            val titles = listOf(m.path("title").path("romaji").asText(), m.path("title").path("english").asText()) + m.path("synonyms").map { it.asText() }
+            val y = m.path("seasonYear").takeIf { it.isNumber }?.asInt()
+            titles.any { normalize(it) == target } && (year == null || y == null || kotlin.math.abs(year - y) <= 1)
+        }?.path("idMal")?.takeIf { it.isNumber }?.asInt()
+    }
+
     private object AniSkip : Source("AniSkip", setOf(TvType.Anime, TvType.OVA)) {
         data class Response(@JsonProperty("found") val found: Boolean = false, @JsonProperty("results") val results: List<Stamp>? = null)
         data class Stamp(@JsonProperty("interval") val interval: Interval, @JsonProperty("skipType") val skipType: String)
         data class Interval(@JsonProperty("startTime") val startTime: Double, @JsonProperty("endTime") val endTime: Double)
 
-        override suspend fun stamps(data: LoadResponse, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
-            if (data !is AnimeLoadResponse) return null
-            val malId = data.getMalId()?.toIntOrNull() ?: return null
+        override suspend fun stamps(data: LoadResponse, ids: Ids, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
+            val malId = ids.mal() ?: return null
             val number = episode.episode ?: return null
             val url = "https://api.aniskip.com/v2/skip-times/$malId/$number" +
                 "?types[]=ed&types[]=mixed-ed&types[]=mixed-op&types[]=op&types[]=recap&episodeLength=${durationMs / 1000L}"
@@ -124,8 +179,8 @@ object SkipStamps {
         )
         data class Stamp(@JsonProperty("start_ms") val startMs: Long? = null, @JsonProperty("end_ms") val endMs: Long? = null)
 
-        override suspend fun stamps(data: LoadResponse, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
-            val id = data.getTMDbId()?.let { "tmdb_id=$it" } ?: data.getImdbId()?.let { "imdb_id=$it" } ?: return null
+        override suspend fun stamps(data: LoadResponse, ids: Ids, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
+            val id = ids.tmdb?.let { "tmdb_id=$it" } ?: ids.imdb()?.let { "imdb_id=$it" } ?: return null
             val url = if (data.isMovie()) {
                 "https://api.theintrodb.org/v4/media?$id"
             } else {
@@ -150,10 +205,10 @@ object SkipStamps {
         )
         data class Segment(@JsonProperty("start_ms") val startMs: Long? = null, @JsonProperty("end_ms") val endMs: Long? = null)
 
-        override suspend fun stamps(data: LoadResponse, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
+        override suspend fun stamps(data: LoadResponse, ids: Ids, episode: PlayableEpisode, durationMs: Long): List<SkipStamp>? {
             val season = episode.season ?: return null
             val number = episode.episode ?: return null
-            val imdbId = data.getImdbId() ?: return null
+            val imdbId = ids.imdb() ?: return null
             val r = get<Response>("https://api.introdb.app/segments?imdb_id=$imdbId&season=$season&episode=$number")
             fun Segment?.stamp(type: SkipType) = this?.let { s -> SkipStamp(type, s.startMs ?: return@let null, s.endMs ?: return@let null) }
             return listOfNotNull(r.intro.stamp(SkipType.Opening), r.recap.stamp(SkipType.Recap), r.outro.stamp(SkipType.Ending))

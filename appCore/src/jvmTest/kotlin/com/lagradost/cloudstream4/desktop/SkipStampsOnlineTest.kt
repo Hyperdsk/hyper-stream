@@ -56,5 +56,17 @@ class SkipStampsOnlineTest {
         assertTrue(intro.any { it.stamp.type.isIntro }, "expected an intro, got $intro")
         // Credits running to the end become "Next Episode"
         assertTrue(intro.filter { !it.stamp.type.isIntro && 2_900_000 - it.stamp.endMs < 20_000 }.all { it.skipToNextEpisode })
+
+        // Most extensions give no ids: the title is looked up instead (IMDb for series, AniList for anime)
+        System.setProperty("cloudstream.dataDir", java.nio.file.Files.createTempDirectory("cs-skip").toString())
+        val noIds = api.newTvSeriesLoadResponse("Breaking Bad", "https://example.com/bb-noid", TvType.TvSeries, emptyList()) { year = 2008 }
+        val found = SkipStamps.find(noIds, PlayableEpisode("bb-noid-1-2", null, 1, 2), 2_900_000, hasNextEpisode = true)
+        println("Series without ids: $found")
+        assertTrue(found.any { it.stamp.type.isIntro }, "expected an intro from the IMDb match, got $found")
+
+        val animeNoIds = api.newAnimeLoadResponse("One Piece", "https://example.com/op-noid", TvType.Anime) { year = 1999 }
+        val anime2 = SkipStamps.find(animeNoIds, PlayableEpisode("op-noid-1000", null, null, 1000), 1_430_000, hasNextEpisode = true)
+        println("Anime without ids: $anime2")
+        assertTrue(anime2.any { it.stamp.type == SkipType.Opening && it.source == "AniSkip" }, "expected AniSkip's opening via AniList, got $anime2")
     }
 }

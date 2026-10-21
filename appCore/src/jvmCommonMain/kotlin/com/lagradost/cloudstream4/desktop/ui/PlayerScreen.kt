@@ -154,6 +154,11 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var openMenu by remember { mutableStateOf<String?>(null) }
 
+    // The intro, recap or credits the playhead is in, from the skip databases. Its Skip button shows
+    // for the whole section, unless auto-skip is about to jump over it
+    val activeSkip = model.activeSkip(playback.timeMs)
+    val showSkip = activeSkip != null && openMenu == null && !(settings.autoSkipIntros && activeSkip.stamp.type.isIntro)
+
     val fullscreen = window?.isFullscreen == true
     fun toggleFullscreen() {
         window?.setFullscreen(!fullscreen)
@@ -269,6 +274,11 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     if (tv) {
                         val center = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
                         val arrow = e.key == Key.DirectionLeft || e.key == Key.DirectionRight || e.key == Key.DirectionUp || e.key == Key.DirectionDown
+                        // OK presses the Skip button while it shows over the picture, as on streaming apps
+                        if (center && showSkip && !controlsVisible) {
+                            model.skip(activeSkip!!)
+                            return@onPreviewKeyEvent true
+                        }
                         if (controlsVisible && (center || arrow)) {
                             poke()
                             return@onPreviewKeyEvent false
@@ -641,20 +651,9 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             }
         }
 
-        // "Skip Intro" button while the playhead is inside a section from the skip databases.
-        // Like Android it shows for 6 seconds when the section starts, and whenever the controls show.
-        val activeSkip = model.activeSkip(playback.timeMs)
-        var skipFresh by remember { mutableStateOf(false) }
-        LaunchedEffect(activeSkip) {
-            skipFresh = activeSkip != null
-            if (activeSkip != null) {
-                delay(6_000)
-                skipFresh = false
-            }
-        }
-        val autoSkipping = activeSkip != null && settings.autoSkipIntros && activeSkip.stamp.type.isIntro
+        // "Skip Intro" button while the playhead is inside a section from the skip databases
         AnimatedVisibility(
-            visible = activeSkip != null && !autoSkipping && (skipFresh || controlsVisible) && openMenu == null,
+            visible = showSkip,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 136.dp),
