@@ -9,6 +9,8 @@ import com.lagradost.cloudstream4.desktop.data.Bookmark
 import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.RememberedSource
+import com.lagradost.cloudstream4.desktop.data.SearchHistory
+import com.lagradost.cloudstream4.desktop.data.SearchHistoryEntry
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.SourceMemory
 import com.lagradost.cloudstream4.desktop.data.jsonFile
@@ -88,6 +90,7 @@ object SyncManager {
     private const val SOURCE = "source"
     private const val REPOSITORY = "repository"
     private const val EXTENSION = "extension"
+    private const val SEARCH = "search"
 
     /** Settings that belong to one device: folders, connection counts, volume. Everything else syncs. */
     private val deviceSettings = setOf("downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider")
@@ -118,7 +121,7 @@ object SyncManager {
         loop = scope.launch {
             // Any local change syncs a few seconds later; otherwise every minute
             launch {
-                combine(LibraryStore.state, SettingsStore.state, SourceMemory.changes, ExtensionManager.state) { _, _, _, _ -> Unit }
+                combine(LibraryStore.state, SettingsStore.state, SourceMemory.changes, ExtensionManager.state, SearchHistory.entries) { _, _, _, _, _ -> Unit }
                     .drop(1)
                     .debounce(4_000)
                     .collect { wake.trySend(Unit) }
@@ -452,6 +455,7 @@ object SyncManager {
         library.bookmarks.forEach { items += LocalItem(BOOKMARK, LibraryStore.bookmarkKey(it), it, it.updatedAt) }
         SourceMemory.all().forEach { (key, source) -> items += LocalItem(SOURCE, key, source, source.savedAt) }
         items += LocalItem(SETTINGS, "app", syncedSettings(SettingsStore.state.value), null)
+        SearchHistory.entries.value.forEach { items += LocalItem(SEARCH, SearchHistory.key(it.query), it, it.at) }
         ExtensionManager.repositories().forEach { items += LocalItem(REPOSITORY, it.url, it, null) }
         ExtensionManager.state.value.installed.forEach { plugin ->
             val repo = plugin.repositoryUrl ?: return@forEach
@@ -480,6 +484,7 @@ object SyncManager {
             SETTINGS -> jsonMapper.convertValue(data, object : TypeReference<Map<String, Any?>>() {}).filterKeys { it !in deviceSettings }
             REPOSITORY -> jsonMapper.treeToValue(data, RepositoryData::class.java)
             EXTENSION -> jsonMapper.convertValue(data, object : TypeReference<Map<String, Any?>>() {})
+            SEARCH -> jsonMapper.treeToValue(data, SearchHistoryEntry::class.java)
             else -> null
         }
     }.getOrNull()
@@ -504,6 +509,7 @@ object SyncManager {
             ExtensionManager.repositories().any { it.url == data.url } || ExtensionManager.addRepositoryData(data)
         }
         EXTENSION -> installExtension(value as Map<String, Any?>)
+        SEARCH -> { SearchHistory.applyRemote(key, value as SearchHistoryEntry); true }
         else -> true
     }
 
@@ -543,6 +549,7 @@ object SyncManager {
             BOOKMARK -> LibraryStore.applyRemoteBookmark(key, null)
             SOURCE -> SourceMemory.applyRemote(key, null)
             REPOSITORY -> ExtensionManager.removeRepository(key)
+            SEARCH -> SearchHistory.applyRemote(key, null)
             EXTENSION -> {
                 val (repo, name) = key.split('|', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
                 ExtensionManager.state.value.installed.firstOrNull { it.repositoryUrl == repo && it.internalName == name }?.let { ExtensionManager.uninstall(it) }

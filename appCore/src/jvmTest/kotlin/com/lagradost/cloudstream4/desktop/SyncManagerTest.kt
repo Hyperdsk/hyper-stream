@@ -172,6 +172,17 @@ class SyncManagerTest {
             SyncManager.syncNow()
             assertTrue(synchronized(rows) { rows["bookmark" to "Prov|mine"] }?.deleted == true, "the removal was sent")
 
+            // Searches sync both ways, one item per query
+            com.lagradost.cloudstream4.desktop.data.SearchHistory.add("Dune")
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["search" to "dune"] }?.deleted == false, "the search was sent")
+            remote("search", "interstellar", com.lagradost.cloudstream4.desktop.data.SearchHistoryEntry("Interstellar", at = System.currentTimeMillis()), at = System.currentTimeMillis())
+            SyncManager.syncNow()
+            assertTrue(com.lagradost.cloudstream4.desktop.data.SearchHistory.entries.value.any { it.query == "Interstellar" }, "the other device's search arrived")
+            com.lagradost.cloudstream4.desktop.data.SearchHistory.remove("dune")
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["search" to "dune"] }?.deleted == true, "removing it here removed it there")
+
             SyncManager.signOut().join()
             assertTrue(!SyncManager.ui.value.signedIn)
 

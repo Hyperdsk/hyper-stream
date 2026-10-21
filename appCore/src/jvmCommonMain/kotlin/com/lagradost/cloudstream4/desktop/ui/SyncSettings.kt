@@ -52,7 +52,7 @@ fun SyncSettings() {
                 Text(
                     when {
                         ui.syncing -> "Syncing…"
-                        ui.lastSyncedAt != null -> "Synced ${ago(now - ui.lastSyncedAt!!)}. Progress, library, settings and extensions stay the same on your devices."
+                        ui.lastSyncedAt != null -> "Synced ${ago(now - ui.lastSyncedAt!!)}. Progress, library, search history, settings and extensions stay the same on your devices."
                         else -> "Not synced yet."
                     },
                     style = body, color = dim,

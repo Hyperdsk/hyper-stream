@@ -34,6 +34,8 @@ data class AppSettings(
     @JsonProperty("volume") val volume: Int = 100,
     /** Providers left out of the combined search. */
     @JsonProperty("searchExcluded") val searchExcluded: Set<String> = emptySet(),
+    /** Media types search is limited to, by filter name ("Movies", "Anime"...). Empty searches everything. */
+    @JsonProperty("searchTypes") val searchTypes: Set<String> = emptySet(),
     /** Built-in provider with open movies, for trying the app without extensions. */
     @JsonProperty("demoProvider") val demoProvider: Boolean = false,
     /** Where downloads are saved. Null means ~/Movies/CloudStream. */
