@@ -45,11 +45,22 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         WatchNext.parse(intent.data)?.let { pendingResume.value = it }
+        signInFrom(intent.data)
     }
+
+    /** An emailed sign-in link opened hyperstream://auth: finish signing in to sync, and show it in Settings. */
+    private fun signInFrom(uri: android.net.Uri?) {
+        if (uri?.scheme != WatchNext.SCHEME || uri.host != "auth") return
+        com.lagradost.cloudstream4.desktop.sync.SyncManager.completeRedirectLater(uri.toString())
+        openSettings.value = true
+    }
+
+    private val openSettings = kotlinx.coroutines.flow.MutableStateFlow(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) pendingResume.value = WatchNext.parse(intent?.data)
+        if (savedInstanceState == null) signInFrom(intent?.data)
         AndroidHost.attach(this)
         enableEdgeToEdge()
         // Volume buttons change the media volume, the same one the player's swipe changes
@@ -62,6 +73,14 @@ class MainActivity : AppCompatActivity() {
             val nav = rememberNavigator()
             val store = remember { ModelStore() }
             val settings by SettingsStore.state.collectAsState()
+
+            val showSettings by openSettings.collectAsState()
+            LaunchedEffect(showSettings) {
+                if (showSettings) {
+                    openSettings.value = false
+                    nav.open(Route.Settings)
+                }
+            }
 
             // Opened from the home screen's Continue watching: play from where it stopped, once
             // the title's extension has loaded

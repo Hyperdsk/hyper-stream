@@ -65,3 +65,43 @@ $$;
 
 revoke all on function public.hs_push(jsonb) from public, anon;
 grant execute on function public.hs_push(jsonb) to authenticated;
+
+-- TV sign-in. A signed-in phone or Mac asks for a one-time 8-digit code (hs_create_tv_code); the TV
+-- sends it to the tv-sign-in edge function, which signs the TV in to the same account. Codes last
+-- 10 minutes and work once. Only that function (with the service role) reads this table.
+create table if not exists public.hs_tv_codes (
+  code text primary key,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  expires_at timestamptz not null
+);
+
+alter table public.hs_tv_codes enable row level security;
+
+create or replace function public.hs_create_tv_code()
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_code text;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in first';
+  end if;
+  delete from public.hs_tv_codes where user_id = auth.uid() or expires_at < now();
+  loop
+    new_code := lpad(floor(random() * 100000000)::bigint::text, 8, '0');
+    begin
+      insert into public.hs_tv_codes (code, user_id, expires_at) values (new_code, auth.uid(), now() + interval '10 minutes');
+      exit;
+    exception when unique_violation then
+      -- Taken by someone else right now: pick another
+    end;
+  end loop;
+  return new_code;
+end;
+$$;
+
+revoke all on function public.hs_create_tv_code() from public, anon;
+grant execute on function public.hs_create_tv_code() to authenticated;

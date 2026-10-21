@@ -70,9 +70,45 @@ object SupabaseClient {
 
     private fun body(value: Any) = jsonMapper.writeValueAsString(value).toRequestBody(JSON)
 
-    /** Emails a sign-in code (and link) to [email], creating the account the first time. */
-    suspend fun sendCode(email: String) {
-        call(request("/auth/v1/otp").post(body(mapOf("email" to email, "create_user" to true))))
+    /**
+     * Emails a sign-in link to [email], creating the account the first time. The link returns to
+     * [redirectTo] (the app itself) with the session, so opening it signs the app in.
+     */
+    suspend fun sendLink(email: String, redirectTo: String?) {
+        val path = "/auth/v1/otp" + (redirectTo?.let { "?redirect_to=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")
+        call(request(path).post(body(mapOf("email" to email, "create_user" to true))))
+    }
+
+    /**
+     * The session from where a sign-in link returned: its address carries the tokens after "#"
+     * (access_token, refresh_token, expires_in), or an error description.
+     */
+    suspend fun sessionFromRedirect(link: String): SyncSession {
+        val params = (link.substringAfter('#', "").ifEmpty { link.substringAfter('?', "") }).split('&')
+            .mapNotNull { part -> part.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to java.net.URLDecoder.decode(it[1], "UTF-8") } }
+            .toMap()
+        params["error_description"]?.let { throw IOException(it.replace('+', ' ')) }
+        val access = params["access_token"] ?: throw IOException("The link has no sign-in in it. Copy the whole address.")
+        val user = call(request("/auth/v1/user").header("Authorization", "Bearer $access").get())
+        return SyncSession(
+            accessToken = access,
+            refreshToken = params["refresh_token"].orEmpty(),
+            expiresAt = System.currentTimeMillis() + (params["expires_in"]?.toLongOrNull() ?: 3600) * 1000,
+            userId = user?.get("id")?.asText().orEmpty(),
+            email = user?.get("email")?.asText(),
+        )
+    }
+
+    /** A one-time 8-digit code that signs a TV in to this account, for 10 minutes. */
+    suspend fun createTvCode(session: SyncSession): String =
+        call(request("/rest/v1/rpc/hs_create_tv_code").header("Authorization", "Bearer ${session.accessToken}").post(body(emptyMap<String, String>())))
+            ?.asText()?.takeIf { it.isNotBlank() } ?: throw IOException("The server sent no code.")
+
+    /** Signs a TV in with the code a signed-in phone or Mac showed. */
+    suspend fun signInWithTvCode(code: String): SyncSession {
+        val result = call(request("/functions/v1/tv-sign-in").post(body(mapOf("code" to code))))
+        val hash = result?.get("token_hash")?.asText() ?: throw IOException("That code didn't work. Show a new one.")
+        return session(call(request("/auth/v1/verify").post(body(mapOf("type" to "magiclink", "token_hash" to hash)))), result.get("email")?.asText())
     }
 
     /** Signs in with the code from the email. */
@@ -81,6 +117,8 @@ object SupabaseClient {
 
     /** Signs in with the link from the email, pasted in: its token, without opening it in a browser. */
     suspend fun verifyLink(link: String): SyncSession {
+        // Already opened in a browser: the address it ended on has the session
+        if ("access_token=" in link || "error_description=" in link) return sessionFromRedirect(link.trim())
         val url = runCatching { link.trim().toHttpUrl() }.getOrNull() ?: throw IOException("That doesn't look like the sign-in link.")
         val token = url.queryParameter("token") ?: throw IOException("The link has no sign-in token. Copy the whole link from the email.")
         val type = url.queryParameter("type") ?: "magiclink"

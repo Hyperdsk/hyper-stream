@@ -38,6 +38,8 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="hyperstream" android:host="resume" />
                 <data android:host="open" />
+                <!-- Where emailed sign-in links return to -->
+                <data android:host="auth" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

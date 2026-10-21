@@ -59,6 +59,9 @@ data class SyncUiState(
     val codeSentTo: String? = null,
     val busy: Boolean = false,
     val syncing: Boolean = false,
+    /** A code for signing a TV in, shown on a signed-in phone or Mac, and when it stops working. */
+    val tvCode: String? = null,
+    val tvCodeExpiresAt: Long? = null,
     val lastSyncedAt: Long? = null,
     val error: String? = null,
 ) {
@@ -122,7 +125,8 @@ object SyncManager {
 
     // ---------- Sign in ----------
 
-    fun sendCode(email: String) = scope.launch {
+    /** Emails a sign-in link; opening it on this device signs the app in. */
+    fun sendLink(email: String) = scope.launch {
         val address = email.trim()
         if (!address.contains('@')) {
             _ui.update { it.copy(error = "Enter your email address.") }
@@ -130,7 +134,8 @@ object SyncManager {
         }
         _ui.update { it.copy(busy = true, error = null) }
         try {
-            SupabaseClient.sendCode(address)
+            SignInRedirect.prepare()
+            SupabaseClient.sendLink(address, SignInRedirect.url)
             _ui.update { it.copy(busy = false, codeSentTo = address) }
         } catch (e: CancellationException) {
             throw e
@@ -145,17 +150,69 @@ object SyncManager {
         val email = _ui.value.codeSentTo
         _ui.update { it.copy(busy = true, error = null) }
         try {
-            val session = if (input.startsWith("http", ignoreCase = true)) SupabaseClient.verifyLink(input)
-            else SupabaseClient.verifyCode(email ?: error("Ask for a code first."), input.filter { it.isDigit() })
-            // A new account starts from this device's data; known items from another account don't apply
-            save { SyncStore(session = session.copy(email = session.email ?: email)) }
-            _ui.update { SyncUiState(email = session.email ?: email) }
-            requestSync()
+            val session = if (input.contains("://") || "access_token=" in input) SupabaseClient.verifyLink(input)
+            else SupabaseClient.verifyCode(email ?: error("Ask for a sign-in email first."), input.filter { it.isDigit() })
+            signedIn(session, email)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             _ui.update { it.copy(busy = false, error = "Sign-in didn't work: ${t.message}") }
         }
+    }
+
+    /** Where a sign-in link returned to this device (the Mac's page or hyperstream://auth on Android). */
+    suspend fun completeRedirect(link: String) {
+        try {
+            signedIn(SupabaseClient.sessionFromRedirect(link), _ui.value.codeSentTo)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _ui.update { it.copy(busy = false, error = "Sign-in didn't work: ${t.message}") }
+            throw t
+        }
+    }
+
+    fun completeRedirectLater(link: String) = scope.launch { runCatching { completeRedirect(link) } }
+
+    /** Signs a TV in with the code from a signed-in phone or Mac. */
+    fun signInWithTvCode(code: String) = scope.launch {
+        val digits = code.filter { it.isDigit() }
+        if (digits.length != 8) {
+            _ui.update { it.copy(error = "Enter the 8-digit code from your phone or Mac.") }
+            return@launch
+        }
+        _ui.update { it.copy(busy = true, error = null) }
+        try {
+            signedIn(SupabaseClient.signInWithTvCode(digits), null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _ui.update { it.copy(busy = false, error = t.message ?: "That code didn't work.") }
+        }
+    }
+
+    /** On a signed-in phone or Mac: a code to type on a TV. */
+    fun showTvCode() = scope.launch {
+        val session = session() ?: return@launch
+        _ui.update { it.copy(busy = true, error = null) }
+        try {
+            val code = SupabaseClient.createTvCode(session)
+            _ui.update { it.copy(busy = false, tvCode = code, tvCodeExpiresAt = System.currentTimeMillis() + 10 * 60_000) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _ui.update { it.copy(busy = false, error = "Couldn't make a TV code: ${t.message}") }
+        }
+    }
+
+    fun hideTvCode() = _ui.update { it.copy(tvCode = null, tvCodeExpiresAt = null) }
+
+    private fun signedIn(session: SyncSession, email: String?) {
+        // A new account starts from this device's data; known items from another account don't apply
+        val previous = store.session?.userId
+        save { if (previous == session.userId) it.copy(session = session) else SyncStore(session = session.copy(email = session.email ?: email)) }
+        _ui.update { SyncUiState(email = session.email ?: email) }
+        requestSync()
     }
 
     fun cancelCode() = _ui.update { it.copy(codeSentTo = null, error = null) }

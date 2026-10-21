@@ -12,22 +12,20 @@ code (or the sign-in link from the email, pasted in).
 2. Put the project URL and publishable key in `SyncConfig` (`appCore/.../sync/SupabaseClient.kt`).
    The publishable key is meant to ship in apps; row level security protects the data.
 
-## Sign-in emails
+## Sign-in
 
-Supabase's built-in email sender has limits: it only sends to members of the project's
-organization, only a few emails per hour, and its template can't be edited, so the email has a
-sign-in link but no 6-digit code. The apps accept the link pasted in, which works on the Mac and
-phone.
+- **Mac and phone:** the app emails a sign-in link. Opening it on the same device signs the app in by
+  itself: the link returns to `http://127.0.0.1:53682/auth`, a page the Mac app serves, or to
+  `hyperstream://auth`, which opens the Android app. Both are in the project's allowed redirect URLs
+  (Authentication, URL Configuration). The link, or the address it opened, can also be pasted in.
+- **TV:** a signed-in phone or Mac shows a one-time 8-digit code (Settings, Sync, Sign in a TV,
+  from `hs_create_tv_code`). The TV sends it to the `tv-sign-in` edge function
+  (`functions/tv-sign-in`, deployed with "Verify JWT" off), which signs the TV in to the same account.
+- "Confirm email" is off (Authentication, Sign In / Providers), so a new account works right away.
 
-For codes (easiest on a TV) and for other people to sign in, set up custom SMTP under
-Authentication, Emails (Resend, Brevo, Gmail and others have free plans), then edit the
-"Magic link or OTP" template to include the code, for example:
-
-```html
-<h2>Your Hyper Stream sign-in code</h2>
-<p>Enter this code in the app: <strong>{{ .Token }}</strong></p>
-<p>Or <a href="{{ .ConfirmationURL }}">sign in with this link</a>.</p>
-```
+Supabase's built-in email sender only sends to members of the project's organization, a few per
+hour. For other people to sign in, set up custom SMTP under Authentication, Emails (Resend, Brevo
+and others have free plans).
 
 ## How sync works
 

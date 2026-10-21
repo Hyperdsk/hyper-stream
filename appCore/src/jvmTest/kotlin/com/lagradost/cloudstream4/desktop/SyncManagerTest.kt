@@ -46,6 +46,7 @@ class SyncManagerTest {
         createContext("/auth/v1/verify") { ex ->
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-1", "email" to "me@example.com")))
         }
+        createContext("/auth/v1/user") { ex -> ex.json(mapOf("id" to "user-1", "email" to "me@example.com")) }
         createContext("/rest/v1/rpc/hs_push") { ex ->
             val items = jsonMapper.readTree(ex.requestBody)["items"]
             synchronized(rows) {
@@ -80,7 +81,7 @@ class SyncManagerTest {
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-sync").toString())
         try {
             // Sign in with a code
-            SyncManager.sendCode("me@example.com").join()
+            SyncManager.sendLink("me@example.com").join()
             SyncManager.verify("123456").join()
             withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
 
@@ -123,6 +124,21 @@ class SyncManagerTest {
 
             SyncManager.signOut().join()
             assertTrue(!SyncManager.ui.value.signedIn)
+
+            // Opening the emailed link on the Mac: it returns to the app's local page, which hands over the session
+            com.lagradost.cloudstream4.desktop.sync.SignInRedirect.prepare()
+            val page = com.lagradost.cloudstream4.desktop.sync.SignInRedirect.url
+            if (page != null) {
+                val html = java.net.URI(page).toURL().readText()
+                assertTrue("Signing in to Hyper Stream" in html)
+                val done = java.net.URI("$page/done?access_token=abc&refresh_token=def&expires_in=3600&token_type=bearer&type=magiclink").toURL().readText()
+                assertEquals("ok", done)
+                withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
+                assertEquals("me@example.com", SyncManager.ui.value.email)
+                SyncManager.signOut().join()
+            } else {
+                println("Port 53682 is in use (Hyper Stream running?), skipped the link page check")
+            }
         } finally {
             server.stop(0)
             System.clearProperty("hyperstream.syncUrl")
