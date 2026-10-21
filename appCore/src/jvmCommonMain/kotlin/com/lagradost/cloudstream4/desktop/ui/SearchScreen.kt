@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.utils.Levenshtein
 import com.lagradost.cloudstream4.desktop.data.SearchHistory
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
@@ -105,6 +106,37 @@ data class SearchState(
     val results: PersistentList<ProviderResults> = persistentListOf(),
     val searchedFor: String? = null,
 )
+
+private fun normalizeTitle(text: String) = text.lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+
+/**
+ * How well [title] matches what was searched, 0 to 100: the exact title first, then titles that
+ * start with it or contain every word ("dune" -> "Dune: Part Two"), then close spellings.
+ */
+internal fun searchRelevance(query: String, title: String): Int {
+    val q = normalizeTitle(query)
+    val t = normalizeTitle(title)
+    if (q.isEmpty() || t.isEmpty()) return 0
+    if (t == q) return 100
+    val titleWords = t.split(' ')
+    // A word counts when it's there whole, or as the start of a longer word ("spider" in "spiderman")
+    val allWords = q.split(' ').all { w -> titleWords.any { it == w || (w.length >= 3 && it.startsWith(w)) } }
+    // Extra words in the title (a sequel's subtitle) make a match a little weaker
+    val extra = (titleWords.size - q.split(' ').size).coerceAtLeast(0)
+    return when {
+        t.startsWith("$q ") -> 95 - extra.coerceAtMost(10)
+        allWords -> 85 - extra.coerceAtMost(10)
+        // Close spellings, word by word ("jawaani" for "jawani"): the share of words found, up to 75
+        else -> {
+            val words = q.split(' ')
+            val close = words.count { w -> titleWords.any { Levenshtein.ratio(w, it) >= 80 } }
+            75 * close / words.size
+        }
+    }
+}
+
+/** Results this close to the search are shown first; the rest go under "Other results". */
+internal const val RELEVANT = 60
 
 /** The types the chosen quick filters cover, or null when none is chosen (everything). */
 private fun Set<String>.wantedTypes(): Set<TvType>? =
@@ -316,8 +348,20 @@ fun SearchScreen(model: SearchModel) {
             )
 
             else -> {
-                // Only extensions that found something get a row; the rest are counted in the status line
-                val found = state.results.filter { !it.loading && it.items.isNotEmpty() }
+                // Only extensions that found something get a row; the rest are counted in the status line.
+                // Each row's titles go best match first, and rows with a close match come before the rest
+                val query = state.searchedFor.orEmpty()
+                val ranked = remember(state.results, query) {
+                    state.results.filter { !it.loading && it.items.isNotEmpty() }
+                        .map { result ->
+                            val scored = result.items.map { it to searchRelevance(query, it.name) }.sortedByDescending { it.second }
+                            Triple(result.copy(items = scored.map { it.first }.toPersistentList()), scored.first().second, result.id)
+                        }
+                        .sortedWith(compareByDescending<Triple<ProviderResults, Int, Int>> { it.second }.thenBy { it.third })
+                }
+                val found = ranked.map { it.first }
+                val relevant = ranked.filter { it.second >= RELEVANT }.map { it.first }
+                val others = ranked.filter { it.second < RELEVANT }.map { it.first }
                 val done = state.results.count { !it.loading }
                 val total = state.results.size
                 val searching = done < total
@@ -346,10 +390,26 @@ fun SearchScreen(model: SearchModel) {
                                 }
                             }
                         }
-                        items(found, key = { it.id }) { result ->
+                        items(relevant, key = { it.id }) { result ->
                             PosterRow(result.provider, result.items.map { it.toPoster() }) {
                                 model.opened()
                                 nav.open(Route.Details(it.apiName, it.url, it.name))
+                            }
+                        }
+                        if (others.isNotEmpty()) {
+                            item(key = "others") {
+                                Text(
+                                    if (relevant.isEmpty()) "No close matches. Other results" else "Other results",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = appLayout.gutter, end = appLayout.gutter, top = 24.dp, bottom = 4.dp),
+                                )
+                            }
+                            items(others, key = { it.id }) { result ->
+                                PosterRow(result.provider, result.items.map { it.toPoster() }) {
+                                    model.opened()
+                                    nav.open(Route.Details(it.apiName, it.url, it.name))
+                                }
                             }
                         }
                     }
