@@ -351,7 +351,13 @@ object SyncManager {
     private fun syncedSettings(settings: AppSettings): Map<String, Any?> =
         jsonMapper.convertValue(settings, object : TypeReference<Map<String, Any?>>() {}).filterKeys { it !in deviceSettings }
 
-    private fun hashOf(value: Any): Int = jsonMapper.writeValueAsString(value).hashCode()
+    /**
+     * Keys in a fixed order: the server stores JSON objects with their keys reordered, and an
+     * unchanged item read back must hash the same, or devices would keep re-sending it.
+     */
+    private val canonical = jsonMapper.copy().configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
+
+    private fun hashOf(value: Any): Int = canonical.writeValueAsString(value).hashCode()
 
     private fun decode(kind: String, data: JsonNode?): Any? = runCatching {
         data ?: return null

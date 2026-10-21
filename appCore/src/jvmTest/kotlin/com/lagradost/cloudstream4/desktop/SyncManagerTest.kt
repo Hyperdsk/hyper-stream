@@ -109,6 +109,17 @@ class SyncManagerTest {
             assertEquals(400_000, LibraryStore.state.value.progress("Prov", "ep1")?.positionMs, "newer local progress kept")
             assertEquals(400_000, synchronized(rows) { rows["history" to "Prov|ep1"] }!!.data!!["positionMs"].asLong(), "and sent")
 
+            // The same settings read back with their keys in another order (as Postgres stores them)
+            // aren't a change, so nothing is sent back
+            val stored = synchronized(rows) { rows["settings" to "app"]!! }
+            val reordered = jsonMapper.createObjectNode().apply {
+                stored.data!!.fieldNames().asSequence().toList().reversed().forEach { set<JsonNode>(it, stored.data.get(it)) }
+            }
+            synchronized(rows) { rows["settings" to "app"] = stored.copy(data = reordered, at = stored.at + 1, updatedAt = serverTime()) }
+            SyncManager.syncNow()
+            SyncManager.syncNow()
+            assertEquals(stored.at + 1, synchronized(rows) { rows["settings" to "app"]!! }.at, "unchanged settings weren't sent again")
+
             // A removal on another device removes it here
             remote("bookmark", "Prov|other", null, at = 6_000, deleted = true)
             SyncManager.syncNow()

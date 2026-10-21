@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.focusProperties
@@ -73,11 +74,24 @@ fun TvTextFieldBox(
     var boxFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val field = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     androidx.compose.foundation.layout.Box(
         modifier
             .then(focusRequester?.let { androidx.compose.ui.Modifier.focusRequester(it) } ?: androidx.compose.ui.Modifier)
             .onFocusChanged { boxFocused = it.isFocused }
             .onPreviewKeyEvent { e ->
+                // Up or down while typing leaves the field, so the remote can reach the button below
+                val vertical = e.key == Key.DirectionDown || e.key == Key.DirectionUp
+                if (editing && vertical) {
+                    if (e.type == KeyEventType.KeyDown) {
+                        val moved = focusManager.moveFocus(if (e.key == Key.DirectionDown) FocusDirection.Down else FocusDirection.Up)
+                        if (moved) {
+                            keyboard?.hide()
+                            editing = false
+                        }
+                    }
+                    return@onPreviewKeyEvent true
+                }
                 val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
                 if (!ok) return@onPreviewKeyEvent false
                 // OK in the field after the keyboard was closed brings it back
