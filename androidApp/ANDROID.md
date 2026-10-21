@@ -23,6 +23,7 @@ One APK runs on phones, tablets and Android TV (it shows in the TV launcher with
 | Player | Media3 ExoPlayer (`ExoVideoEngine.kt`), with each link's headers sent through the extensions' OkHttp client. Subtitles render with Media3's `SubtitleView`. | VLC, through a local proxy for headers and parallel connections. |
 | Layout | Under 600dp wide (phones in portrait): bottom bar, smaller posters, stacked details. Extensions are under Settings, like upstream's app. Wider screens and TVs get the top bar. | Top bar. |
 | Player controls | Touch: tap shows or hides controls, double-tap left or right seeks, hold for 2x, big centre buttons. TV remote: arrows seek while the controls are hidden and move between buttons while shown; OK plays or pauses; media keys work. | Mouse and keyboard. |
+| TV home screen | Continue watching appears as a "Hyper Stream" row on Google TV and Android TV, and in Android's Watch Next list (`WatchNext.kt`). Cards show the picture of where you stopped and open the player there. Google TV only shows Watch Next from apps it has verified, so the row is what shows there. | None. |
 | Data | The app's private files folder. Downloads go to the app's Movies folder (`Android/data/com.lagradost.cloudstream4.app/files/Movies`). | `~/Library/Application Support/CloudStream`, `~/Movies/CloudStream`. |
 
 ## Not done yet

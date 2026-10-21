@@ -1,5 +1,12 @@
 package com.lagradost.cloudstream4.android
 
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
+import com.lagradost.cloudstream4.desktop.ui.resumeRequest
+import com.lagradost.cloudstream4.desktop.ui.providerByName
+import com.lagradost.cloudstream4.desktop.data.LibraryStore
+import com.lagradost.cloudstream4.desktop.WatchNext
+import androidx.compose.runtime.LaunchedEffect
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
@@ -31,8 +38,18 @@ import com.lagradost.cloudstream4.desktop.ui.rememberNavigator
  * cast it to one. Everything inside is the shared Compose app.
  */
 class MainActivity : AppCompatActivity() {
+    /** A title to resume, from a Continue watching card on the TV home screen: (provider, page url). */
+    private val pendingResume = kotlinx.coroutines.flow.MutableStateFlow<Pair<String, String>?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        WatchNext.parse(intent.data)?.let { pendingResume.value = it }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) pendingResume.value = WatchNext.parse(intent?.data)
         AndroidHost.attach(this)
         enableEdgeToEdge()
         // Volume buttons change the media volume, the same one the player's swipe changes
@@ -45,6 +62,19 @@ class MainActivity : AppCompatActivity() {
             val nav = rememberNavigator()
             val store = remember { ModelStore() }
             val settings by SettingsStore.state.collectAsState()
+
+            // Opened from the home screen's Continue watching: play from where it stopped, once
+            // the title's extension has loaded
+            val resume by pendingResume.collectAsState()
+            LaunchedEffect(resume) {
+                val (api, url) = resume ?: return@LaunchedEffect
+                pendingResume.value = null
+                val history = LibraryStore.state.value.history
+                val entry = history.filter { it.apiName == api && it.parentUrl == url }.maxByOrNull { it.updatedAt } ?: return@LaunchedEffect
+                withTimeoutOrNull(20_000) { while (providerByName(api) == null) delay(250) }
+                nav.open(Route.Home)
+                nav.open(Route.Player(entry.resumeRequest()))
+            }
 
             // Back leaves the current screen, then goes to Home, then closes the app
             BackHandler(enabled = nav.stack.size > 1 || nav.current != Route.Home) {

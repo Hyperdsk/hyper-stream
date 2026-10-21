@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Continue watching on the TV home screen (Watch Next) -->
+    <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
+    <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
 
     <!-- Runs on TVs (remote only) as well as phones and tablets -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -28,6 +31,14 @@
             android:supportsPictureInPicture="false"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
+            <!-- Continue watching cards on the TV home screen open hyperstream://resume?... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hyperstream" android:host="resume" />
+                <data android:host="open" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -35,5 +46,11 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Read-only snapshots of where playback stopped, for the TV home screen's cards -->
+        <provider
+            android:name="com.lagradost.cloudstream4.desktop.data.SnapshotProvider"
+            android:authorities="${applicationId}.snapshots"
+            android:exported="true" />
     </application>
 </manifest>

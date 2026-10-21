@@ -14,6 +14,8 @@ class CloudStreamApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidHost.init(this)
+        // Continue watching on the TV home screen
+        com.lagradost.cloudstream4.desktop.WatchNext.start()
         // Read settings and history, and set up the JSON parser, while the first screen is being
         // created; the screen needs them soon after, and doing it on the UI thread held it up
         Thread {

@@ -62,6 +62,7 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.appcompat) // Extensions cast their load context to AppCompatActivity
     implementation(libs.core.ktx)
+    implementation(libs.kotlinx.collections.immutable)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:${libs.versions.kotlinxCoroutines.get()}")
     implementation(libs.compose.material.icons.extended.get().toString()) {
         exclude(group = "org.jetbrains.compose.material", module = "material")
