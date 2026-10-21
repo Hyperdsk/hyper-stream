@@ -68,6 +68,13 @@ fun main() {
             MenuBar {
                 Menu("Go") {
                     Item("Home", shortcut = KeyShortcut(Key.One, meta = true)) { nav.open(Route.Home) }
+                    // Movies, TV Shows and Anime, when an installed extension has them
+                    com.lagradost.cloudstream4.desktop.ui.rememberAvailableSections().forEachIndexed { i, section ->
+                        val key = listOf(Key.One, Key.Two, Key.Three)[i]
+                        Item(section.label, shortcut = KeyShortcut(key, meta = true, shift = true)) {
+                            nav.open(Route.Section(section))
+                        }
+                    }
                     Item("Search", shortcut = KeyShortcut(Key.F, meta = true)) { nav.open(Route.Search) }
                     Item("Library", shortcut = KeyShortcut(Key.Two, meta = true)) { nav.open(Route.Library) }
                     Item("Downloads", shortcut = KeyShortcut(Key.Three, meta = true)) { nav.open(Route.Downloads) }

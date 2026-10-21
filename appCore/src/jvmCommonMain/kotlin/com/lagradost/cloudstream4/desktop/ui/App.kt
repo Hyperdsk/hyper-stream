@@ -60,6 +60,10 @@ private data class Tab(val route: Route, val label: String, val icon: ImageVecto
 /** Holds screen models for routes on the back stack, and disposes them once they leave it. */
 class ModelStore {
     val home = HomeModel()
+    private val sections = mutableMapOf<HomeSection, HomeModel>()
+
+    /** Home's model, or a media page's (made the first time it's opened, then kept like Home's). */
+    fun home(section: HomeSection?): HomeModel = if (section == null) home else sections.getOrPut(section) { HomeModel(section) }
     val search = SearchModel()
     private val models = mutableMapOf<Route, ScreenModel<*>>()
 
@@ -115,6 +119,7 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
         val screen: @Composable () -> Unit = {
             when (route) {
                 Route.Home -> HomeScreen(store.home)
+                is Route.Section -> HomeScreen(store.home(route.section))
                 Route.Search -> SearchScreen(store.search)
                 Route.Library -> LibraryScreen()
                 Route.Downloads -> DownloadsScreen()
@@ -138,7 +143,7 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
             // Mac, tablets and TVs: a top bar. It floats over Home's banner, and title pages have
             // their own back button instead
             val bar = remember { TopBarState() }
-            val overlay = route == Route.Home
+            val overlay = route == Route.Home || route is Route.Section
             val showBar = route !is Route.Details
             // Remotes: down from the bar goes into the page (the bar is drawn over the page, and
             // focus search alone didn't cross into it)
@@ -152,7 +157,11 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
                 }
                 if (showBar) {
                     TopBar(nav, solid = !overlay || bar.solid, modifier = Modifier.focusProperties { down = page }) {
-                        if (route == Route.Home) HomeProviderControls(store.home)
+                        when (route) {
+                            Route.Home -> HomeProviderControls(store.home)
+                            is Route.Section -> HomeProviderControls(store.home(route.section))
+                            else -> Unit
+                        }
                     }
                 }
             }
@@ -165,7 +174,12 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
 private fun BottomBar(nav: Navigator) {
     val downloads by DownloadManager.entries.collectAsState()
     val active = downloads.count { it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued }
-    val selected = if (nav.tab == Route.Extensions) Route.Settings else nav.tab
+    val selected = when (nav.tab) {
+        Route.Extensions -> Route.Settings
+        // The media pages are reached from Home's chips
+        is Route.Section -> Route.Home
+        else -> nav.tab
+    }
     NavigationBar {
         compactTabs.forEach { tab ->
             NavigationBarItem(

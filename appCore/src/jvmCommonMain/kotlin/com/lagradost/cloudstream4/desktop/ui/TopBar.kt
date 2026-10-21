@@ -1,5 +1,8 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -62,7 +65,13 @@ val LocalTopBarState = staticCompositionLocalOf<TopBarState?> { null }
  * once the page scrolls. [trailing] adds controls before Settings, such as Home's provider.
  */
 @Composable
-fun TopBar(nav: Navigator, solid: Boolean, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
+fun TopBar(
+    nav: Navigator,
+    solid: Boolean,
+    modifier: Modifier = Modifier,
+    sections: List<HomeSection> = rememberAvailableSections(),
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
     val colors = MaterialTheme.colorScheme
     val background by animateColorAsState(if (solid) colors.background.copy(alpha = 0.97f) else Color.Transparent)
     val downloads by DownloadManager.entries.collectAsState()
@@ -76,7 +85,10 @@ fun TopBar(nav: Navigator, solid: Boolean, modifier: Modifier = Modifier, traili
             .background(Brush.verticalGradient(listOf(colors.background.copy(alpha = if (solid) 0f else 0.7f), Color.Transparent)))
             .padding(horizontal = appLayout.gutter),
     ) {
-        val roomy = maxWidth > 1000.dp
+        // Narrower windows and TVs (960 wide) drop the name and close up the tabs; TVs also move
+        // Extensions into Settings, as phones do, to leave room for Home's provider controls
+        val roomy = maxWidth > 1250.dp
+        val narrow = maxWidth < 1000.dp
         Row(Modifier.fillMaxWidth().align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(AppRes.drawable.app_icon), "Hyper Stream", Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)))
             if (roomy) {
@@ -86,14 +98,23 @@ fun TopBar(nav: Navigator, solid: Boolean, modifier: Modifier = Modifier, traili
             // Right after the mark, so the tabs stay in the same place on every screen, whatever
             // controls the screen adds on the right
             Spacer(Modifier.width(28.dp))
-            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                TopTab(null, Icons.Outlined.Search, "Search", tab == Route.Search) { nav.open(Route.Search) }
-                TopTab("Home", null, "Home", tab == Route.Home) { nav.open(Route.Home) }
-                TopTab("Library", null, "Library", tab == Route.Library) { nav.open(Route.Library) }
-                TopTab("Downloads", null, "Downloads", tab == Route.Downloads, badge = active.takeIf { it > 0 }) { nav.open(Route.Downloads) }
-                TopTab("Extensions", null, "Extensions", tab == Route.Extensions) { nav.open(Route.Extensions) }
+            // In a window too narrow for every tab, the tabs scroll rather than run under the controls
+            Row(
+                // Takes the space up to the controls on the right, which stay put
+                Modifier.weight(1f).padding(end = 12.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TopTab(null, Icons.Outlined.Search, "Search", tab == Route.Search, tight = !roomy) { nav.open(Route.Search) }
+                TopTab("Home", null, "Home", tab == Route.Home, tight = !roomy) { nav.open(Route.Home) }
+                // Only the media pages some installed extension can fill
+                sections.forEach { section ->
+                    TopTab(section.label, null, section.label, tab == Route.Section(section), tight = !roomy) { nav.open(Route.Section(section)) }
+                }
+                TopTab("Library", null, "Library", tab == Route.Library, tight = !roomy) { nav.open(Route.Library) }
+                TopTab("Downloads", null, "Downloads", tab == Route.Downloads, tight = !roomy, badge = active.takeIf { it > 0 }) { nav.open(Route.Downloads) }
+                if (!narrow) TopTab("Extensions", null, "Extensions", tab == Route.Extensions, tight = !roomy) { nav.open(Route.Extensions) }
             }
-            Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 trailing()
                 TopTab(null, Icons.Outlined.Settings, "Settings", tab == Route.Settings) { nav.open(Route.Settings) }
@@ -107,7 +128,15 @@ fun TopBar(nav: Navigator, solid: Boolean, modifier: Modifier = Modifier, traili
  * selected tab turns the accent colour while focused, since a ring on white wouldn't show.
  */
 @Composable
-private fun TopTab(label: String?, icon: ImageVector?, description: String, selected: Boolean, badge: Int? = null, onClick: () -> Unit) {
+private fun TopTab(
+    label: String?,
+    icon: ImageVector?,
+    description: String,
+    selected: Boolean,
+    tight: Boolean = false,
+    badge: Int? = null,
+    onClick: () -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val lit by interaction.collectIsHighlightedAsState()
@@ -129,7 +158,7 @@ private fun TopTab(label: String?, icon: ImageVector?, description: String, sele
             .background(background)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = if (selected) null else tvIndication, onClick = onClick)
-            .padding(horizontal = if (label == null) 10.dp else 16.dp, vertical = 8.dp),
+            .padding(horizontal = if (label == null) 10.dp else if (tight) 12.dp else 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) Icon(icon, description, tint = content, modifier = Modifier.size(22.dp))

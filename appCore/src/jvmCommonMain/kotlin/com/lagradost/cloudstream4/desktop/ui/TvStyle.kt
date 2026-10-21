@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.border
 import androidx.compose.runtime.derivedStateOf
@@ -183,7 +184,15 @@ fun GlassButton(icon: ImageVector, description: String, text: String? = null, mo
         Icon(icon, description, tint = Color.White, modifier = Modifier.size(20.dp))
         if (text != null) {
             Spacer(Modifier.width(6.dp))
-            Text(text, color = Color.White, style = MaterialTheme.typography.labelLarge)
+            // One line: a long provider name ends in "…" rather than wrapping inside the pill
+            Text(
+                text,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 160.dp),
+            )
         }
     }
 }

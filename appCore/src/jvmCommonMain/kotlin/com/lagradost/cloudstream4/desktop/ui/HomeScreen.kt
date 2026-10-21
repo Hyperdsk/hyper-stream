@@ -79,7 +79,8 @@ data class HeroItem(val search: SearchResponse, val details: LoadResponse? = nul
 
 private const val HERO_COUNT = 6
 
-class HomeModel : ScreenModel<HomeState>(HomeState()) {
+/** Home, or with [section] a page like it for one kind of media, showing only extensions that have it. */
+class HomeModel(val section: HomeSection? = null) : ScreenModel<HomeState>(HomeState()) {
     private var job: Job? = null
     private var heroJob: Job? = null
 
@@ -90,9 +91,10 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
     }
 
     private fun refreshProviders() {
-        val apis = ExtensionManager.providers()
-        val names = apis.map { it.name }.toPersistentList()
-        val saved = SettingsStore.state.value.homeProvider
+        val apis = ExtensionManager.providers().let { all -> section?.providers(all) ?: all }
+        val names = apis.map { it.name }.distinct().toPersistentList()
+        val settings = SettingsStore.state.value
+        val saved = if (section == null) settings.homeProvider else settings.sectionProviders[section.name]
         val selected = when {
             current.provider != null && current.provider in names -> current.provider
             saved != null && saved in names -> saved
@@ -104,7 +106,9 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
     }
 
     fun select(name: String) {
-        SettingsStore.update { it.copy(homeProvider = name) }
+        SettingsStore.update {
+            if (section == null) it.copy(homeProvider = name) else it.copy(sectionProviders = it.sectionProviders + (section.name to name))
+        }
         update { copy(provider = name) }
         load()
     }
@@ -222,7 +226,9 @@ fun HomeScreen(model: HomeModel) {
     val nav = LocalNavigator.current
     val state by model.state.collectAsState()
     val library by LibraryStore.state.collectAsState()
-    val continueWatching = library.continueWatching
+    // Continue watching is Home's; the media pages show only their extension
+    val continueWatching = if (model.section == null) library.continueWatching else persistentListOf()
+    val title = model.section?.label ?: "Home"
 
     // On the Mac, tablets and TVs the top bar floats over this screen
     val bar = LocalTopBarState.current
@@ -231,7 +237,7 @@ fun HomeScreen(model: HomeModel) {
     if (state.providers.isEmpty() && continueWatching.isEmpty()) {
         LaunchedEffect(bar) { bar?.solid = true }
         Column(Modifier.fillMaxSize().padding(top = barInset)) {
-            LargeTitle("Home")
+            LargeTitle(title)
             MessageBox(
                 title = "No extensions yet",
                 body = "Hyper Stream doesn't include any content. Add a repository and install extensions to start browsing.",
@@ -257,7 +263,11 @@ fun HomeScreen(model: HomeModel) {
                 }
             } else {
                 // Room for the floating provider picker (phones) or the top bar
-                item(key = "title") { LargeTitle("Home", Modifier.padding(top = barInset)) }
+                item(key = "title") { LargeTitle(title, Modifier.padding(top = barInset)) }
+            }
+            // Phones: the media pages as chips, since the bottom bar has no room for them
+            if (bar == null) {
+                item(key = "sections") { SectionChips(model.section) }
             }
             if (continueWatching.isNotEmpty()) {
                 item(key = "continue") { ContinueWatchingRow(continueWatching) }
@@ -325,4 +335,27 @@ fun HomeProviderControls(model: HomeModel) {
     if (state.providers.isEmpty()) return
     ProviderPicker(state.providers, state.provider, onSelect = model::select)
     GlassButton(Icons.Default.Refresh, "Reload", onClick = model::load)
+}
+
+/** Phones: Home and the media pages (Movies, TV Shows, Anime) that installed extensions can fill. */
+@Composable
+private fun SectionChips(current: HomeSection?) {
+    val nav = LocalNavigator.current
+    val sections = rememberAvailableSections()
+    if (sections.isEmpty()) return
+    androidx.compose.foundation.lazy.LazyRow(
+        contentPadding = PaddingValues(horizontal = appLayout.gutter, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "home") {
+            androidx.compose.material3.FilterChip(selected = current == null, onClick = { nav.open(Route.Home) }, label = { Text("Home") })
+        }
+        items(sections, key = { it.name }) { section ->
+            androidx.compose.material3.FilterChip(
+                selected = current == section,
+                onClick = { nav.open(Route.Section(section)) },
+                label = { Text(section.label) },
+            )
+        }
+    }
 }

@@ -71,8 +71,9 @@ fun SettingsScreen(vlcAvailable: Boolean) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = if (appLayout.compact) 16.dp else appLayout.gutter, vertical = if (appLayout.compact) 16.dp else 24.dp).widthIn(max = 760.dp)) {
         Text("Settings", style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge)
 
-        if (appLayout.compact) {
-            // Phones have no sidebar, so Extensions live here, as in the Android app
+        run {
+            // Phones and TVs have no Extensions tab, so they live here, as in the Android app (and
+            // as a shortcut everywhere else)
             val nav = LocalNavigator.current
             val extensions by com.lagradost.cloudstream4.desktop.plugins.ExtensionManager.state.collectAsState()
             androidx.compose.material3.ListItem(

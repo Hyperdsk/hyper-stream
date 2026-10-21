@@ -13,6 +13,8 @@ data class AppSettings(
     @JsonProperty("primaryColor") val primaryColor: CloudStreamPrimaryColor = CloudStreamPrimaryColor.NORMAL,
     /** Provider name shown on the home screen. */
     @JsonProperty("homeProvider") val homeProvider: String? = null,
+    /** The extension each media page (Movies, TV Shows, Anime) shows, by page name. */
+    @JsonProperty("sectionProviders") val sectionProviders: Map<String, String> = emptyMap(),
     /** Highest quality picked automatically, in pixels of height. Null means best available. */
     @JsonProperty("preferredQuality") val preferredQuality: Int? = null,
     /** Servers to try first, in order, matched against a source's provider or server name. */

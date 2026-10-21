@@ -29,18 +29,18 @@ class TopBarRenderTest {
         val out = System.getenv("CS_TOPBAR_OUT")?.let(::File) ?: return
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-topbar").toString())
         out.mkdirs()
-        for (width in listOf(900, 1400)) {
+        for (width in listOf(800, 960, 1400)) {
             val home = Navigator()
             val settings = Navigator().apply { open(Route.Settings) }
             val scene = ImageComposeScene(width, 150, Density(1f)) {
                 HyperStreamTheme(CloudStreamThemeMode.Dark, CloudStreamPrimaryColor.NORMAL) {
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         Column {
-                            TopBar(home, solid = true) {
+                            TopBar(home, solid = true, sections = com.lagradost.cloudstream4.desktop.ui.HomeSection.entries) {
                                 GlassButton(Icons.Default.ArrowDropDown, "Choose provider", text = "MoviesDrive") {}
                                 GlassButton(Icons.Default.Refresh, "Reload") {}
                             }
-                            TopBar(settings, solid = true)
+                            TopBar(settings, solid = true, sections = com.lagradost.cloudstream4.desktop.ui.HomeSection.entries)
                         }
                     }
                 }

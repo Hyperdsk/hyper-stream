@@ -32,6 +32,8 @@ data class PlayRequest(
 
 sealed interface Route {
     data object Home : Route
+    /** Home for one kind of media: Movies, TV Shows or Anime. */
+    data class Section(val section: HomeSection) : Route
     data object Search : Route
     data object Library : Route
     data object Downloads : Route
@@ -40,7 +42,7 @@ sealed interface Route {
     data class Details(val apiName: String, val url: String, val name: String) : Route
     data class Player(val request: PlayRequest) : Route
 
-    val isTab: Boolean get() = this is Home || this is Search || this is Library || this is Downloads || this is Extensions || this is Settings
+    val isTab: Boolean get() = this is Home || this is Section || this is Search || this is Library || this is Downloads || this is Extensions || this is Settings
 }
 
 /** A back stack per tab, like the Android app's bottom navigation. */
