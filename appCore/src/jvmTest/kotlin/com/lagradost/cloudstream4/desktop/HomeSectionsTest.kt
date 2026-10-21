@@ -15,7 +15,7 @@ class HomeSectionsTest {
     }
 
     @Test
-    fun pagesListOnlyExtensionsOfThatOneKind() {
+    fun pagesListTheirOwnKindWithoutAnimeMixedIn() {
         val movies = api("Movies Only", TvType.Movie, TvType.Torrent)
         val moviesAndSeries = api("Movies And Series", TvType.Movie, TvType.TvSeries)
         val everything = api("Everything", TvType.Movie, TvType.TvSeries, TvType.Anime)
@@ -25,12 +25,14 @@ class HomeSectionsTest {
         val searchOnly = api("No Home Page", TvType.TvSeries, mainPage = false)
         val all = listOf(movies, moviesAndSeries, everything, anime, dramas, searchOnly)
 
-        assertEquals(listOf("Movies Only"), HomeSection.Movies.providers(all).map { it.name })
-        assertEquals(listOf("Dramas"), HomeSection.Shows.providers(all).map { it.name })
+        // A movies-and-series site shows on both; one that mixes in anime shows on neither
+        assertEquals(listOf("Movies Only", "Movies And Series"), HomeSection.Movies.providers(all).map { it.name })
+        assertEquals(listOf("Movies And Series", "Dramas"), HomeSection.Shows.providers(all).map { it.name })
         assertEquals(listOf("Anime Site"), HomeSection.Anime.providers(all).map { it.name })
 
-        // Mixed sites fill no page, so with only those no tab shows
-        assertEquals(emptyList(), availableSections(listOf(moviesAndSeries, everything)))
+        assertEquals(listOf(HomeSection.Movies, HomeSection.Shows), availableSections(listOf(moviesAndSeries, everything)))
+        // A site with everything fills no page
+        assertEquals(emptyList(), availableSections(listOf(everything)))
         // An extension without a home page can't fill a page
         assertEquals(emptyList(), availableSections(listOf(searchOnly)))
         assertEquals(listOf(HomeSection.Anime), availableSections(listOf(everything, anime)))

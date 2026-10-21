@@ -19,13 +19,16 @@ enum class HomeSection(val label: String, val types: Set<TvType>) {
     ;
 
     /**
-     * Whether this is [api]'s one kind among movies, TV shows and anime: an anime site belongs under
-     * Anime, but a site with movies and series (or anime too) belongs on neither page. Other kinds it
-     * lists, such as cartoons, don't count.
+     * Whether [api] belongs on this page. Anime takes sites with anime only; Movies and TV Shows take
+     * sites with that kind and no anime, so a movies-and-series site shows on both. Sites that mix in
+     * anime show on none. Other kinds they list, such as cartoons, don't count.
      */
-    fun owns(api: MainAPI): Boolean = entries.filter { section -> api.supportedTypes.any { it in section.types } } == listOf(this)
+    fun owns(api: MainAPI): Boolean {
+        val kinds = entries.filter { section -> api.supportedTypes.any { it in section.types } }
+        return if (this == Anime) kinds == listOf(Anime) else this in kinds && Anime !in kinds
+    }
 
-    /** The extensions this page offers: those of only this kind, with a home page. */
+    /** The extensions this page offers: those that belong here and have a home page. */
     fun providers(apis: List<MainAPI>): List<MainAPI> = apis.filter { it.hasMainPage && owns(it) }
 }
 
