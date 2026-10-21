@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
@@ -301,7 +302,7 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
     override fun createPreview(): SeekPreview? = null
 
     @Composable
-    override fun Video(modifier: Modifier) {
+    override fun Video(modifier: Modifier, fit: VideoFit, zoom: Float, pan: Offset) {
         AndroidView(
             factory = { ctx ->
                 PlayerSurface(ctx).also { view ->
@@ -310,6 +311,7 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
                     view.setVideoSize(player.videoSize)
                 }
             },
+            update = { view -> view.apply(fit, zoom, pan) },
             modifier = modifier,
             onRelease = { view ->
                 player.clearVideoTextureView(view.texture)
@@ -336,8 +338,37 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
             addView(subtitles, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         }
 
+        private var videoRatio = 0f
+        private var fit = VideoFit.Fit
+
+        init {
+            // The picture is cut to the screen when zoomed or cropped
+            clipChildren = true
+        }
+
         fun setVideoSize(size: VideoSize) {
-            if (size.width > 0 && size.height > 0) frame.setAspectRatio(size.width * size.pixelWidthHeightRatio / size.height)
+            if (size.width > 0 && size.height > 0) videoRatio = size.width * size.pixelWidthHeightRatio / size.height
+            applyRatio()
+        }
+
+        /** Fit modes map onto Media3's resize modes; zoom scales only the picture, so subtitles stay readable. */
+        fun apply(fit: VideoFit, zoom: Float, pan: Offset) {
+            this.fit = fit
+            frame.resizeMode = when (fit) {
+                VideoFit.Crop -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                VideoFit.Stretch -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+            applyRatio()
+            frame.scaleX = zoom
+            frame.scaleY = zoom
+            frame.translationX = pan.x
+            frame.translationY = pan.y
+        }
+
+        private fun applyRatio() {
+            val ratio = fit.ratio ?: videoRatio
+            if (ratio > 0f) frame.setAspectRatio(ratio)
         }
     }
 

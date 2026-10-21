@@ -2,6 +2,7 @@ package com.lagradost.cloudstream4.desktop.player
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
@@ -39,6 +40,23 @@ data class StreamStats(
     /** Size of the video file being streamed, when known (not for HLS). */
     val streamSize: Long = 0,
 )
+
+/**
+ * How the picture fills the player. [ratio] forces an aspect ratio (width / height) for videos
+ * that report the wrong one; the others keep the video's own.
+ */
+enum class VideoFit(val label: String, val ratio: Float? = null) {
+    Fit("Fit"),
+    Crop("Crop to fill"),
+    Stretch("Stretch"),
+    Ratio16x9("16:9", 16f / 9f),
+    Ratio4x3("4:3", 4f / 3f),
+    Ratio21x9("21:9", 21f / 9f);
+
+    companion object {
+        fun from(name: String?) = entries.firstOrNull { it.name == name } ?: Fit
+    }
+}
 
 /**
  * A url the player can open, with the headers it must send. [mimeType] tells players that can't
@@ -86,9 +104,12 @@ interface VideoEngine {
     /** A silent second player for seek bar thumbnails, or null where that isn't supported. Release it when done. */
     fun createPreview(): SeekPreview?
 
-    /** Draws the video, letterboxed to fit. */
+    /**
+     * Draws the video. [fit] decides how it fills the space; [zoom] (1 = none) enlarges it
+     * around the centre, moved by [pan] in pixels. Subtitles stay in place where the player draws them itself.
+     */
     @Composable
-    fun Video(modifier: Modifier)
+    fun Video(modifier: Modifier, fit: VideoFit, zoom: Float, pan: Offset)
 }
 
 /** Seek bar thumbnails from a second player on the same video. */

@@ -44,6 +44,8 @@ data class AppSettings(
     @JsonProperty("streamConnections") val streamConnections: Int = 16,
     /** Files downloading at the same time. The rest wait and start in order as others finish. */
     @JsonProperty("parallelDownloads") val parallelDownloads: Int = 2,
+    /** How the picture fills the screen: a VideoFit name. Kept between videos, like the Android app's resize mode. */
+    @JsonProperty("videoFit") val videoFit: String = "Fit",
 )
 
 object SettingsStore {

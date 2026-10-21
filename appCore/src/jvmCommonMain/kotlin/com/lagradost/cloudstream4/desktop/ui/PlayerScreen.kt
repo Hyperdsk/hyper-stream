@@ -1,5 +1,12 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.geometry.Offset
+import com.lagradost.cloudstream4.desktop.player.VideoFit
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Surface
@@ -161,6 +168,37 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     // Double-tap seek feedback: -1 back, 1 forward, with a counter so repeats restart it
     var seekFlash by remember { mutableStateOf<Pair<Int, Long>?>(null) }
 
+    // Picture size: the fit mode is remembered between videos, zoom and pan only while watching
+    val fit = VideoFit.from(settings.videoFit)
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var pan by remember { mutableStateOf(Offset.Zero) }
+    var area by remember { mutableStateOf(IntSize.Zero) }
+    // A short label in the middle when the fit or zoom changes
+    var pictureFlash by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    LaunchedEffect(pictureFlash) {
+        if (pictureFlash != null) {
+            delay(1_200)
+            pictureFlash = null
+        }
+    }
+    /** Keeps the zoomed picture covering the screen: it can't be dragged past its edges. */
+    fun clampPan(p: Offset, z: Float): Offset {
+        val maxX = (z - 1f) * area.width / 2f
+        val maxY = (z - 1f) * area.height / 2f
+        return Offset(p.x.coerceIn(-maxX, maxX), p.y.coerceIn(-maxY, maxY))
+    }
+    fun setZoom(z: Float, announce: Boolean = true) {
+        zoom = z.coerceIn(1f, 4f)
+        pan = clampPan(pan, zoom)
+        if (announce) pictureFlash = "Zoom ${(zoom * 100).roundToInt()}%" to System.nanoTime()
+    }
+    fun setFit(f: VideoFit) {
+        SettingsStore.update { it.copy(videoFit = f.name) }
+        zoom = 1f
+        pan = Offset.Zero
+        pictureFlash = f.label to System.nanoTime()
+    }
+
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     // Remotes: the controls take focus when they appear and give it back to the player when they hide
     LaunchedEffect(controlsVisible, openMenu) {
@@ -243,6 +281,9 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     Key.DirectionDown -> player.setVolume(playback.volume - 5)
                     Key.F -> toggleFullscreen()
                     Key.M -> player.toggleMute()
+                    // As in VLC: A cycles the aspect ratio, Z the zoom
+                    Key.A -> setFit(VideoFit.entries[(fit.ordinal + 1) % VideoFit.entries.size])
+                    Key.Z -> setZoom(ZOOM_STEPS.firstOrNull { it > zoom + 0.01f } ?: 1f)
                     Key.N -> model.next()
                     Key.S -> model.activeSkip(playback.timeMs)?.let(model::skip) ?: return@onPreviewKeyEvent false
                     // Escape closes the panel first, then leaves fullscreen, then the player
@@ -257,9 +298,22 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             }
     ) {
         if (player != null) {
-            player.Video(Modifier.fillMaxSize())
+            player.Video(Modifier.fillMaxSize().onSizeChanged { area = it }, fit, zoom, pan)
             Box(
-                Modifier.fillMaxSize().pointerInput(player, touch, seekMs) {
+                Modifier.fillMaxSize()
+                    // Touch: pinch to zoom, and drag a zoomed picture around
+                    .then(
+                        if (touch) Modifier.pointerInput(player) {
+                            detectTransformGestures { _, change, zoomChange, _ ->
+                                if (zoomChange == 1f && zoom <= 1f) return@detectTransformGestures
+                                // A pinch or drag isn't a hold for 2x
+                                hold.release(player)
+                                setZoom(zoom * zoomChange, announce = false)
+                                pan = clampPan(pan + change, zoom)
+                            }
+                        } else Modifier
+                    )
+                    .pointerInput(player, touch, seekMs) {
                     if (touch) {
                         // Touch: a tap shows or hides the controls, a double tap on either side seeks,
                         // holding plays at 2x until released
@@ -287,6 +341,29 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         })
                     }
                 },
+            )
+        }
+
+        pictureFlash?.let { (label, _) ->
+            Text(
+                label,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 72.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        // While pinching, the zoom level
+        if (touch && zoom > 1f && pictureFlash == null && controlsVisible) {
+            Text(
+                "Zoom ${(zoom * 100).roundToInt()}%",
+                color = Color.White.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 72.dp)
+                    .clickable { setZoom(1f) }
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }
 
@@ -468,6 +545,10 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         openMenu = openMenu,
                         onMenu = { openMenu = it },
                         onFullscreen = ::toggleFullscreen,
+                        fit = fit,
+                        zoom = zoom,
+                        onFit = ::setFit,
+                        onZoom = { setZoom(it) },
                         canFullscreen = window != null,
                         playFocus = playFocus,
                         modifier = Modifier.align(Alignment.BottomCenter),
@@ -537,6 +618,10 @@ private fun BottomControls(
     openMenu: String?,
     onMenu: (String?) -> Unit,
     onFullscreen: () -> Unit,
+    fit: VideoFit,
+    zoom: Float,
+    onFit: (VideoFit) -> Unit,
+    onZoom: (Float) -> Unit,
     canFullscreen: Boolean,
     playFocus: FocusRequester,
     modifier: Modifier,
@@ -601,6 +686,12 @@ private fun BottomControls(
 
             Menu("speed", openMenu, onMenu, Icons.Default.Speed, "Speed ${playback.rate}x", listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).map { r ->
                 "${r}x" to (r == playback.rate) to { player.setRate(r) }
+            })
+            Menu("fit", openMenu, onMenu, Icons.Default.AspectRatio, "Picture: ${fit.label}", VideoFit.entries.map { f ->
+                f.label to (f == fit) to { onFit(f) }
+            })
+            Menu("zoom", openMenu, onMenu, if (zoom > 1f) Icons.Default.ZoomIn else Icons.Default.ZoomOutMap, "Zoom ${(zoom * 100).roundToInt()}%", ZOOM_STEPS.map { z ->
+                "${(z * 100).roundToInt()}%" to (kotlin.math.abs(z - zoom) < 0.01f) to { onZoom(z) }
             })
             ControlButton(Icons.Default.VideoLibrary, "Sources (${ui.links.size})", enabled = ui.links.isNotEmpty()) { onMenu("panel:Sources") }
             ControlButton(Icons.Default.Subtitles, "Subtitles") { onMenu("panel:Subtitles") }
@@ -845,3 +936,6 @@ private fun statsLine(stats: StreamStats): String? {
 
 /** Below this while buffering, for 10 seconds, the player suggests another source. */
 private const val SLOW_SOURCE_BYTES = 200L * 1024
+
+/** Zoom levels in the menu and for the Z key. */
+private val ZOOM_STEPS = listOf(1f, 1.25f, 1.5f, 2f, 3f)

@@ -1,6 +1,12 @@
 package com.lagradost.cloudstream4.desktop.player
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -237,9 +243,28 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
     override fun captureFrame(): ImageBitmap? = frame
 
     @Composable
-    override fun Video(modifier: Modifier) {
+    override fun Video(modifier: Modifier, fit: VideoFit, zoom: Float, pan: Offset) {
         val shown = frame ?: return
-        Image(shown, null, contentScale = ContentScale.Fit, modifier = modifier)
+        // VLC draws subtitles into the frame, so they zoom with the picture
+        val zoomed = Modifier.graphicsLayer {
+            scaleX = zoom
+            scaleY = zoom
+            translationX = pan.x
+            translationY = pan.y
+        }
+        val ratio = fit.ratio
+        if (ratio != null) {
+            Box(modifier.clipToBounds(), contentAlignment = Alignment.Center) {
+                Image(shown, null, contentScale = ContentScale.FillBounds, modifier = Modifier.aspectRatio(ratio).then(zoomed))
+            }
+        } else {
+            val scale = when (fit) {
+                VideoFit.Crop -> ContentScale.Crop
+                VideoFit.Stretch -> ContentScale.FillBounds
+                else -> ContentScale.Fit
+            }
+            Image(shown, null, contentScale = scale, modifier = modifier.clipToBounds().then(zoomed))
+        }
     }
 
     override fun stop() {
