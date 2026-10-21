@@ -19,12 +19,28 @@ android {
         versionName = (findProperty("appVersion") as String?) ?: "1.1.0"
     }
 
+    // One key for every release build, here and on CI, so each build installs over the last. Android
+    // refuses an update signed with another key. The key is in ~/.gradle/gradle.properties on the
+    // Mac (hyperstream.keystore, hyperstream.keystorePassword) and in GitHub secrets for CI
+    // (HS_KEYSTORE, HS_KEYSTORE_PASSWORD). Without it, release builds fall back to the debug key.
+    val keystore = (findProperty("hyperstream.keystore") as String? ?: System.getenv("HS_KEYSTORE"))?.let(::file)?.takeIf { it.exists() }
+    val keystorePassword = findProperty("hyperstream.keystorePassword") as String? ?: System.getenv("HS_KEYSTORE_PASSWORD")
+    signingConfigs {
+        if (keystore != null && keystorePassword != null) {
+            create("hyperstream") {
+                storeFile = keystore
+                storePassword = keystorePassword
+                keyAlias = "hyperstream"
+                keyPassword = keystorePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             // Extensions link against the app's and the library's classes by name, so nothing may be renamed or removed
             isMinifyEnabled = false
-            // Signed with the debug key so the APK sideloads without a keystore
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("hyperstream") ?: signingConfigs.getByName("debug")
         }
     }
 

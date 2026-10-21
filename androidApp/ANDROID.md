@@ -11,7 +11,12 @@ so both can be installed side by side.
 adb install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk
 ```
 
-`assembleRelease` makes a release build signed with the debug key, so it sideloads without a keystore.
+`assembleRelease` makes a sideloadable release build. Release builds, here and on GitHub, are all signed
+with one key, so each installs over the last: Android refuses an update signed with a different key.
+The key is `~/.android/hyperstream-release.jks` on the Mac (path and password in
+`~/.gradle/gradle.properties`) and the `HS_KEYSTORE_BASE64` and `HS_KEYSTORE_PASSWORD` secrets on
+GitHub. Back it up: if it's lost, every device has to uninstall the app to take a new build.
+Without it, a release build uses the debug key.
 One APK runs on phones, tablets and Android TV (it shows in the TV launcher with a banner).
 
 ## How it differs from the Mac app

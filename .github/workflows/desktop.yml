@@ -139,9 +139,23 @@ jobs:
             echo "value=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
-      # The same Compose app as the desktop builds, for phones, tablets and Android TV.
-      # Signed with a debug key, so it installs (sideloads) without a keystore secret
+      # Every build is signed with the same key (the HS_KEYSTORE_* secrets), so each one installs
+      # over the last. Without the secrets (pull requests from forks) it uses a throwaway debug key
+      - name: Set up signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.HS_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/hyperstream.jks"
+            echo "HS_KEYSTORE=$RUNNER_TEMP/hyperstream.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No HS_KEYSTORE_BASE64 secret: this APK won't install over other builds"
+          fi
+
+      # The same Compose app as the desktop builds, for phones, tablets and Android TV
       - name: Build APK
+        env:
+          HS_KEYSTORE_PASSWORD: ${{ secrets.HS_KEYSTORE_PASSWORD }}
         run: ./gradlew :androidApp:assembleRelease -PappVersion=${{ steps.version.outputs.value }} -PappVersionCode=${{ github.run_number }}
 
       - name: Collect files
