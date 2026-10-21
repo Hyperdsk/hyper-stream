@@ -31,6 +31,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -314,15 +315,42 @@ fun SearchScreen(model: SearchModel) {
                 else "Results from $searched of ${state.providers.size} extensions appear here.",
             )
 
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-                items(state.results, key = { it.id }) { result ->
-                    when {
-                        result.loading -> PosterRowPlaceholder(result.provider, "Searching…")
-                        result.error != null -> PosterRowPlaceholder(result.provider, result.error)
-                        result.items.isEmpty() -> PosterRowPlaceholder(result.provider, "No results")
-                        else -> PosterRow(result.provider, result.items.map { it.toPoster() }) {
-                            model.opened()
-                            nav.open(Route.Details(it.apiName, it.url, it.name))
+            else -> {
+                // Only extensions that found something get a row; the rest are counted in the status line
+                val found = state.results.filter { !it.loading && it.items.isNotEmpty() }
+                val done = state.results.count { !it.loading }
+                val total = state.results.size
+                val searching = done < total
+                if (!searching && found.isEmpty()) {
+                    MessageBox(
+                        "Nothing found for “${state.searchedFor}”",
+                        "None of the $total extensions searched had it. Try another spelling, or more extensions with the filter button.",
+                    )
+                } else {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                        item(key = "status") {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = appLayout.gutter, vertical = 4.dp)) {
+                                Text(
+                                    when {
+                                        searching -> "Searching… $done of $total extensions" + if (found.isNotEmpty()) ", found in ${found.size}" else ""
+                                        else -> "Found in ${found.size} of $total extensions"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (searching) {
+                                    LinearProgressIndicator(
+                                        progress = { done.toFloat() / total.coerceAtLeast(1) },
+                                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                    )
+                                }
+                            }
+                        }
+                        items(found, key = { it.id }) { result ->
+                            PosterRow(result.provider, result.items.map { it.toPoster() }) {
+                                model.opened()
+                                nav.open(Route.Details(it.apiName, it.url, it.name))
+                            }
                         }
                     }
                 }
@@ -433,10 +461,3 @@ private fun ExtensionPicker(
     )
 }
 
-@Composable
-private fun PosterRowPlaceholder(title: String, message: String) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = appLayout.gutter, vertical = 12.dp)) {
-        Text(title, style = MaterialTheme.typography.titleLarge)
-        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}

@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 
 /**
- * Pages like Home for one kind of media, each showing the home page of an extension that has it.
+ * Pages like Home for one kind of media, each showing the home page of an extension made for it.
  * Grouped like CloudStream's own filters.
  */
 enum class HomeSection(val label: String, val types: Set<TvType>) {
@@ -18,15 +18,15 @@ enum class HomeSection(val label: String, val types: Set<TvType>) {
     Anime("Anime", setOf(TvType.Anime, TvType.OVA, TvType.AnimeMovie)),
     ;
 
-    /** Whether [api] has this kind of media at all. */
-    fun fits(api: MainAPI) = api.supportedTypes.any { it in types }
+    /**
+     * Whether this is [api]'s one kind among movies, TV shows and anime: an anime site belongs under
+     * Anime, but a site with movies and series (or anime too) belongs on neither page. Other kinds it
+     * lists, such as cartoons, don't count.
+     */
+    fun owns(api: MainAPI): Boolean = entries.filter { section -> api.supportedTypes.any { it in section.types } } == listOf(this)
 
-    /** Whether [api] has only this kind, such as an anime site under Anime: it comes first. */
-    fun dedicated(api: MainAPI) = api.supportedTypes.isNotEmpty() && api.supportedTypes.all { it in types }
-
-    /** The extensions to offer on this page: those with a home page and this kind, dedicated ones first. */
-    fun providers(apis: List<MainAPI>): List<MainAPI> =
-        apis.filter { it.hasMainPage && fits(it) }.sortedByDescending { dedicated(it) }
+    /** The extensions this page offers: those of only this kind, with a home page. */
+    fun providers(apis: List<MainAPI>): List<MainAPI> = apis.filter { it.hasMainPage && owns(it) }
 }
 
 /** The pages some installed extension can fill; the others aren't shown. */

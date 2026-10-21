@@ -15,20 +15,24 @@ class HomeSectionsTest {
     }
 
     @Test
-    fun pagesShowOnlyWhenAnExtensionHasThatKind() {
-        val movies = api("Movies Only", TvType.Movie)
-        val mixed = api("Everything", TvType.Movie, TvType.TvSeries, TvType.Anime)
-        val anime = api("Anime Site", TvType.Anime, TvType.OVA)
+    fun pagesListOnlyExtensionsOfThatOneKind() {
+        val movies = api("Movies Only", TvType.Movie, TvType.Torrent)
+        val moviesAndSeries = api("Movies And Series", TvType.Movie, TvType.TvSeries)
+        val everything = api("Everything", TvType.Movie, TvType.TvSeries, TvType.Anime)
+        // Cartoons and anime films don't make an anime site a movie site
+        val anime = api("Anime Site", TvType.Anime, TvType.AnimeMovie, TvType.Cartoon)
+        val dramas = api("Dramas", TvType.AsianDrama, TvType.TvSeries)
         val searchOnly = api("No Home Page", TvType.TvSeries, mainPage = false)
+        val all = listOf(movies, moviesAndSeries, everything, anime, dramas, searchOnly)
 
-        assertEquals(listOf(HomeSection.Movies), availableSections(listOf(movies)))
+        assertEquals(listOf("Movies Only"), HomeSection.Movies.providers(all).map { it.name })
+        assertEquals(listOf("Dramas"), HomeSection.Shows.providers(all).map { it.name })
+        assertEquals(listOf("Anime Site"), HomeSection.Anime.providers(all).map { it.name })
+
+        // Mixed sites fill no page, so with only those no tab shows
+        assertEquals(emptyList(), availableSections(listOf(moviesAndSeries, everything)))
         // An extension without a home page can't fill a page
         assertEquals(emptyList(), availableSections(listOf(searchOnly)))
-        assertEquals(HomeSection.entries, availableSections(listOf(mixed)))
-
-        // Extensions with only that kind come first, then mixed ones
-        assertEquals(listOf("Anime Site", "Everything"), HomeSection.Anime.providers(listOf(mixed, anime, movies)).map { it.name })
-        assertEquals(listOf("Movies Only", "Everything"), HomeSection.Movies.providers(listOf(mixed, anime, movies)).map { it.name })
-        assertEquals(listOf("Everything"), HomeSection.Shows.providers(listOf(mixed, anime, movies, searchOnly)).map { it.name })
+        assertEquals(listOf(HomeSection.Anime), availableSections(listOf(everything, anime)))
     }
 }
