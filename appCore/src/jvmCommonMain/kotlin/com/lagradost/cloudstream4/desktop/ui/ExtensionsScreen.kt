@@ -86,7 +86,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     val q = query.trim()
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(if (appLayout.compact) 16.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = if (appLayout.compact) 16.dp else appLayout.gutter, vertical = if (appLayout.compact) 16.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Extensions", style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))

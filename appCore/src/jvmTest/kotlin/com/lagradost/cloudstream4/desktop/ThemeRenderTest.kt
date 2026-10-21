@@ -1,7 +1,6 @@
 package com.lagradost.cloudstream4.desktop
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -13,7 +12,9 @@ import com.lagradost.cloudstream4.desktop.ui.HyperStreamTheme
 import com.lagradost.cloudstream4.desktop.ui.LocalNavigator
 import com.lagradost.cloudstream4.desktop.ui.Navigator
 import com.lagradost.cloudstream4.desktop.ui.SettingsScreen
-import com.lagradost.cloudstream4.desktop.ui.Sidebar
+import com.lagradost.cloudstream4.desktop.ui.TopBar
+import com.lagradost.cloudstream4.desktop.ui.TopBarHeight
+import androidx.compose.foundation.layout.padding
 import com.lagradost.cloudstream4.theme.CloudStreamPrimaryColor
 import com.lagradost.cloudstream4.theme.CloudStreamThemeMode
 import org.jetbrains.skia.EncodedImageFormat
@@ -21,7 +22,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 
-/** Renders the sidebar and Settings in the Hyper Stream theme, for checking by eye. Opt-in: CS_THEME_OUT. */
+/** Renders the top bar and Settings in the Hyper Stream theme, for checking by eye. Opt-in: CS_THEME_OUT. */
 class ThemeRenderTest {
     @Test
     fun rendersTheme() {
@@ -32,9 +33,9 @@ class ThemeRenderTest {
             HyperStreamTheme(CloudStreamThemeMode.Dark, CloudStreamPrimaryColor.NORMAL) {
                 CompositionLocalProvider(LocalNavigator provides nav) {
                     Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
-                        Row(Modifier.fillMaxSize()) {
-                            Sidebar(nav)
-                            Box(Modifier.weight(1f)) { SettingsScreen(vlcAvailable = true) }
+                        Box(Modifier.fillMaxSize()) {
+                            Box(Modifier.fillMaxSize().padding(top = TopBarHeight)) { SettingsScreen(vlcAvailable = true) }
+                            TopBar(nav, solid = true)
                         }
                     }
                 }

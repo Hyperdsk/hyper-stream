@@ -9,7 +9,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Sizes that change with the window: the Mac app and tablets and TVs use [Regular], phones in
- * portrait (under 600dp wide) use [Compact], with a bottom bar instead of the sidebar, narrower
+ * portrait (under 600dp wide) use [Compact], with a bottom bar instead of the top bar, narrower
  * margins and smaller posters.
  */
 @Immutable

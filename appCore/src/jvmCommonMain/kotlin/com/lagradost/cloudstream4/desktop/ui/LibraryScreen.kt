@@ -61,7 +61,7 @@ fun LibraryScreen() {
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(if (appLayout.compact) 104.dp else 150.dp),
-                contentPadding = PaddingValues(if (appLayout.compact) 12.dp else 24.dp),
+                contentPadding = PaddingValues(horizontal = if (appLayout.compact) 12.dp else appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier.fillMaxSize(),

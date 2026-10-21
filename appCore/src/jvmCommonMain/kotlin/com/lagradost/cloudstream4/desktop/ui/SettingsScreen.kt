@@ -68,7 +68,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         )
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(if (appLayout.compact) 16.dp else 24.dp).widthIn(max = 760.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = if (appLayout.compact) 16.dp else appLayout.gutter, vertical = if (appLayout.compact) 16.dp else 24.dp).widthIn(max = 760.dp)) {
         Text("Settings", style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge)
 
         if (appLayout.compact) {

@@ -102,7 +102,7 @@ fun DownloadsScreen() {
             return
         }
 
-        LazyColumn(contentPadding = PaddingValues(if (appLayout.compact) 12.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(contentPadding = PaddingValues(horizontal = if (appLayout.compact) 12.dp else appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             items(groups, key = { it.first().apiName + "|" + it.first().parentUrl }) { group ->
                 val first = group.first()
                 Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {

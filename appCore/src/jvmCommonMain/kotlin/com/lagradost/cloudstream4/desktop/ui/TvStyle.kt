@@ -143,20 +143,24 @@ fun Modifier.pressScale(interaction: MutableInteractionSource): Modifier = compo
 fun PrimaryCapsuleButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHighlightedAsState()
+    // A white ring wouldn't show on a white button, so on TV the focused one turns the accent colour
+    val focused by interaction.collectIsFocusedAsState()
+    val accent = focused && com.lagradost.cloudstream4.desktop.Platform.isTv
+    val content = if (accent) MaterialTheme.colorScheme.onPrimary else Color.Black
     Row(
         modifier
             .pressScale(interaction)
             .hoverable(interaction)
-            .background(Color.White.copy(alpha = if (hovered) 1f else 0.92f), RoundedCornerShape(50))
-            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
+            .background(if (accent) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = if (hovered) 1f else 0.92f), RoundedCornerShape(50))
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 22.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, null, tint = Color.Black, modifier = Modifier.size(20.dp))
+            Icon(icon, null, tint = content, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, color = Color.Black, style = MaterialTheme.typography.labelLarge)
+        Text(text, color = content, style = MaterialTheme.typography.labelLarge)
     }
 }
 

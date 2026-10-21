@@ -21,7 +21,7 @@ One APK runs on phones, tablets and Android TV (it shows in the TV launcher with
 | Extensions | `.cs3` files load as they are, in a `DexClassLoader`, like upstream's app (`appCore/src/androidMain/.../plugins/PluginLoader.android.kt`). | Converted to JVM bytecode with dex2jar. |
 | App classes extensions use | `Plugin`, `CommonActivity` and `RepositoryManager` with the same names as upstream, in `appCore/src/androidMain/.../cloudstream3`. The activity is an `AppCompatActivity`, since extensions cast to it. | Stand-ins plus generated placeholders. |
 | Player | Media3 ExoPlayer (`ExoVideoEngine.kt`), with each link's headers sent through the extensions' OkHttp client. Subtitles render with Media3's `SubtitleView`. | VLC, through a local proxy for headers and parallel connections. |
-| Layout | Under 600dp wide (phones in portrait): bottom bar, smaller posters, stacked details. Extensions are under Settings, like upstream's app. Wider screens and TVs get the sidebar. | Sidebar. |
+| Layout | Under 600dp wide (phones in portrait): bottom bar, smaller posters, stacked details. Extensions are under Settings, like upstream's app. Wider screens and TVs get the top bar. | Top bar. |
 | Player controls | Touch: tap shows or hides controls, double-tap left or right seeks, hold for 2x, big centre buttons. TV remote: arrows seek while the controls are hidden and move between buttons while shown; OK plays or pauses; media keys work. | Mouse and keyboard. |
 | Data | The app's private files folder. Downloads go to the app's Movies folder (`Android/data/com.lagradost.cloudstream4.app/files/Movies`). | `~/Library/Application Support/CloudStream`, `~/Movies/CloudStream`. |
 

@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
@@ -222,8 +224,13 @@ fun HomeScreen(model: HomeModel) {
     val library by LibraryStore.state.collectAsState()
     val continueWatching = library.continueWatching
 
+    // On the Mac, tablets and TVs the top bar floats over this screen
+    val bar = LocalTopBarState.current
+    val barInset = if (bar != null) TopBarHeight else 0.dp
+
     if (state.providers.isEmpty() && continueWatching.isEmpty()) {
-        Column(Modifier.fillMaxSize()) {
+        LaunchedEffect(bar) { bar?.solid = true }
+        Column(Modifier.fillMaxSize().padding(top = barInset)) {
             LargeTitle("Home")
             MessageBox(
                 title = "No extensions yet",
@@ -237,14 +244,20 @@ fun HomeScreen(model: HomeModel) {
     Box(Modifier.fillMaxSize()) {
         val listState = rememberLazyListState()
         val scrollScope = rememberCoroutineScope()
+        // The bar turns solid once the banner scrolls away, or when there is no banner to float over
+        LaunchedEffect(listState, bar, state.hero.isEmpty()) {
+            val noBanner = state.hero.isEmpty()
+            snapshotFlow { noBanner || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 160 }
+                .collect { bar?.solid = it }
+        }
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
             if (state.hero.isNotEmpty()) {
                 item(key = "hero") {
                     HeroCarousel(state.hero, onFocused = { scrollScope.launch { listState.animateScrollToItem(0) } })
                 }
             } else {
-                // Room for the floating provider picker when there is no hero
-                item(key = "title") { LargeTitle("Home") }
+                // Room for the floating provider picker (phones) or the top bar
+                item(key = "title") { LargeTitle("Home", Modifier.padding(top = barInset)) }
             }
             if (continueWatching.isNotEmpty()) {
                 item(key = "continue") { ContinueWatchingRow(continueWatching) }
@@ -275,8 +288,8 @@ fun HomeScreen(model: HomeModel) {
             }
         }
 
-        // Provider choice floats over the top right, like the Apple TV app's account controls
-        if (state.providers.isNotEmpty()) {
+        // Phones: the provider choice floats over the top right. Elsewhere it's in the top bar.
+        if (state.providers.isNotEmpty() && bar == null) {
             Row(
                 Modifier.align(Alignment.TopEnd).padding(top = if (appLayout.compact) 12.dp else 20.dp, end = if (appLayout.compact) 12.dp else 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -303,4 +316,13 @@ fun ProviderPicker(providers: List<String>, selected: String?, onSelect: (String
             }
         }
     }
+}
+
+/** Home's provider choice and reload, shown in the top bar. */
+@Composable
+fun HomeProviderControls(model: HomeModel) {
+    val state by model.state.collectAsState()
+    if (state.providers.isEmpty()) return
+    ProviderPicker(state.providers, state.provider, onSelect = model::select)
+    GlassButton(Icons.Default.Refresh, "Reload", onClick = model::load)
 }

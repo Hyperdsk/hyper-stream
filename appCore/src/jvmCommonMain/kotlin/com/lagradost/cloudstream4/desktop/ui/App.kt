@@ -1,5 +1,9 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.layout.Box
@@ -131,9 +135,26 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
                 BottomBar(nav)
             }
         } else {
-            Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                Sidebar(nav)
-                Box(Modifier.weight(1f).fillMaxHeight()) { screen() }
+            // Mac, tablets and TVs: a top bar. It floats over Home's banner, and title pages have
+            // their own back button instead
+            val bar = remember { TopBarState() }
+            val overlay = route == Route.Home
+            val showBar = route !is Route.Details
+            // Remotes: down from the bar goes into the page (the bar is drawn over the page, and
+            // focus search alone didn't cross into it)
+            val page = remember { FocusRequester() }
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                CompositionLocalProvider(LocalTopBarState provides bar) {
+                    Box(
+                        Modifier.fillMaxSize().padding(top = if (showBar && !overlay) TopBarHeight else 0.dp)
+                            .focusRequester(page).focusGroup(),
+                    ) { screen() }
+                }
+                if (showBar) {
+                    TopBar(nav, solid = !overlay || bar.solid, modifier = Modifier.focusProperties { down = page }) {
+                        if (route == Route.Home) HomeProviderControls(store.home)
+                    }
+                }
             }
         }
     }
