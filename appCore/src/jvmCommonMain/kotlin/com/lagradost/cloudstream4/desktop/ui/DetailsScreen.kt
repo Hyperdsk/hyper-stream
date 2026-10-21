@@ -341,8 +341,18 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
     }
 }
 
+private fun isWebLink(url: String?) = url != null && (url.startsWith("http://", true) || url.startsWith("https://", true))
+
+/**
+ * The title's page on the provider's site. Some providers keep an id or JSON in the title's
+ * url instead of a link; then it's the provider's home page, or null when there is none.
+ */
+private fun webPage(apiName: String, url: String): String? =
+    url.trim().takeIf(::isWebLink) ?: providerByName(apiName)?.mainUrl?.trim()?.takeIf(::isWebLink)
+
 private fun openInBrowser(url: String) {
-    Platform.openUrl(url)
+    val opened = isWebLink(url) && Platform.openUrl(url)
+    if (!opened) com.lagradost.cloudstream4.desktop.DesktopToasts.show("Couldn't open this link in a browser.")
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -586,7 +596,9 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                     response.trailers.firstOrNull()?.let { trailer ->
                         GlassButton(Icons.Default.Theaters, "Trailer", text = "Trailer") { openInBrowser(trailer.extractorUrl) }
                     }
-                    GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(response.url) }
+                    webPage(route.apiName, response.url)?.let { page ->
+                        GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(page) }
+                    }
                 }
                 (response.plot?.takeIf { it.isNotBlank() } ?: state.imdb?.plot)?.let {
                     Spacer(Modifier.height(18.dp))

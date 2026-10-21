@@ -17,9 +17,7 @@ actual object Platform {
     actual val description: String
         get() = "Java ${System.getProperty("java.version")} · ${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
 
-    actual fun openUrl(url: String) {
-        runCatching { Desktop.getDesktop().browse(URI(url)) }
-    }
+    actual fun openUrl(url: String): Boolean = runCatching { Desktop.getDesktop().browse(URI(url)) }.isSuccess
 
     actual fun openFolder(folder: File) {
         runCatching { Desktop.getDesktop().open(folder) }

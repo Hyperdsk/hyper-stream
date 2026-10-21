@@ -16,7 +16,8 @@ expect object Platform {
     /** Desktop apps can open folders in the file manager; Android can't. */
     val canOpenFolders: Boolean
 
-    fun openUrl(url: String)
+    /** Opens a web page in the browser. Returns false when nothing could open it. */
+    fun openUrl(url: String): Boolean
     fun openFolder(folder: File)
 
     /** Shows [file] selected in the file manager, or opens it with another app on Android. */

@@ -14,12 +14,12 @@ actual object Platform {
     actual val description: String
         get() = "Android ${Build.VERSION.RELEASE} · ${Build.MANUFACTURER} ${Build.MODEL}"
 
-    actual fun openUrl(url: String) {
-        runCatching {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            (AndroidHost.activity ?: AndroidHost.context).startActivity(intent)
-        }
-    }
+    actual fun openUrl(url: String): Boolean = runCatching {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        (AndroidHost.activity ?: AndroidHost.context).startActivity(intent)
+    }.isSuccess
 
     actual fun openFolder(folder: File) = Unit
 
