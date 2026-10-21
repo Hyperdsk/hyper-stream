@@ -1,5 +1,9 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -264,8 +268,10 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .focusRequester(focus)
-            .focusable()
+            // Keys only reach the player while it or one of its controls has focus. A clicked button
+            // that fades out with the controls, or a closed panel, would take focus with it and
+            // leave the keyboard dead until the next click. Menus and the panel keep theirs
+            .reclaimFocus(focus, paused = openMenu != null)
             .onPointerEvents { if (it.type == PointerEventType.Move) poke() }
             .onPreviewKeyEvent { e ->
                 if (player == null) return@onPreviewKeyEvent false
@@ -716,7 +722,7 @@ private fun BottomControls(
 
     Column(modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(formatTime(if (dragging) (dragValue * length).toLong() else playback.timeMs), color = Color.White, style = MaterialTheme.typography.labelMedium)
+            PlayerTime(formatTime(if (dragging) (dragValue * length).toLong() else playback.timeMs), playback.lengthMs, alignEnd = true)
             SeekBar(
                 value = shown.coerceIn(0f, 1f),
                 lengthMs = playback.lengthMs,
@@ -729,7 +735,7 @@ private fun BottomControls(
                 },
                 modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
             )
-            Text(if (playback.lengthMs > 0) formatTime(playback.lengthMs) else "Live", color = Color.White, style = MaterialTheme.typography.labelMedium)
+            PlayerTime(if (playback.lengthMs > 0) formatTime(playback.lengthMs) else "Live", playback.lengthMs, alignEnd = false)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             ControlButton(Icons.Default.SkipPrevious, "Previous episode", enabled = model.hasPrevious) { model.previous() }
@@ -754,12 +760,17 @@ private fun BottomControls(
             }
             // Phones and TVs have volume buttons
             if (!touch && !tv) {
-                Slider(
+                SlimSlider(
                     value = playback.volume / 200f,
                     onValueChange = { player.setVolume((it * 200).toInt()) },
                     modifier = Modifier.width(120.dp),
                 )
-                Text("${playback.volume}%", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    "${playback.volume}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.padding(start = 4.dp),
+                )
             }
 
             Spacer(Modifier.weight(1f))
@@ -924,9 +935,6 @@ internal fun SeekBar(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val active = fraction != null || focused
-    val accent = MaterialTheme.colorScheme.primary
-    val trackHeight by animateDpAsState(if (active) 6.dp else 4.dp)
-    val handleSize by animateDpAsState(if (active) 16.dp else 12.dp)
 
     LaunchedEffect(previewTime?.div(SeekPreview.BUCKET_MS), preview) {
         if (previewTime != null && lengthMs > 0) preview?.request(previewTime)
@@ -950,38 +958,15 @@ internal fun SeekBar(
             },
         contentAlignment = Alignment.CenterStart,
     ) {
-        Slider(
+        SlimSlider(
             value = value,
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,
             enabled = lengthMs > 0,
-            interactionSource = interaction,
-            thumb = {
-                Box(Modifier.size(SEEK_HANDLE), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier.size(handleSize)
-                            .shadow(3.dp, CircleShape)
-                            .background(Color.White, CircleShape)
-                            // On a TV the handle shows it has focus, since the remote's arrows seek with it
-                            .then(if (focused) Modifier.border(3.dp, accent, CircleShape) else Modifier),
-                    )
-                }
-            },
-            track = {
-                Canvas(Modifier.fillMaxWidth().height(16.dp)) {
-                    val h = trackHeight.toPx()
-                    val y = size.height / 2
-                    val radius = CornerRadius(h / 2)
-                    fun bar(from: Float, to: Float, color: Color) {
-                        if (to <= from) return
-                        drawRoundRect(color, Offset(size.width * from, y - h / 2), Size(size.width * (to - from), h), radius)
-                    }
-                    bar(0f, 1f, Color.White.copy(alpha = 0.28f))
-                    // Where the pointer is, ahead of the playhead: how far a click would jump
-                    hover?.takeIf { !dragging && it > value }?.let { bar(value, it, Color.White.copy(alpha = 0.45f)) }
-                    bar(0f, value, accent)
-                }
-            },
+            interaction = interaction,
+            active = active,
+            // Where the pointer is, ahead of the playhead: how far a click would jump
+            aheadTo = hover?.takeIf { !dragging && it > value },
             modifier = Modifier.fillMaxWidth(),
         )
 
@@ -1047,6 +1032,87 @@ internal fun SeekBar(
 
 /** Room for the seek handle at its largest; the track is inset by half of it at each end. */
 private val SEEK_HANDLE = 20.dp
+
+/**
+ * The player's slider look, for seeking and volume: a thin track that thickens while [active]
+ * or hovered, the value in the accent colour, an optional lighter stretch up to [aheadTo], and a
+ * round white handle (ringed in the accent colour when a remote focuses it).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SlimSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier,
+    onValueChangeFinished: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    interaction: MutableInteractionSource = remember { MutableInteractionSource() },
+    active: Boolean = false,
+    aheadTo: Float? = null,
+) {
+    val focused by interaction.collectIsFocusedAsState()
+    val hovered by interaction.collectIsHoveredAsState()
+    val dragged by interaction.collectIsDraggedAsState()
+    val big = active || focused || hovered || dragged
+    val accent = MaterialTheme.colorScheme.primary
+    val trackHeight by animateDpAsState(if (big) 6.dp else 4.dp)
+    val handleSize by animateDpAsState(if (big) 16.dp else 12.dp)
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        enabled = enabled,
+        interactionSource = interaction,
+        thumb = {
+            Box(Modifier.size(SEEK_HANDLE), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(handleSize)
+                        .shadow(3.dp, CircleShape)
+                        .background(Color.White, CircleShape)
+                        // On a TV the handle shows it has focus, since the remote's arrows move it
+                        .then(if (focused) Modifier.border(3.dp, accent, CircleShape) else Modifier),
+                )
+            }
+        },
+        track = {
+            Canvas(Modifier.fillMaxWidth().height(16.dp)) {
+                val h = trackHeight.toPx()
+                val y = size.height / 2
+                val radius = CornerRadius(h / 2)
+                fun bar(from: Float, to: Float, color: Color) {
+                    if (to <= from) return
+                    drawRoundRect(color, Offset(size.width * from, y - h / 2), Size(size.width * (to - from), h), radius)
+                }
+                bar(0f, 1f, Color.White.copy(alpha = 0.28f))
+                aheadTo?.let { bar(value, it, Color.White.copy(alpha = 0.45f)) }
+                bar(0f, value, accent)
+            }
+        },
+        modifier = modifier.hoverable(interaction),
+    )
+}
+
+/**
+ * A time beside the seek bar. Digits are equally wide and the label keeps the width of the
+ * longest time [lengthMs] can show, so the bar doesn't shift as the seconds tick.
+ */
+@Composable
+private fun PlayerTime(text: String, lengthMs: Long, alignEnd: Boolean) {
+    val style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    // "2:36:13" -> "0:00:00": the widest a time of this length gets, with tabular digits
+    val widest = formatTime(lengthMs.coerceAtLeast(0)).replace(Regex("[0-9]"), "0").let { if (it.length < 4) "00:00" else it }
+    val width = with(density) { measurer.measure(widest, style).size.width.toDp() }
+    Text(
+        text,
+        color = Color.White,
+        style = style,
+        textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
+        maxLines = 1,
+        modifier = Modifier.widthIn(min = width),
+    )
+}
 
 @Composable
 private fun SeekTime(timeMs: Long) {

@@ -120,3 +120,22 @@ fun TvTextFieldBox(
         }
     }
 }
+
+/**
+ * Makes this the keyboard's target, taking focus back for [focus] whenever nothing inside it has
+ * focus, unless [paused] (a menu or dialog has it on purpose). Compose drops focus when the focused
+ * element goes away, such as a clicked button that hides, and then no key reaches the screen.
+ */
+@Composable
+fun androidx.compose.ui.Modifier.reclaimFocus(
+    focus: androidx.compose.ui.focus.FocusRequester,
+    paused: Boolean = false,
+): androidx.compose.ui.Modifier {
+    var hasFocus by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(hasFocus, paused) {
+        if (hasFocus || paused) return@LaunchedEffect
+        kotlinx.coroutines.delay(100)
+        runCatching { focus.requestFocus() }
+    }
+    return onFocusChanged { hasFocus = it.hasFocus }.focusRequester(focus).focusable()
+}
