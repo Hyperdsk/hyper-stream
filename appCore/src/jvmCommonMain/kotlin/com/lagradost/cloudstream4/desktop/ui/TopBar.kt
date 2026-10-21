@@ -57,8 +57,8 @@ class TopBarState {
 val LocalTopBarState = staticCompositionLocalOf<TopBarState?> { null }
 
 /**
- * The top navigation of streaming apps on TVs and the web: the app mark on the left, the
- * sections as tabs, and Settings on the right. It floats over Home's banner and turns solid
+ * The top navigation of streaming apps on TVs and the web: the app mark and the sections as
+ * tabs on the left, and Settings on the right. It floats over Home's banner and turns solid
  * once the page scrolls. [trailing] adds controls before Settings, such as Home's provider.
  */
 @Composable
@@ -83,7 +83,9 @@ fun TopBar(nav: Navigator, solid: Boolean, modifier: Modifier = Modifier, traili
                 Spacer(Modifier.width(10.dp))
                 Text("Hyper Stream", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = colors.onBackground)
             }
-            Spacer(Modifier.weight(1f))
+            // Right after the mark, so the tabs stay in the same place on every screen, whatever
+            // controls the screen adds on the right
+            Spacer(Modifier.width(28.dp))
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TopTab(null, Icons.Outlined.Search, "Search", tab == Route.Search) { nav.open(Route.Search) }
                 TopTab("Home", null, "Home", tab == Route.Home) { nav.open(Route.Home) }
