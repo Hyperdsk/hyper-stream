@@ -15,6 +15,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.ConcurrentHashMap
@@ -51,7 +52,7 @@ data class VideoSkipStamp(
  *
  * Unlike the Android app, a title without ids still gets skip times: most extensions give none, so
  * the IMDb id comes from the IMDb match the details page uses, and an anime's MyAnimeList id from
- * an AniList search by title.
+ * an AniList (or Kitsu) search by title.
  */
 object SkipStamps {
     private abstract class Source(val name: String, val types: Set<TvType>) {
@@ -72,7 +73,7 @@ object SkipStamps {
                 malDone = true
                 mal = runCatching { data.getMalId() }.getOrNull()?.toIntOrNull()
                     // Each anime season has its own MyAnimeList entry, so a title search only fits the first
-                    ?: if ((season ?: 1) == 1) aniListMalId(data.name, data.year) else null
+                    ?: if ((season ?: 1) == 1) malIdByTitle(data.name, data.year) else null
             }
             return mal
         }
@@ -124,7 +125,13 @@ object SkipStamps {
 
     private fun normalize(title: String) = title.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
 
-    /** The MyAnimeList id of the anime called [name], from AniList's free API, when the title matches. */
+    /** The MyAnimeList id of the anime called [name]: from AniList, or Kitsu when AniList is down or has no match. */
+    private suspend fun malIdByTitle(name: String, year: Int?): Int? =
+        runCatching { aniListMalId(name, year) }.getOrNull() ?: runCatching { kitsuMalId(name, year) }.getOrNull()
+
+    private fun yearFits(year: Int?, other: Int?) = year == null || other == null || kotlin.math.abs(year - other) <= 1
+
+    /** From AniList's free API, when a title matches exactly. */
     private suspend fun aniListMalId(name: String, year: Int?): Int? {
         val query = "query(\$s: String) { Page(perPage: 5) { media(search: \$s, type: ANIME) { idMal seasonYear title { romaji english } synonyms } } }"
         val body = jsonMapper.writeValueAsString(mapOf("query" to query, "variables" to mapOf("s" to name)))
@@ -138,8 +145,31 @@ object SkipStamps {
         return json.path("data").path("Page").path("media").firstOrNull { m ->
             val titles = listOf(m.path("title").path("romaji").asText(), m.path("title").path("english").asText()) + m.path("synonyms").map { it.asText() }
             val y = m.path("seasonYear").takeIf { it.isNumber }?.asInt()
-            titles.any { normalize(it) == target } && (year == null || y == null || kotlin.math.abs(year - y) <= 1)
+            titles.any { normalize(it) == target } && yearFits(year, y)
         }?.path("idMal")?.takeIf { it.isNumber }?.asInt()
+    }
+
+    /** From Kitsu's free API, which maps its entries to MyAnimeList ids, when a title matches exactly. */
+    private suspend fun kitsuMalId(name: String, year: Int?): Int? {
+        val url = "https://kitsu.app/api/edge/anime".toHttpUrl().newBuilder()
+            .addQueryParameter("filter[text]", name)
+            .addQueryParameter("page[limit]", "5")
+            .addQueryParameter("include", "mappings")
+            .addQueryParameter("fields[anime]", "canonicalTitle,titles,startDate,mappings")
+            .addQueryParameter("fields[mappings]", "externalSite,externalId")
+            .build().toString()
+        val json = jsonMapper.readTree(app.get(url).text)
+        val malIds = json.path("included")
+            .filter { it.path("attributes").path("externalSite").asText() == "myanimelist/anime" }
+            .associate { it.path("id").asText() to it.path("attributes").path("externalId").asText().toIntOrNull() }
+        val target = normalize(name)
+        return json.path("data").firstNotNullOfOrNull { anime ->
+            val attributes = anime.path("attributes")
+            val titles = listOf(attributes.path("canonicalTitle").asText()) + attributes.path("titles").map { it.asText() }
+            val y = attributes.path("startDate").asText().take(4).toIntOrNull()
+            if (titles.none { normalize(it) == target } || !yearFits(year, y)) return@firstNotNullOfOrNull null
+            anime.path("relationships").path("mappings").path("data").firstNotNullOfOrNull { malIds[it.path("id").asText()] }
+        }
     }
 
     private object AniSkip : Source("AniSkip", setOf(TvType.Anime, TvType.OVA)) {
