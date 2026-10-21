@@ -1,112 +1,110 @@
-# CloudStream
+<p align="center"><img src="branding/hyperstream-icon.svg" alt="Hyper Stream" width="112"/></p>
 
-**⚠️ Warning: By default, this app doesn't provide any video sources; you have to install extensions to add functionality to the app.**
-<p align="left"><a href="https://github.com/recloudstream/cloudstream/releases/download/pre-release/app-prerelease-release.apk"><img src=".github/images/download-cloudstream-pre.png" alt="Download Cloudstream Pre-Release" width=430/></a></p>
+<h1 align="center">Hyper Stream</h1>
 
-[![Discord](https://invidget.switchblade.xyz/5Hus6fM)](https://discord.gg/5Hus6fM)
+<p align="center">A media center for Mac, Windows, Linux, Android phones and tablets, and Android TV, built on <a href="https://github.com/recloudstream/cloudstream">CloudStream</a>.</p>
 
+**⚠️ Hyper Stream doesn't come with any video sources. You add them by installing CloudStream extensions.**
 
-## Table of Contents: 
-+ [About Us:](#about_us)
-+ [Installation Steps:](#install_rules)
-+ [Contributing:](#contributing)
-+ [Issues:](#issues)
-  + [Bugs Reports:](#bug_report)
-  + [Enhancement:](#enhancment)
-+ [Extension Development:](#extensions)
-+ [Language Support:](#languages)
-+ [Further Sources](#contact_and_sources)
+Hyper Stream is one Compose Multiplatform app that runs on desktop and Android. It loads the same
+`.cs3` extensions as CloudStream's Android app, with a new interface made for the mouse, touch and
+TV remotes.
 
+## Download
 
-<a id="about_us"></a>
+Get the latest builds from [Releases](https://github.com/KamranAllahYar/cloudstream-mac/releases/latest):
 
-## About us: 
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS, Apple silicon | `-macos-apple-silicon.dmg` | Needs [VLC](https://www.videolan.org/vlc/). The app isn't notarized: the first time, right-click it and choose Open. |
+| macOS, Intel | `-macos-intel.dmg` | Same as above. |
+| Windows | `.msi`, or the portable `.zip` | Needs VLC. |
+| Linux | `.deb`, or the portable `.tar.gz` | Needs VLC. |
+| Android phones, tablets and TV | `-android-and-tv.apk` | One APK for all of them. Allow installs from unknown sources. |
 
-**CloudStream is a media center that prioritizes and emphasizes complete freedom and flexibility for users and developers.** 
+## Features
 
-CloudStream is an extension-based multimedia player with tracking support. There are extensions to view videos from: 
+- **No ads, no tracking.**
+- **Extensions:** add repositories and install extensions as in CloudStream. On Android they load
+  as they are; on desktop they're converted to run on the JVM.
+- **Player:** VLC on desktop, ExoPlayer on Android, with subtitles, audio tracks, quality and
+  source choice, playback speed, and aspect ratio, crop and zoom.
+- **Touch and TV controls:** double-tap to seek, hold for 2x, swipe for brightness and volume on
+  phones; full remote navigation on TVs.
+- **Downloads** for watching offline.
+- **Library and progress:** bookmarks, watch status, Continue watching, and the source each title
+  last played from.
+- **Google TV home screen:** Continue watching shows as a Hyper Stream row, and in Android's Watch
+  Next list.
+- **Optional sync:** sign in to keep progress, library, settings and extensions the same on every
+  device, through a small Supabase project ([backend/supabase](backend/supabase/README.md)).
+  Sign in with an email link, a password, or (on a TV) a code shown on your phone or Mac.
+  Everything works without it.
 
-+ [Librevox (audio-books)](https://librivox.org/) 
-+ [Youtube](https://www.youtube.com/)
-+ [Twitch](https://www.twitch.tv/)
-+ [iptv-org (A collection of publicly available IPTV (Internet Protocol television) channels from all over the world.)](https://github.com/iptv-org/iptv) 
-+ [nginx](https://nginx.org/)
-+ And more... 
+## Build from source
 
+Needs JDK 17 and the Android SDK.
 
-**Please don't create illegal extensions or use any that host any copyrighted media.** For more details about our stance on the DMCA and EUCD, you can read about it on our organization: [reCloudStream](https://github.com/recloudstream)
+```bash
+./gradlew :desktopApp:run
+```
 
-#### Important Copyright Note: 
+```bash
+./gradlew :androidApp:assembleRelease
+```
 
-Our documentation is unmaintained and open to contributions; therefore, apps and sources, extensions in recommended sources, and recommended apps are not officially moderated or endorsed by CloudStream; if you or another copyright owner identify an extension that breaches your copyright, please let us know. 
+```bash
+./gradlew :appCore:jvmTest
+```
 
+More detail:
+- [Mac and other desktops](desktopApp/MACOS.md): packaging, debugging, how extensions are converted.
+- [Android, tablets and TV](androidApp/ANDROID.md): what differs from the desktop app, and what isn't done yet.
+- [Sync backend](backend/supabase/README.md): setting up your own Supabase project.
 
-#### Features:
-+ **AdFree**, No ads whatsoever
-+ No tracking/analytics
-+ Bookmarks
-+ Phone and TV support
-+ Chromecast
-+ Extension system for personal customization
+Pushes to `master` build every platform on GitHub Actions; a `v*` tag also publishes a release.
 
+### Project layout
 
-<a id="install_rules"></a>
+| Module | What it is |
+| --- | --- |
+| `appCore` | The shared app: Compose UI, player, extensions, library, downloads and sync. `jvmMain` is desktop, `androidMain` is Android. |
+| `desktopApp` | The desktop entry point and installers. |
+| `androidApp` | The Android and Android TV app (`com.lagradost.cloudstream4.app`). |
+| `library` | CloudStream's extension API, shared with upstream. |
+| `app` | CloudStream's original Android app, kept from upstream. |
+| `backend/supabase` | The optional sync database and sign-in function. |
 
-## Installation: 
+## Built on CloudStream
 
-Our documentation provides the steps to install and configure CloudStream for your streaming needs.
+Hyper Stream wouldn't exist without [**CloudStream**](https://github.com/recloudstream/cloudstream)
+and the [reCloudStream](https://github.com/recloudstream) team and contributors. This repository is
+a fork of their work: the extension API in `library`, the extension format, the providers' code
+and much of the app's logic are theirs, and the many extensions Hyper Stream plays from are written
+by CloudStream's extension developers. Hyper Stream adds the cross-platform app on top.
 
-[Getting Started With CloudStream:](https://recloudstream.github.io/csdocs/)
+Hyper Stream is an independent project, not made or endorsed by the CloudStream team. Please don't
+report Hyper Stream problems to them; open an issue here instead.
 
-<a id="contributing"></a>
+If you find Hyper Stream useful, please support the original project too:
+- ⭐ Star [CloudStream on GitHub](https://github.com/recloudstream/cloudstream).
+- Contribute code, or help translate it on [Weblate](https://hosted.weblate.org/engage/cloudstream/).
+- Write extensions, following the [extension developer guide](https://recloudstream.github.io/csdocs/devs/gettingstarted/).
+- Read the [CloudStream documentation](https://recloudstream.github.io/csdocs/) and join their
+  [Discord](https://discord.gg/5Hus6fM).
 
-## Contributing:
-We **happily** accept any contributions to our project. To find out where you can start contributing towards the project, please look [at our issues tab](/cloudstream/issues)
+CloudStream's own Android app is at
+[recloudstream/cloudstream](https://github.com/recloudstream/cloudstream/releases).
 
+## Copyright and content
 
+Hyper Stream, like CloudStream, hosts no media. **Please don't make illegal extensions, or use any
+that host copyrighted media.** Extensions and repositories are made by third parties and aren't
+checked or endorsed here. For CloudStream's stance on the DMCA and EUCD, see
+[reCloudStream](https://github.com/recloudstream).
 
-<a id="issues"></a> 
- 
-### Issues: 
-While we **actively** accept issues and pull requests, we do require you fill out an [template](https://github.com/recloudstream/cloudstream/issues/new/choose) for issues. These include the following:
+## License
 
-<a id="bug_report"></a>
-
-- [Bug Report Template: ](https://github.com/recloudstream/cloudstream/issues/new?assignees=&labels=bug&projects=&template=application-bug.yml)
-  - For bug reports, we want as much info as possible, including your downloaded version of CloudeStream, device and updated version (if possible, current API),
-    expected behavior of the program, and the actual behavior that the program did, most importantly we require clear, reproducible steps of the bug. If your bug can't be       reproduced, it is unlikely we'll work on your issue.
-    
-<a id="enhancment"></a>
-  
-- [Feature Request Template: ](https://github.com/recloudstream/cloudstream/issues/new?assignees=&labels=enhancement&projects=&template=feature-request.yml)
-  - Before adding a feature request, please check to see if a feature request already has been requested.  
-
-
-### Extensions:
- 
-**Further details on creating extensions for CloudStream are found in our documentation.**
-
-[Guide: For Extension Developers](https://recloudstream.github.io/csdocs/devs/gettingstarted/) 
-
-<a id="contact_and_sources"></a>
-
-## Further Sources: 
-
-As well as providing clear install steps, our [website](https://dweb.link/ipns/cloudstream.on.fleek.co/) includes a wide variety of other tools, such as: 
-- [Troubleshooting](https://recloudstream.github.io/csdocs/troubleshooting/)
-- [Further CloudStream Repositories](https://recloudstream.github.io/csdocs/repositories/) 
-- Set-Up for other devices, such as:
-  - [Android TV](https://recloudstream.github.io/csdocs/other-devices/tv/)
-  - [Windows](https://recloudstream.github.io/csdocs/other-devices/windows/)
-  - [Linux](https://recloudstream.github.io/csdocs/other-devices/linux/)
-- And more...
-
-<a id="languages"> </a>  
-
-### Supported languages:
-
-Even if you can't contribute to the code or documentation, we always look for those who can contribute to translation and language support. Your contribution is exceptionally appreciated; you can check our translation from the figure below. 
-
-<a href="https://hosted.weblate.org/engage/cloudstream/">
-  <img src="https://hosted.weblate.org/widgets/cloudstream/-/app/multi-auto.svg" alt="Translation status" />
-</a>
+Hyper Stream is free software under the [GNU General Public License v3.0](LICENSE), the same
+license as CloudStream. You can use, change and share it under the same terms, and the git
+history keeps the CloudStream contributors' authorship of their code.
