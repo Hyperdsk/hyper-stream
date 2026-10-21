@@ -151,7 +151,8 @@ class SyncManagerTest {
             assertEquals("me@example.com", SyncManager.ui.value.resetSentTo)
             SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=def&expires_in=3600&token_type=bearer&type=recovery")
             assertTrue(SyncManager.ui.value.signedIn && SyncManager.ui.value.choosingPassword, "asks for a new password")
-            SyncManager.setPassword("newsecret").join()
+            // Made up per run: the fake server accepts any password
+            SyncManager.setPassword(java.util.UUID.randomUUID().toString()).join()
             assertTrue(!SyncManager.ui.value.choosingPassword && SyncManager.ui.value.error == null, "the new password was saved")
             SyncManager.signOut().join()
             // An ordinary sign-in link doesn't ask
