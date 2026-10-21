@@ -69,6 +69,7 @@ The screens, extension management, storage and downloads are shared with the And
 | Downloads | `desktop/download/DownloadManager.kt`, `HlsPackage.kt` | Direct files resume with Range requests. HLS uses the library's `M3u8Helper2` like Android, including AES-128. Streams with audio in a separate playlist save both tracks plus local playlists. Saved to `~/Movies/CloudStream` by default, with subtitles alongside. Downloaded episodes play offline. |
 | Parallel streaming | `desktop/player/ParallelStream.kt`, `StreamProxy.kt` | Direct video files are fetched ahead in 2 MB chunks over up to 16 connections, and HLS segments are prefetched in parallel. Set under Player, Streaming connections. |
 | Skip intros | `desktop/player/SkipStamps.kt` | Same free sources as Android: AniSkip, TheIntroDB, IntroDB. Skip button, optional auto-skip, S key, and the fixed 85-second "Skip opening" button. |
+| Sync | `desktop/sync/` | Optional, under Settings, Sync: watch progress, library, settings, remembered sources, repositories and extensions sync across the Mac, phone and TV through Supabase. Sign in with an emailed code or link. See `backend/supabase/README.md`. |
 | Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
 
 ## Not done yet

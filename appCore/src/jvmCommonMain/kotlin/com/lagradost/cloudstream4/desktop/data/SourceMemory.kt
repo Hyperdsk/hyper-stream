@@ -20,6 +20,21 @@ object SourceMemory {
 
     fun key(apiName: String, parentUrl: String) = "$apiName|$parentUrl"
 
+    /** Bumped on every change, so sync notices. */
+    val changes = kotlinx.coroutines.flow.MutableStateFlow(0)
+
+    @Synchronized
+    fun all(): Map<String, RememberedSource> = load().toMap()
+
+    /** Applies another device's choice for a title; null forgets it. */
+    @Synchronized
+    fun applyRemote(key: String, source: RememberedSource?) {
+        val map = load()
+        if (source == null) map.remove(key) else map[key] = source
+        file.write(map.toMap())
+        changes.value++
+    }
+
     @Synchronized
     fun get(key: String): RememberedSource? = load()[key]
 
@@ -32,6 +47,7 @@ object SourceMemory {
         // Keep the file small: the 500 most recent titles
         if (map.size > 500) map.entries.sortedBy { it.value.savedAt }.take(map.size - 500).forEach { map.remove(it.key) }
         file.write(map.toMap())
+        changes.value++
     }
 
     private fun load(): MutableMap<String, RememberedSource> = cache ?: file.read().toMutableMap().also { cache = it }

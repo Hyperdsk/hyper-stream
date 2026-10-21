@@ -84,6 +84,9 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             )
         }
 
+        Section("Sync")
+        SyncSettings()
+
         Section("Appearance")
         Label("Theme")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

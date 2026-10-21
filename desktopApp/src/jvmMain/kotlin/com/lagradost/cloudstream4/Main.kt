@@ -41,6 +41,8 @@ fun main() {
     }
 
     ExtensionManager.start()
+    // Optional sync across devices; does nothing until signed in under Settings
+    com.lagradost.cloudstream4.desktop.sync.SyncManager.start()
     val vlc = VlcPlayer.create()
 
     application {

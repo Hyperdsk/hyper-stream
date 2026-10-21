@@ -112,4 +112,29 @@ object LibraryStore {
         _state.update { it.copy(history = persistentListOf()) }
         historyFile.write(emptyList())
     }
+
+    // ---------- Changes from other devices (sync) ----------
+
+    fun historyKey(entry: HistoryEntry) = "${entry.apiName}|${entry.episodeData}"
+    fun bookmarkKey(bookmark: Bookmark) = "${bookmark.apiName}|${bookmark.url}"
+
+    /** Applies another device's progress for one episode; null removes it. Keeps this device's snapshot. */
+    fun applyRemoteHistory(key: String, entry: HistoryEntry?) {
+        _state.update { s ->
+            val local = s.history.firstOrNull { historyKey(it) == key }
+            val rest = s.history.removingAll { historyKey(it) == key }
+            if (entry == null) s.copy(history = rest)
+            else s.copy(history = (rest + entry.copy(snapshotPath = local?.snapshotPath)).sortedByDescending { it.updatedAt }.toPersistentList())
+        }
+        historyFile.write(_state.value.history)
+    }
+
+    /** Applies another device's bookmark; null removes it. */
+    fun applyRemoteBookmark(key: String, bookmark: Bookmark?) {
+        _state.update { s ->
+            val rest = s.bookmarks.removingAll { bookmarkKey(it) == key }
+            s.copy(bookmarks = if (bookmark == null) rest else (rest + bookmark).sortedByDescending { it.updatedAt }.toPersistentList())
+        }
+        bookmarksFile.write(_state.value.bookmarks)
+    }
 }
