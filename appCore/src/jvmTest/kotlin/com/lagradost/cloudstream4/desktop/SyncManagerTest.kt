@@ -44,6 +44,10 @@ class SyncManagerTest {
     private fun server() = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
         createContext("/auth/v1/otp") { it.json(emptyMap<String, Any>()) }
         createContext("/auth/v1/recover") { it.json(emptyMap<String, Any>()) }
+        // As Supabase answers a refresh token from a session that was signed out
+        createContext("/auth/v1/token") { ex ->
+            ex.json(mapOf("code" to 400, "error_code" to "refresh_token_not_found", "msg" to "Invalid Refresh Token: Refresh Token Not Found"), code = 400)
+        }
         createContext("/auth/v1/verify") { ex ->
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-1", "email" to "me@example.com")))
         }
@@ -76,6 +80,37 @@ class SyncManagerTest {
 
     private fun remote(kind: String, key: String, value: Any?, at: Long, deleted: Boolean = false) = synchronized(rows) {
         rows[kind to key] = Row(kind, key, value?.let { jsonMapper.valueToTree<ObjectNode>(it) }, deleted, at, serverTime())
+    }
+
+    @Test
+    fun aRevokedOrUnreachableSignInNeverThrows() = runBlocking {
+        val server = server()
+        System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${server.address.port}")
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-sync-revoked").toString())
+        try {
+            // A session about to expire, so the next sync refreshes it
+            SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=old&expires_in=1&type=magiclink")
+            assertTrue(SyncManager.ui.value.signedIn)
+
+            // The network is down: sync fails quietly and stays signed in, to try again later
+            server.stop(0)
+            SyncManager.syncNow()
+            assertTrue(SyncManager.ui.value.signedIn, "still signed in while offline")
+            assertNotNull(SyncManager.ui.value.error)
+        } finally {
+            server.stop(0)
+        }
+        val again = server()
+        System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${again.address.port}")
+        try {
+            // The server no longer knows the refresh token: signed out, with a message, no crash
+            SyncManager.syncNow()
+            assertTrue(!SyncManager.ui.value.signedIn, "signed out after the refresh was refused")
+            assertTrue(SyncManager.ui.value.error.orEmpty().contains("Sign in again"))
+        } finally {
+            again.stop(0)
+            System.clearProperty("hyperstream.syncUrl")
+        }
     }
 
     @Test

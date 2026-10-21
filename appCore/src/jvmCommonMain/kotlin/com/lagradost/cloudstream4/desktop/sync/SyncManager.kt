@@ -15,6 +15,7 @@ import com.lagradost.cloudstream4.desktop.data.jsonFile
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -91,7 +92,11 @@ object SyncManager {
     /** Settings that belong to one device: folders, connection counts, volume. Everything else syncs. */
     private val deviceSettings = setOf("downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider")
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Sync is optional: whatever goes wrong in it (no network, a revoked sign-in) must never close the app
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t -> System.err.println("Sync: $t") },
+    )
+    private val refreshLock = Mutex()
     private val file = jsonFile<SyncStore>("sync.json") { SyncStore() }
     private var store = file.read()
     private val lock = Mutex()
@@ -265,7 +270,7 @@ object SyncManager {
             _ui.update { it.copy(error = "Use a password of at least 6 characters.") }
             return@launch
         }
-        val session = session() ?: return@launch
+        val session = sessionOrError() ?: return@launch
         _ui.update { it.copy(busy = true, error = null) }
         try {
             SupabaseClient.setPassword(session, password)
@@ -279,7 +284,7 @@ object SyncManager {
 
     /** On a signed-in phone or Mac: a code to type on a TV. */
     fun showTvCode() = scope.launch {
-        val session = session() ?: return@launch
+        val session = sessionOrError() ?: return@launch
         _ui.update { it.copy(busy = true, error = null) }
         try {
             val code = SupabaseClient.createTvCode(session)
@@ -314,27 +319,45 @@ object SyncManager {
         if (session != null) SupabaseClient.signOut(session)
     }
 
+    /** The session for something the user asked for, or null with the reason shown. */
+    private suspend fun sessionOrError(): SyncSession? = try {
+        session()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        _ui.update { it.copy(busy = false, error = "Couldn't reach the sync server: ${t.message ?: t.javaClass.simpleName}") }
+        null
+    }
+
     private suspend fun session(): SyncSession? {
         val current = store.session ?: return null
         if (current.expiresAt - 120_000 > System.currentTimeMillis()) return current
         return refreshed(current)
     }
 
-    private suspend fun refreshed(current: SyncSession): SyncSession? = try {
-        SupabaseClient.refresh(current).also { fresh -> save { it.copy(session = fresh) } }
-    } catch (e: SyncAuthException) {
+    // One refresh at a time: each refresh token works once, so a second refresh with the same one
+    // would fail (and the server may then end the session)
+    private suspend fun refreshed(current: SyncSession): SyncSession? = refreshLock.withLock {
+        val saved = store.session ?: return@withLock null
+        if (saved.refreshToken != current.refreshToken) return@withLock saved
+        try {
+            SupabaseClient.refresh(current).also { fresh -> save { it.copy(session = fresh) } }
+        } catch (e: SyncAuthException) {
         // The session was revoked or expired for good: sign in again
         save { SyncStore() }
-        _ui.value = SyncUiState(error = "Signed out of sync. Sign in again to keep syncing.")
-        null
+            _ui.value = SyncUiState(error = "Signed out of sync. Sign in again to keep syncing.")
+            null
+        }
     }
 
     // ---------- Syncing ----------
 
     suspend fun syncNow() = lock.withLock {
-        val first = session() ?: return@withLock
+        if (store.session == null) return@withLock
         _ui.update { it.copy(syncing = true) }
         try {
+            // Inside the try: refreshing needs the network, which may be down
+            val first = session() ?: return@withLock _ui.update { it.copy(syncing = false) }
             try {
                 pass(first)
             } catch (e: SyncAuthException) {

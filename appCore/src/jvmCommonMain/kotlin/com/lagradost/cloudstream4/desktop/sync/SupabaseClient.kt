@@ -15,7 +15,7 @@ import java.io.IOException
 /** The Supabase project the apps sync with. The publishable key is meant to ship in apps; row level security protects the data. */
 object SyncConfig {
     /** Tests point this at a local fake server with -Dhyperstream.syncUrl. */
-    val URL: String = System.getProperty("hyperstream.syncUrl") ?: "https://fdpxrquqdrncprllembu.supabase.co"
+    val URL: String get() = System.getProperty("hyperstream.syncUrl") ?: "https://fdpxrquqdrncprllembu.supabase.co"
     const val KEY = "sb_publishable_CHMPNtueQqYmOSh73IOVgQ_GPq85-v-"
 }
 
@@ -61,7 +61,11 @@ object SupabaseClient {
                 val message = json?.let { j ->
                     listOf("msg", "message", "error_description", "error").firstNotNullOfOrNull { j.get(it)?.asText()?.takeIf { t -> t.isNotBlank() } }
                 } ?: "The sync server answered ${response.code}."
-                if (response.code == 401 || response.code == 403) throw SyncAuthException(message)
+                // A refresh token the server no longer knows (signed out, or used already) is a 400
+                val code = json?.get("error_code")?.asText().orEmpty()
+                if (response.code == 401 || response.code == 403 || code.startsWith("refresh_token") || code == "session_not_found") {
+                    throw SyncAuthException(message)
+                }
                 throw IOException(message)
             }
             json
@@ -149,11 +153,13 @@ object SupabaseClient {
         return session(call(request("/auth/v1/verify").post(body(mapOf("type" to type, "token_hash" to token)))))
     }
 
+    /** Throws [SyncAuthException] when the server refuses the refresh token, and IOException when it can't be reached. */
     suspend fun refresh(session: SyncSession): SyncSession =
         session(call(request("/auth/v1/token?grant_type=refresh_token").post(body(mapOf("refresh_token" to session.refreshToken)))), session.email)
 
     suspend fun signOut(session: SyncSession) {
-        runCatching { call(request("/auth/v1/logout").header("Authorization", "Bearer ${session.accessToken}").post(body(emptyMap<String, String>()))) }
+        // Only this device: Supabase's default scope signs every device out of the account
+        runCatching { call(request("/auth/v1/logout?scope=local").header("Authorization", "Bearer ${session.accessToken}").post(body(emptyMap<String, String>()))) }
     }
 
     private fun session(json: JsonNode?, fallbackEmail: String? = null): SyncSession {
