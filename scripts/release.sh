@@ -7,11 +7,15 @@
 #   scripts/release.sh --dry-run  build and collect the files only: no commit, tag or release
 #   --skip-tests                  don't run the desktop tests first
 #   --draft                       publish the release as a draft, to check before it goes out
+#   --all-platforms               then have GitHub Actions build the Windows, Linux and Intel Mac apps
+#                                 and add them to the release (about 15 minutes; uses Actions minutes)
+#   --add-platforms v1.2.0        only that, for a release that's already published
 #
 # What a Mac can build:
 #   macOS Apple silicon (.dmg and a portable .zip) and Android/Android TV (.apk), always.
 #   macOS Intel (.dmg and .zip) too, when an Intel (x86_64) JDK 17 is installed; it runs under Rosetta.
-#   Windows and Linux installers can only be built on those systems, so local releases leave them out.
+#   Windows and Linux installers can only be built on those systems: --all-platforms gets them from
+#   GitHub Actions, otherwise local releases leave them out.
 #
 # Needs: JDK 17, the Android SDK, gh signed in, and the Android signing key in ~/.gradle/gradle.properties
 # (see androidApp/ANDROID.md), so the APK updates earlier installs.
@@ -25,13 +29,19 @@ SIGNING_SHA256="9bce46dbbffe5c62cc818473c28a6025c353a47847ea3a195d75394e943a36dd
 dry_run=false
 skip_tests=false
 draft=false
+all_platforms=false
+add_to=""
 version=""
-for arg in "$@"; do
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  arg="${args[$i]}"
   case "$arg" in
+    --all-platforms) all_platforms=true ;;
+    --add-platforms) i=$((i + 1)); add_to="${args[$i]:-}"; [ -n "$add_to" ] || { echo "--add-platforms needs a tag, like v1.2.0" >&2; exit 2; } ;;
     --dry-run) dry_run=true ;;
     --skip-tests) skip_tests=true ;;
     --draft) draft=true ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     [0-9]*.[0-9]*.[0-9]*) version="$arg" ;;
     *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
   esac
@@ -39,6 +49,22 @@ done
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31mError: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Has GitHub Actions build a release's Windows, Linux and Intel Mac apps and add them to it
+other_platforms() {
+  local tag="$1"
+  gh release view "$tag" -R "$REPO" >/dev/null 2>&1 || fail "There's no release $tag on GitHub."
+  step "Asking GitHub Actions for the Windows, Linux and Intel Mac builds of $tag"
+  gh workflow run desktop.yml -R "$REPO" --ref master -f release_tag="$tag"
+  sleep 5
+  gh run list -R "$REPO" --workflow desktop.yml --limit 1 --json url --jq '.[0].url'
+  echo "They're added to the release as each finishes, in about 15 minutes."
+}
+
+if [ -n "$add_to" ]; then
+  other_platforms "$add_to"
+  exit 0
+fi
 
 # ---------- Checks ----------
 
@@ -150,7 +176,11 @@ notes=$(mktemp)
   echo
   echo "- **macOS:** \`-macos-apple-silicon.dmg\` for M-series Macs$( [ -f "$dist/HyperStream-$version-macos-intel.dmg" ] && echo ", \`-macos-intel.dmg\` for Intel Macs"). Needs [VLC](https://www.videolan.org/vlc/). The app isn't notarized: the first time, right-click it and choose Open. The \`.zip\` is the same app without an installer."
   echo "- **Android phones, tablets and TV:** \`-android-and-tv.apk\` (allow installs from unknown sources). It installs over earlier releases from 1.1.1 on."
-  echo "- **Windows and Linux:** not in this release."
+  if $all_platforms; then
+    echo "- **Windows:** the \`.msi\` installer, or the portable \`.zip\`. **Linux:** the \`.deb\` package, or the portable \`.tar.gz\`. Both need VLC. These are added a few minutes after the release."
+  else
+    echo "- **Windows and Linux:** not in this release."
+  fi
   echo
   echo "## Changes"
   echo
@@ -159,3 +189,4 @@ notes=$(mktemp)
 gh release create "$tag" "$dist"/* -R "$REPO" --title "Hyper Stream $version" --notes-file "$notes" $($draft && echo --draft)
 rm -f "$notes"
 gh release view "$tag" -R "$REPO" --json url --jq .url
+if $all_platforms; then other_platforms "$tag"; fi

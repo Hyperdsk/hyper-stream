@@ -3,6 +3,9 @@ name: Desktop and Android builds
 # Builds the desktop app for macOS (Apple silicon and Intel), Linux and Windows, plus the Android
 # app, which also runs on Android TV, and uploads them as artifacts. Releases are built and
 # published from a Mac with scripts/release.sh instead, which skips this workflow.
+#
+# Run by hand with a release tag (scripts/release.sh --all-platforms does this), it builds that
+# release's Windows, Linux and Intel Mac apps, which a Mac can't make, and adds them to it.
 
 on:
   push:
@@ -11,6 +14,11 @@ on:
       - '**.md'
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Add Windows, Linux and Intel Mac builds to this release (e.g. v1.2.0)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -22,6 +30,8 @@ concurrency:
 jobs:
   test:
     name: Desktop tests
+    # A release was tested when it was made
+    if: inputs.release_tag == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -67,11 +77,18 @@ jobs:
             package: packageMsi
             output: msi
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      # For a release, the Apple silicon app is already there from the Mac that made it
+      SKIP: ${{ inputs.release_tag != '' && matrix.name == 'macos-apple-silicon' }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -84,17 +101,23 @@ jobs:
 
       - name: Pick version
         id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ -n "$RELEASE_TAG" ]]; then
+            echo "value=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build installer and portable app
+        if: env.SKIP != 'true'
         run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ steps.version.outputs.value }}
 
       - name: Collect files
+        if: env.SKIP != 'true'
         run: |
           mkdir -p dist
           out=desktopApp/build/compose/binaries/main
@@ -105,17 +128,28 @@ jobs:
           case "${{ matrix.name }}" in
             windows-*) (cd "$out/app" && 7z a -tzip "$GITHUB_WORKSPACE/dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" HyperStream >/dev/null) ;;
             linux-*) tar -czf "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.tar.gz" -C "$out/app" HyperStream ;;
+            macos-*) ditto -c -k --keepParent "$out/app/HyperStream.app" "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.zip" ;;
           esac
           ls -la dist
 
       - uses: actions/upload-artifact@v7
+        if: env.SKIP != 'true'
         with:
           name: HyperStream-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
+      - name: Add to the release
+        if: inputs.release_tag != '' && env.SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+
   android:
     name: Android and Android TV
+    # A release's APK comes from the Mac that made it, signed and numbered for updates
+    if: inputs.release_tag == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
