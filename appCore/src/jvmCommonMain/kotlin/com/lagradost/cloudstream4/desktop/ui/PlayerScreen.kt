@@ -1,5 +1,15 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.filled.BrightnessMedium
 import androidx.compose.foundation.gestures.calculateZoom
@@ -887,10 +897,13 @@ internal class SpeedHold(private val scope: CoroutineScope) {
 }
 
 /**
- * The seek slider with a thumbnail preview. Hovering or dragging shows the frame and time at
- * that point above the pointer, like streaming sites do.
+ * The seek bar, drawn like streaming apps': a thin track that thickens under the pointer, the
+ * played part in the accent colour, the hovered stretch lightly filled, and a round handle.
+ * Hovering or dragging shows a card above the pointer with the frame at that time (from the
+ * preview player) and the time over it. Without a frame (Android, or before the first one
+ * loads) only the time shows.
  */
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun SeekBar(
     value: Float,
@@ -904,10 +917,16 @@ internal fun SeekBar(
     var hover by remember { mutableStateOf<Float?>(null) }
     var widthPx by remember { mutableIntStateOf(1) }
     val density = LocalDensity.current
-    // The slider's track starts and ends inset by the thumb's radius
-    val insetPx = with(density) { 10.dp.toPx() }
+    // The slider's track starts and ends inset by half the handle's width
+    val insetPx = with(density) { (SEEK_HANDLE / 2).toPx() }
     val fraction = if (dragging) value else hover
     val previewTime = fraction?.let { (it * lengthMs).toLong() }
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val active = fraction != null || focused
+    val accent = MaterialTheme.colorScheme.primary
+    val trackHeight by animateDpAsState(if (active) 6.dp else 4.dp)
+    val handleSize by animateDpAsState(if (active) 16.dp else 12.dp)
 
     LaunchedEffect(previewTime?.div(SeekPreview.BUCKET_MS), preview) {
         if (previewTime != null && lengthMs > 0) preview?.request(previewTime)
@@ -929,52 +948,114 @@ internal fun SeekBar(
                     PointerEventType.Exit -> hover = null
                 }
             },
+        contentAlignment = Alignment.CenterStart,
     ) {
         Slider(
             value = value,
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,
             enabled = lengthMs > 0,
+            interactionSource = interaction,
+            thumb = {
+                Box(Modifier.size(SEEK_HANDLE), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.size(handleSize)
+                            .shadow(3.dp, CircleShape)
+                            .background(Color.White, CircleShape)
+                            // On a TV the handle shows it has focus, since the remote's arrows seek with it
+                            .then(if (focused) Modifier.border(3.dp, accent, CircleShape) else Modifier),
+                    )
+                }
+            },
+            track = {
+                Canvas(Modifier.fillMaxWidth().height(16.dp)) {
+                    val h = trackHeight.toPx()
+                    val y = size.height / 2
+                    val radius = CornerRadius(h / 2)
+                    fun bar(from: Float, to: Float, color: Color) {
+                        if (to <= from) return
+                        drawRoundRect(color, Offset(size.width * from, y - h / 2), Size(size.width * (to - from), h), radius)
+                    }
+                    bar(0f, 1f, Color.White.copy(alpha = 0.28f))
+                    // Where the pointer is, ahead of the playhead: how far a click would jump
+                    hover?.takeIf { !dragging && it > value }?.let { bar(value, it, Color.White.copy(alpha = 0.45f)) }
+                    bar(0f, value, accent)
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
-        if (fraction != null && previewTime != null && lengthMs > 0) {
-            val cardWidth = 192.dp
-            val cardWidthPx = with(density) { cardWidth.toPx() }
-            val centerPx = insetPx + fraction * (widthPx - 2 * insetPx)
-            val left = (centerPx - cardWidthPx / 2).coerceIn(0f, (widthPx - cardWidthPx).coerceAtLeast(0f))
-            Column(
-                Modifier
-                    .offset { IntOffset(left.roundToInt(), -with(density) { 140.dp.roundToPx() }) }
-                    // Its own size, not limited to the slider's height
-                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    .width(cardWidth),
-                horizontalAlignment = Alignment.CenterHorizontally,
+
+        AnimatedVisibility(
+            visible = fraction != null && previewTime != null && lengthMs > 0,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(120)),
+        ) {
+            val at = fraction ?: 0f
+            val time = previewTime ?: 0L
+            val thumbnail = preview?.thumbnail
+            val gapPx = with(density) { 14.dp.roundToPx() }
+            Box(
+                Modifier.layout { measurable, constraints ->
+                    // Sized by its content, placed centred over the pointer and above the bar,
+                    // kept inside the bar's width
+                    val card = measurable.measure(Constraints())
+                    val center = insetPx + at * (widthPx - 2 * insetPx)
+                    val left = (center - card.width / 2f).coerceIn(0f, (widthPx - card.width).toFloat().coerceAtLeast(0f))
+                    layout(constraints.minWidth, 0) {
+                        card.place(left.roundToInt(), -card.height - gapPx)
+                    }
+                },
             ) {
-                val thumbnail = preview?.thumbnail
-                Box(
-                    Modifier.width(cardWidth).aspectRatio(16f / 9f)
-                        .background(Color.Black, RoundedCornerShape(6.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                        .clip(RoundedCornerShape(6.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (thumbnail != null) {
+                if (thumbnail != null) {
+                    val cardWidth = if (Platform.isTv) 288.dp else 240.dp
+                    // The frame's own shape, so wide films aren't cropped (within reason)
+                    val ratio = (thumbnail.width.toFloat() / thumbnail.height.coerceAtLeast(1)).coerceIn(4f / 3f, 2.4f)
+                    val shape = RoundedCornerShape(10.dp)
+                    Box(
+                        Modifier.width(cardWidth).aspectRatio(ratio)
+                            .shadow(12.dp, shape)
+                            .clip(shape)
+                            .background(Color.Black)
+                            .border(1.5.dp, Color.White.copy(alpha = 0.85f), shape),
+                        contentAlignment = Alignment.BottomCenter,
+                    ) {
                         Image(thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    } else if (preview != null) {
-                        CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                        // The time over the bottom of the frame, on a fade so it reads on any picture
+                        Box(
+                            Modifier.fillMaxWidth()
+                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))))
+                                .padding(top = 18.dp, bottom = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            SeekTime(time)
+                        }
+                    }
+                } else {
+                    Box(
+                        Modifier.shadow(8.dp, RoundedCornerShape(8.dp))
+                            .background(Color(0xE6101014), RoundedCornerShape(8.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        SeekTime(time)
                     }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    formatTime(previewTime),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
-                )
             }
         }
     }
+}
+
+/** Room for the seek handle at its largest; the track is inset by half of it at each end. */
+private val SEEK_HANDLE = 20.dp
+
+@Composable
+private fun SeekTime(timeMs: Long) {
+    Text(
+        formatTime(timeMs),
+        color = Color.White,
+        style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+        fontWeight = FontWeight.SemiBold,
+    )
 }
 
 @Composable

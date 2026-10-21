@@ -51,5 +51,22 @@ class SeekBarRenderTest {
         scene.close()
         preview.release()
         player.release()
+
+        // Android has no frames: only the time shows above the bar
+        val plain = ImageComposeScene(1200, 360, Density(1.5f)) {
+            CloudStreamTheme(mode = CloudStreamThemeMode.Dark) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF202020))) {
+                    SeekBar(0.3f, 5_251_264L, false, null, {}, {}, Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 150.dp))
+                }
+            }
+        }
+        t = 0L
+        fun plainFrame() = plain.render(t).also { t += 16_000_000L }
+        repeat(3) { plainFrame() }
+        plain.sendPointerEvent(PointerEventType.Enter, Offset(900f, 250f))
+        plain.sendPointerEvent(PointerEventType.Move, Offset(900f, 250f))
+        repeat(30) { plainFrame() }
+        File(dir, "seekbar-time-only.png").writeBytes(plainFrame().encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        plain.close()
     }
 }
