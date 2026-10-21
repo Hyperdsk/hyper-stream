@@ -18,13 +18,16 @@ code (or the sign-in link from the email, pasted in).
   itself: the link returns to `http://127.0.0.1:53682/auth`, a page the Mac app serves, or to
   `hyperstream://auth`, which opens the Android app. Both are in the project's allowed redirect URLs
   (Authentication, URL Configuration). The link, or the address it opened, can also be pasted in.
-- **TV:** a signed-in phone or Mac shows a one-time 8-digit code (Settings, Sync, Sign in a TV,
+- **TV:** a signed-in phone or Mac shows a one-time 8-digit code (Settings, Sync, Sign in another device,
   from `hs_create_tv_code`). The TV sends it to the `tv-sign-in` edge function
   (`functions/tv-sign-in`, deployed with "Verify JWT" off), which signs the TV in to the same account.
 - "Confirm email" is off (Authentication, Sign In / Providers), so a new account works right away.
 
 - **Password:** anyone can create an account with an email and password in the app, on any device,
   with no email sent. Accounts made with a link can set a password under Settings, Sync.
+- **Forgot password:** under Password, Forgot password, either email a reset link (which signs the
+  device in and asks for a new password; it needs email sending, as below) or enter a code from
+  another device that's still signed in (Sign in another device), with no email.
 
 Supabase's built-in email sender only sends to members of the project's organization, a few per
 hour, so other people should use a password, or you can set up custom SMTP under Authentication,

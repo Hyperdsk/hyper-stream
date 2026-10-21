@@ -36,7 +36,7 @@ fun SyncSettings() {
     val ui by SyncManager.ui.collectAsState()
     var email by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
-    // Signed out: "link" (or "code" on a TV) or "password"
+    // Signed out: "link" (or "code" on a TV), "password", or "reset" for a forgotten password
     var mode by remember { mutableStateOf(if (com.lagradost.cloudstream4.desktop.Platform.isTv) "code" else "link") }
     var settingPassword by remember { mutableStateOf(false) }
     val body = MaterialTheme.typography.bodySmall
@@ -60,18 +60,25 @@ fun SyncSettings() {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = SyncManager::requestSync, enabled = !ui.syncing) { Text("Sync now") }
                     if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
-                        OutlinedButton(onClick = { SyncManager.showTvCode() }, enabled = !ui.busy) { Text("Sign in a TV") }
+                        OutlinedButton(onClick = { SyncManager.showTvCode() }, enabled = !ui.busy) { Text("Sign in another device") }
                     }
                     if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
                         OutlinedButton(onClick = { settingPassword = !settingPassword }) { Text("Set a password") }
                     }
                     OutlinedButton(onClick = { SyncManager.signOut() }) { Text("Sign out") }
                 }
-                if (settingPassword) {
+                if (settingPassword || ui.choosingPassword) {
                     var password by remember { mutableStateOf("") }
-                    Text("For signing in on devices without your email, such as a TV.", style = body, color = dim)
-                    PasswordField(password, { password = it }, onDone = { SyncManager.setPassword(password) })
-                    Button(onClick = { SyncManager.setPassword(password); settingPassword = false }, enabled = password.length >= 6 && !ui.busy) { Text("Save password") }
+                    Text(
+                        if (ui.choosingPassword) "Choose a new password for this account." else "For signing in on devices without your email, such as a TV.",
+                        style = if (ui.choosingPassword) MaterialTheme.typography.bodyMedium else body,
+                        color = if (ui.choosingPassword) MaterialTheme.colorScheme.onBackground else dim,
+                    )
+                    PasswordField(password, { password = it }, label = "New password", onDone = { SyncManager.setPassword(password); settingPassword = false })
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { SyncManager.setPassword(password); settingPassword = false }, enabled = password.length >= 6 && !ui.busy) { Text("Save password") }
+                        TextButton(onClick = { settingPassword = false; SyncManager.skipNewPassword() }) { Text(if (ui.choosingPassword) "Not now" else "Cancel") }
+                    }
                 }
                 ui.notice?.let { Text(it, style = body, color = MaterialTheme.colorScheme.primary) }
                 val code = ui.tvCode
@@ -82,7 +89,11 @@ fun SyncSettings() {
                         Text("The TV code expired.", style = body, color = dim)
                         OutlinedButton(onClick = { SyncManager.showTvCode() }) { Text("New code") }
                     } else {
-                        Text("On your TV, open Hyper Stream, Settings, Sync, and enter:", style = body, color = dim, modifier = Modifier.padding(top = 8.dp))
+                        Text(
+                            "On your TV or other device, open Hyper Stream, Settings, Sync, and enter this code " +
+                                "(on a phone or Mac, under Password, Forgot password):",
+                            style = body, color = dim, modifier = Modifier.padding(top = 8.dp),
+                        )
                         Text(
                             code.chunked(4).joinToString(" "),
                             style = MaterialTheme.typography.displaySmall,
@@ -114,6 +125,85 @@ fun SyncSettings() {
                         Text(if (ui.busy) "Signing in…" else "Sign in")
                     }
                     OutlinedButton(onClick = { SyncManager.signInWithPassword(email, code, create = true) }, enabled = ready) { Text("Create account") }
+                    TextButton(onClick = { code = ""; mode = "reset" }) { Text("Forgot password?") }
+                }
+            }
+
+            // A TV can't open the reset email, but a code from a signed-in phone or Mac signs it in
+            mode == "reset" && com.lagradost.cloudstream4.desktop.Platform.isTv -> {
+                Text(
+                    "Sign in with a code instead: on a phone or Mac that's signed in, open Settings, Sync, and choose Sign in another device. " +
+                        "To change the password, use Forgot password on your phone or Mac.",
+                    style = body, color = dim,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { code = ""; mode = "code" }) { Text("Enter a code") }
+                    TextButton(onClick = { mode = "password" }) { Text("Back") }
+                }
+            }
+
+            mode == "reset" && ui.resetSentTo != null -> {
+                Text(
+                    "We emailed a reset link to ${ui.resetSentTo}. Open it on this device to choose a new password.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text("Opened it somewhere else? Copy the link, or the address it opened, and paste it here.", style = body, color = dim)
+                TvTextFieldBox(Modifier.widthIn(max = 480.dp).fillMaxWidth()) { fieldModifier ->
+                    OutlinedTextField(
+                        value = code,
+                        onValueChange = { code = it },
+                        label = { Text("Link") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (code.isNotBlank()) SyncManager.verify(code) }),
+                        modifier = fieldModifier,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { SyncManager.verify(code) }, enabled = code.isNotBlank() && !ui.busy) {
+                        Text(if (ui.busy) "Signing in…" else "Continue")
+                    }
+                    TextButton(onClick = { SyncManager.sendPasswordReset(ui.resetSentTo!!) }, enabled = !ui.busy) { Text("Send again") }
+                    TextButton(onClick = { code = ""; SyncManager.cancelReset() }) { Text("Back") }
+                }
+            }
+
+            mode == "reset" -> {
+                Text("Reset your password", style = MaterialTheme.typography.titleSmall)
+                Text("We'll email you a link that signs you in here, then you choose a new password.", style = body, color = dim)
+                TvTextFieldBox(Modifier.widthIn(max = 480.dp).fillMaxWidth()) { fieldModifier ->
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { if (email.contains('@')) SyncManager.sendPasswordReset(email) }),
+                        modifier = fieldModifier,
+                    )
+                }
+                Button(onClick = { SyncManager.sendPasswordReset(email) }, enabled = email.contains('@') && !ui.busy) {
+                    Text(if (ui.busy) "Sending…" else "Email me a reset link")
+                }
+                // Works without email: another device that's still signed in vouches for this one
+                Text(
+                    "No email? On another device that's still signed in, open Settings, Sync, choose Sign in another device, and enter its code here.",
+                    style = body, color = dim, modifier = Modifier.padding(top = 8.dp),
+                )
+                TvTextFieldBox(Modifier.widthIn(max = 360.dp).fillMaxWidth()) { fieldModifier ->
+                    OutlinedTextField(
+                        value = code,
+                        onValueChange = { code = it.filter { c -> c.isDigit() }.take(8) },
+                        label = { Text("8-digit code") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (code.length == 8) SyncManager.signInWithTvCode(code, resetPassword = true) }),
+                        modifier = fieldModifier,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = { SyncManager.signInWithTvCode(code, resetPassword = true) }, enabled = code.length == 8 && !ui.busy) { Text("Continue") }
+                    TextButton(onClick = { code = ""; mode = "password" }) { Text("Back to sign in") }
                 }
             }
 
@@ -121,7 +211,7 @@ fun SyncSettings() {
                 ModeChips(mode) { mode = it }
                 // TVs can't open an email, so a signed-in phone or Mac gives them a code
                 Text(
-                    "Sign in with your phone or Mac: open Hyper Stream there, go to Settings, Sync, and choose Sign in a TV. " +
+                    "Sign in with your phone or Mac: open Hyper Stream there, go to Settings, Sync, and choose Sign in another device. " +
                         "Then enter the code it shows here.",
                     style = body, color = dim,
                 )
@@ -220,12 +310,12 @@ private fun ModeChips(mode: String, onMode: (String) -> Unit) {
 }
 
 @Composable
-private fun PasswordField(value: String, onValue: (String) -> Unit, onDone: () -> Unit) {
+private fun PasswordField(value: String, onValue: (String) -> Unit, label: String = "Password", onDone: () -> Unit) {
     TvTextFieldBox(Modifier.widthIn(max = 480.dp).fillMaxWidth()) { fieldModifier ->
         OutlinedTextField(
             value = value,
             onValueChange = onValue,
-            label = { Text("Password") },
+            label = { Text(label) },
             singleLine = true,
             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),

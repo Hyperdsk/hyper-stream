@@ -99,6 +99,15 @@ object SupabaseClient {
         )
     }
 
+    /**
+     * Emails a link for choosing a new password. Like a sign-in link it returns to [redirectTo] with
+     * a session, marked type=recovery, and the app then asks for the new password.
+     */
+    suspend fun sendPasswordReset(email: String, redirectTo: String?) {
+        val path = "/auth/v1/recover" + (redirectTo?.let { "?redirect_to=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")
+        call(request(path).post(body(mapOf("email" to email))))
+    }
+
     /** Creates an account with a password. Email confirmation is off in the project, so it's ready at once. */
     suspend fun signUp(email: String, password: String): SyncSession {
         val result = call(request("/auth/v1/signup").post(body(mapOf("email" to email, "password" to password))))

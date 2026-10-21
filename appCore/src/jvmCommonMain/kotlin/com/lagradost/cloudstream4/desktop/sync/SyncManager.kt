@@ -66,6 +66,10 @@ data class SyncUiState(
     val error: String? = null,
     /** A short confirmation, such as a saved password. */
     val notice: String? = null,
+    /** Where a password reset email went. */
+    val resetSentTo: String? = null,
+    /** Signed in to reset the password: ask for the new one. */
+    val choosingPassword: Boolean = false,
 ) {
     val signedIn: Boolean get() = email != null
 }
@@ -142,8 +146,36 @@ object SyncManager {
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            _ui.update { it.copy(busy = false, error = "Couldn't send the email: ${t.message}") }
+            _ui.update { it.copy(busy = false, error = "Couldn't send the email: ${emailError(t)}") }
         }
+    }
+
+    /** Emails a link that signs this device in and asks for a new password. */
+    fun sendPasswordReset(email: String) = scope.launch {
+        val address = email.trim()
+        if (!address.contains('@')) {
+            _ui.update { it.copy(error = "Enter your email address.") }
+            return@launch
+        }
+        _ui.update { it.copy(busy = true, error = null) }
+        try {
+            SignInRedirect.prepare()
+            SupabaseClient.sendPasswordReset(address, SignInRedirect.url)
+            _ui.update { it.copy(busy = false, resetSentTo = address) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _ui.update { it.copy(busy = false, error = "Couldn't send the email: ${emailError(t)}") }
+        }
+    }
+
+    fun cancelReset() = _ui.update { it.copy(resetSentTo = null, error = null) }
+
+    private fun emailError(t: Throwable): String {
+        val message = t.message.orEmpty()
+        return if ("rate limit" in message || "not authorized" in message) {
+            "$message. The sync server can only send a few emails an hour, and only to its owner. Use a code from a signed-in device instead."
+        } else message
     }
 
     /** Signs in with the 6-digit code from the email, or the sign-in link copied from it. */
@@ -154,7 +186,7 @@ object SyncManager {
         try {
             val session = if (input.contains("://") || "access_token=" in input) SupabaseClient.verifyLink(input)
             else SupabaseClient.verifyCode(email ?: error("Ask for a sign-in email first."), input.filter { it.isDigit() })
-            signedIn(session, email)
+            signedIn(session, email ?: _ui.value.resetSentTo, choosingPassword = isRecovery(input))
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -162,10 +194,13 @@ object SyncManager {
         }
     }
 
+    /** A password reset link, rather than a sign-in link. */
+    private fun isRecovery(link: String) = Regex("[?#&]type=recovery").containsMatchIn(link)
+
     /** Where a sign-in link returned to this device (the Mac's page or hyperstream://auth on Android). */
     suspend fun completeRedirect(link: String) {
         try {
-            signedIn(SupabaseClient.sessionFromRedirect(link), _ui.value.codeSentTo)
+            signedIn(SupabaseClient.sessionFromRedirect(link), _ui.value.codeSentTo ?: _ui.value.resetSentTo, choosingPassword = isRecovery(link))
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -176,8 +211,11 @@ object SyncManager {
 
     fun completeRedirectLater(link: String) = scope.launch { runCatching { completeRedirect(link) } }
 
-    /** Signs a TV in with the code from a signed-in phone or Mac. */
-    fun signInWithTvCode(code: String) = scope.launch {
+    /**
+     * Signs a TV (or any device) in with the code from a signed-in phone or Mac. With [resetPassword],
+     * for a forgotten password, it then asks for a new one.
+     */
+    fun signInWithTvCode(code: String, resetPassword: Boolean = false) = scope.launch {
         val digits = code.filter { it.isDigit() }
         if (digits.length != 8) {
             _ui.update { it.copy(error = "Enter the 8-digit code from your phone or Mac.") }
@@ -185,7 +223,7 @@ object SyncManager {
         }
         _ui.update { it.copy(busy = true, error = null) }
         try {
-            signedIn(SupabaseClient.signInWithTvCode(digits), null)
+            signedIn(SupabaseClient.signInWithTvCode(digits), null, choosingPassword = resetPassword)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -231,7 +269,7 @@ object SyncManager {
         _ui.update { it.copy(busy = true, error = null) }
         try {
             SupabaseClient.setPassword(session, password)
-            _ui.update { it.copy(busy = false, notice = "Password saved. You can sign in with it on your other devices.") }
+            _ui.update { it.copy(busy = false, choosingPassword = false, notice = "Password saved. You can sign in with it on your other devices.") }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -255,11 +293,14 @@ object SyncManager {
 
     fun hideTvCode() = _ui.update { it.copy(tvCode = null, tvCodeExpiresAt = null) }
 
-    private fun signedIn(session: SyncSession, email: String?) {
+    /** Keeps the current password after signing in to reset it. */
+    fun skipNewPassword() = _ui.update { it.copy(choosingPassword = false) }
+
+    private fun signedIn(session: SyncSession, email: String?, choosingPassword: Boolean = false) {
         // A new account starts from this device's data; known items from another account don't apply
         val previous = store.session?.userId
         save { if (previous == session.userId) it.copy(session = session) else SyncStore(session = session.copy(email = session.email ?: email)) }
-        _ui.update { SyncUiState(email = session.email ?: email) }
+        _ui.update { SyncUiState(email = session.email ?: email, choosingPassword = choosingPassword) }
         requestSync()
     }
 

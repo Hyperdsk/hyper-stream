@@ -43,6 +43,7 @@ class SyncManagerTest {
 
     private fun server() = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
         createContext("/auth/v1/otp") { it.json(emptyMap<String, Any>()) }
+        createContext("/auth/v1/recover") { it.json(emptyMap<String, Any>()) }
         createContext("/auth/v1/verify") { ex ->
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-1", "email" to "me@example.com")))
         }
@@ -143,6 +144,19 @@ class SyncManagerTest {
             SyncManager.signInWithPassword("new@example.com", "secret1", create = true).join()
             withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
             assertEquals("new@example.com", SyncManager.ui.value.email)
+            SyncManager.signOut().join()
+
+            // A forgotten password: the reset link signs in, then the app asks for a new one
+            SyncManager.sendPasswordReset("me@example.com").join()
+            assertEquals("me@example.com", SyncManager.ui.value.resetSentTo)
+            SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=def&expires_in=3600&token_type=bearer&type=recovery")
+            assertTrue(SyncManager.ui.value.signedIn && SyncManager.ui.value.choosingPassword, "asks for a new password")
+            SyncManager.setPassword("newsecret").join()
+            assertTrue(!SyncManager.ui.value.choosingPassword && SyncManager.ui.value.error == null, "the new password was saved")
+            SyncManager.signOut().join()
+            // An ordinary sign-in link doesn't ask
+            SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=def&expires_in=3600&type=magiclink")
+            assertTrue(SyncManager.ui.value.signedIn && !SyncManager.ui.value.choosingPassword)
             SyncManager.signOut().join()
 
             // Opening the emailed link on the Mac: it returns to the app's local page, which hands over the session
