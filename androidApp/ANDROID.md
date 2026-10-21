@@ -1,4 +1,4 @@
-# CloudStream for Android phones, tablets and TV
+# Hyper Stream for Android phones, tablets and TV
 
 The same Compose app as the Mac version, built for Android. It is a separate app from upstream's
 `:app` (the View-based Android app), with its own application id, `com.lagradost.cloudstream4.app`,

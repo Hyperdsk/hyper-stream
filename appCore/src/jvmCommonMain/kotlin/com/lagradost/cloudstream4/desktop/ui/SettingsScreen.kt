@@ -101,7 +101,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
                 val selected = settings.primaryColor == color
                 Box(
                     Modifier.size(32.dp)
-                        .background(color.color, CircleShape)
+                        .background(color.swatch, CircleShape)
                         .border(if (selected) 3.dp else 0.dp, MaterialTheme.colorScheme.onBackground, CircleShape)
                         .clickable { SettingsStore.update { it.copy(primaryColor = color) } }
                 )
@@ -111,7 +111,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         Section("Player")
         if (!vlcAvailable) {
             Text(
-                "VLC wasn't found. Install VLC from videolan.org into Applications, then restart CloudStream to play videos.",
+                "VLC wasn't found. Install VLC from videolan.org into Applications, then restart Hyper Stream to play videos.",
                 color = MaterialTheme.colorScheme.error,
             )
         }
@@ -282,8 +282,8 @@ fun SettingsScreen(vlcAvailable: Boolean) {
 
         Section("About")
         Text(
-            "CloudStream for Mac, Android and Android TV, built on CloudStream's cross-platform library. " +
-                "Extensions are third-party and CloudStream does not host any content. Licensed under GPL-3.0.",
+            "Hyper Stream for Mac, Android and Android TV, built on CloudStream's open-source library. " +
+                "Extensions are third-party and Hyper Stream does not host any content. Licensed under GPL-3.0.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -299,7 +299,8 @@ fun SettingsScreen(vlcAvailable: Boolean) {
 @Composable
 private fun Section(title: String) {
     Spacer(Modifier.size(24.dp))
-    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+    // Secondary: a lighter tint of the accent, readable as text on dark backgrounds
+    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
 }
 

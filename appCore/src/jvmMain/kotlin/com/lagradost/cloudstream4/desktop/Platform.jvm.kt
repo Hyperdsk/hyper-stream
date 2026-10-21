@@ -57,7 +57,7 @@ actual object Platform {
 
     actual val playerMissing: PlayerMissing? = PlayerMissing(
         title = "VLC is needed to play videos",
-        message = "Install VLC into your Applications folder, then restart CloudStream.",
+        message = "Install VLC into your Applications folder, then restart Hyper Stream.",
         action = "Get VLC",
         url = "https://www.videolan.org/vlc/",
     )

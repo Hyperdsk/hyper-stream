@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Hyper Stream HS monogram (branding/hyperstream-monogram.svg), in the 72dp visible part of a 108dp adaptive icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="18"
+        android:translateY="18"
+        android:scaleX="0.140625"
+        android:scaleY="0.140625">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M89,111H123A4,4 0,0 1,127 115V397A4,4 0,0 1,123 401H89A4,4 0,0 1,85 397V115A4,4 0,0 1,89 111Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M89,235H300A4,4 0,0 1,304 239V273A4,4 0,0 1,300 277H89A4,4 0,0 1,85 273V239A4,4 0,0 1,89 235Z" />
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="42"
+            android:pathData="M410,132H300A62,62 0,0 0,300 256H348A62,62 0,0 1,348 380H232" />
+    </group>
+</vector>

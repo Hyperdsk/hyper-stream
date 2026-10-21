@@ -1,0 +1,6 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Hyper Stream: an HS monogram in the style of the HD icon. The H's crossbar runs into the S's spine. -->
+<rect x="85" y="111" width="42" height="290" rx="4" fill="white"/>
+<rect x="85" y="235" width="219" height="42" rx="4" fill="white"/>
+<path d="M410 132H300A62 62 0 0 0 300 256H348A62 62 0 0 1 348 380H232" stroke="white" stroke-width="42"/>
+</svg>

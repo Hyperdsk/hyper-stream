@@ -23,9 +23,8 @@ import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
 import com.lagradost.cloudstream4.desktop.ui.ModelStore
 import com.lagradost.cloudstream4.desktop.ui.Route
-import com.lagradost.cloudstream4.desktop.ui.TvTypography
+import com.lagradost.cloudstream4.desktop.ui.HyperStreamTheme
 import com.lagradost.cloudstream4.desktop.ui.rememberNavigator
-import com.lagradost.cloudstream4.theme.CloudStreamTheme
 
 /**
  * The only activity. An AppCompatActivity, because extensions get it as their context and many
@@ -59,13 +58,11 @@ class MainActivity : AppCompatActivity() {
                 onDispose { }
             }
 
-            CloudStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
-                MaterialTheme(colorScheme = MaterialTheme.colorScheme, typography = TvTypography) {
-                    // Remotes move focus, so TVs show where it is
-                    CompositionLocalProvider(LocalFocusOutlineDefault provides Platform.isTv) {
-                        Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
-                            CloudStreamApp(nav, store, engine)
-                        }
+            HyperStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
+                // Remotes move focus, so TVs show where it is
+                CompositionLocalProvider(LocalFocusOutlineDefault provides Platform.isTv) {
+                    Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
+                        CloudStreamApp(nav, store, engine)
                     }
                 }
             }

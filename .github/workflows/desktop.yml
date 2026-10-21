@@ -100,18 +100,18 @@ jobs:
           mkdir -p dist
           out=desktopApp/build/compose/binaries/main
           for f in "$out/${{ matrix.output }}"/*; do
-            cp "$f" "dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.${f##*.}"
+            cp "$f" "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.${f##*.}"
           done
           # A portable copy that needs no installer
           case "${{ matrix.name }}" in
-            windows-*) (cd "$out/app" && 7z a -tzip "$GITHUB_WORKSPACE/dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" CloudStream >/dev/null) ;;
-            linux-*) tar -czf "dist/CloudStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.tar.gz" -C "$out/app" CloudStream ;;
+            windows-*) (cd "$out/app" && 7z a -tzip "$GITHUB_WORKSPACE/dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" HyperStream >/dev/null) ;;
+            linux-*) tar -czf "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.tar.gz" -C "$out/app" HyperStream ;;
           esac
           ls -la dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: CloudStream-${{ matrix.name }}
+          name: HyperStream-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
@@ -147,11 +147,11 @@ jobs:
       - name: Collect files
         run: |
           mkdir -p dist
-          cp androidApp/build/outputs/apk/release/*.apk dist/CloudStream-${{ steps.version.outputs.value }}-android-and-tv.apk
+          cp androidApp/build/outputs/apk/release/*.apk dist/HyperStream-${{ steps.version.outputs.value }}-android-and-tv.apk
 
       - uses: actions/upload-artifact@v7
         with:
-          name: CloudStream-android
+          name: HyperStream-android
           path: dist/*
           if-no-files-found: error
 

@@ -62,7 +62,7 @@ fun Sidebar(nav: Navigator) {
         Row(Modifier.padding(start = 8.dp, bottom = 18.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(AppRes.drawable.app_icon), null, Modifier.size(30.dp))
             Spacer(Modifier.width(10.dp))
-            Text("CloudStream", style = MaterialTheme.typography.titleMedium, color = colors.onBackground)
+            Text("Hyper Stream", style = MaterialTheme.typography.titleMedium, color = colors.onBackground)
         }
 
         SearchEntry(selected = nav.tab == Route.Search) { nav.open(Route.Search) }

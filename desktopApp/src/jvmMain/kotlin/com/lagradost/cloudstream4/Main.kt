@@ -20,20 +20,16 @@ import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
+import com.lagradost.cloudstream4.desktop.ui.HyperStreamTheme
 import com.lagradost.cloudstream4.desktop.ui.LocalFullscreen
 import com.lagradost.cloudstream4.desktop.ui.WindowFullscreen
-import com.lagradost.cloudstream4.desktop.ui.TvTypography
 import com.lagradost.cloudstream4.desktop.ui.ModelStore
 import com.lagradost.cloudstream4.desktop.ui.Route
 import com.lagradost.cloudstream4.desktop.ui.rememberNavigator
-import com.lagradost.cloudstream4.generated.resources.Res
-import com.lagradost.cloudstream4.generated.resources.app_name
-import com.lagradost.cloudstream4.theme.CloudStreamTheme
-import org.jetbrains.compose.resources.stringResource
 
 fun main() {
     // Name in the macOS menu bar and Dock
-    System.setProperty("apple.awt.application.name", "CloudStream")
+    System.setProperty("apple.awt.application.name", "Hyper Stream")
     System.setProperty("apple.laf.useScreenMenuBar", "true")
 
     // Dock icon when run with ./gradlew run (the packaged .app uses its icns)
@@ -62,7 +58,7 @@ fun main() {
                 vlc?.release()
                 exitApplication()
             },
-            title = stringResource(Res.string.app_name),
+            title = "Hyper Stream",
             icon = appIcon,
             state = windowState,
         ) {
@@ -81,9 +77,7 @@ fun main() {
             }
 
             val settings by SettingsStore.state.collectAsState()
-            CloudStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
-                // San Francisco and Apple's text styles across the app, on top of the chosen colours
-                MaterialTheme(colorScheme = MaterialTheme.colorScheme, typography = TvTypography) {
+            HyperStreamTheme(mode = settings.themeMode, primaryColor = settings.primaryColor) {
                 CompositionLocalProvider(
                     LocalFocusOutlineDefault provides false,
                     LocalFullscreen provides remember(windowState) { WindowFullscreen(windowState) },
@@ -91,7 +85,6 @@ fun main() {
                     Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                         CloudStreamApp(nav, store, vlc)
                     }
-                }
                 }
             }
         }

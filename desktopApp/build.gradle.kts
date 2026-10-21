@@ -37,7 +37,8 @@ compose.desktop {
         }
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "CloudStream"
+            // The app is called Hyper Stream; installer and bundle names avoid the space
+            packageName = "HyperStream"
             // Needed for java.net.http, jdk.httpserver and the URLClassLoader based plugin system
             // Extensions are loaded at runtime, so include what they commonly need too (TLS curves, scripting)
             modules(
@@ -51,9 +52,11 @@ compose.desktop {
 
             val iconsRoot = project.file("src/desktop-icons")
             macOS {
-                // CloudStream's cloud logo on Apple's icon grid, made from icon.svg (see MACOS.md)
+                // The Hyper Stream HS monogram on Apple's icon grid, made from icon.svg (see branding/README.md)
                 iconFile.set(iconsRoot.resolve("icon-mac.icns"))
+                // Unchanged since the CloudStream name, so macOS keeps treating it as the same app
                 bundleID = "com.lagradost.cloudstream4.desktop"
+                dockName = "Hyper Stream"
                 appCategory = "public.app-category.entertainment"
             }
             windows {

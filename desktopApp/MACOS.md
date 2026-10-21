@@ -1,4 +1,6 @@
-# CloudStream for macOS
+# Hyper Stream for macOS
+
+Hyper Stream is a native app built on CloudStream's open-source library and extension format.
 
 A native desktop build of CloudStream, made with Compose Multiplatform on top of the
 cross-platform `library` module. It loads the same extensions as the Android app.
@@ -16,7 +18,7 @@ cross-platform `library` module. It loads the same extensions as the Android app
 ```
 
 ```bash
-./gradlew :desktopApp:createDistributable   # CloudStream.app in desktopApp/build/compose/binaries/main/app
+./gradlew :desktopApp:createDistributable   # HyperStream.app in desktopApp/build/compose/binaries/main/app
 ./gradlew :desktopApp:packageDmg            # installer .dmg
 ```
 
@@ -39,7 +41,7 @@ To debug, start with a debugger listening on `127.0.0.1:5005`, then attach from 
 `run` loads classes from the build folder, so rebuilding or running tests while it is open can crash it with `ClassNotFoundException`. To keep a session safe while you work, run a packaged copy instead (with `-PdebugApp` it includes the debugger agent):
 
 ```bash
-./gradlew :desktopApp:createDistributable -PdebugApp && ./desktopApp/build/compose/binaries/main/app/CloudStream.app/Contents/MacOS/CloudStream
+./gradlew :desktopApp:createDistributable -PdebugApp && ./desktopApp/build/compose/binaries/main/app/HyperStream.app/Contents/MacOS/HyperStream
 ```
 
 App data lives in `~/Library/Application Support/CloudStream`.
@@ -47,13 +49,7 @@ Start with `-Dcloudstream.dataDir=/some/folder` to use another folder.
 
 ## App icon
 
-`src/desktop-icons/icon.svg` is the Android app's cloud logo (`app/src/main/res/drawable/ic_launcher_foreground.xml`) on Apple's icon grid. To regenerate `icon-mac.icns` after changing it:
-
-```bash
-CS_ICON_DIR=/tmp/cs-icon ./gradlew :appCore:jvmTest --tests '*AppIconRender*'
-```
-
-Then copy the PNGs into a `CloudStream.iconset` folder with Apple's names (`icon_16x16.png`, `icon_16x16@2x.png` and so on up to `icon_512x512@2x.png`) and run `iconutil -c icns CloudStream.iconset -o desktopApp/src/desktop-icons/icon-mac.icns`.
+The icon is the Hyper Stream HS monogram. Sources and how to make the icon files are in `branding/README.md`.
 
 ## How it works
 

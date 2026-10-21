@@ -224,7 +224,7 @@ fun HomeScreen(model: HomeModel) {
             LargeTitle("Home")
             MessageBox(
                 title = "No extensions yet",
-                body = "CloudStream doesn't include any content. Add a repository and install extensions to start browsing.",
+                body = "Hyper Stream doesn't include any content. Add a repository and install extensions to start browsing.",
                 actionLabel = "Open Extensions",
             ) { nav.open(Route.Extensions) }
         }
