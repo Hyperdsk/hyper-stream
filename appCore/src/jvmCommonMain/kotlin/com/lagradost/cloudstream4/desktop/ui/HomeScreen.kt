@@ -168,7 +168,8 @@ class HomeModel : ScreenModel<HomeState>(HomeState()) {
         if (picks.isEmpty()) return
         update { copy(hero = picks.map { HeroItem(it) }.toPersistentList()) }
         heroJob = scope.launch {
-            val limit = kotlinx.coroutines.sync.Semaphore(3)
+            // Fewer at once on TVs, which have fewer and slower cores to share with the screen
+            val limit = kotlinx.coroutines.sync.Semaphore(if (com.lagradost.cloudstream4.desktop.Platform.isTv) 2 else 3)
             picks.map { item ->
                 async {
                     limit.acquire()

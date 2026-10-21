@@ -181,8 +181,10 @@ fun WideImage(
         AnimatedVisibility(state is AsyncImagePainter.State.Success, enter = fadeIn(tween(300)), exit = fadeOut()) {
             Box(Modifier.fillMaxSize()) {
                 if (portrait) {
-                    Image(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(28.dp))
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
+                    // A large blur is heavy for a TV's graphics chip, so TVs dim the fill instead
+                    val tv = com.lagradost.cloudstream4.desktop.Platform.isTv
+                    Image(painter, null, contentScale = ContentScale.Crop, modifier = if (tv) Modifier.fillMaxSize() else Modifier.fillMaxSize().blur(28.dp))
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (tv) 0.7f else 0.35f)))
                     Image(painter, null, contentScale = ContentScale.Fit, alignment = fitAlignment, modifier = Modifier.fillMaxSize())
                 } else {
                     Image(painter, null, contentScale = ContentScale.Crop, alignment = BiasAlignment(0f, -0.6f), modifier = Modifier.fillMaxSize())

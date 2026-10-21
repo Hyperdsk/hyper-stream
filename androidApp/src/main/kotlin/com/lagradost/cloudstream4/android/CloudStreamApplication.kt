@@ -14,6 +14,14 @@ class CloudStreamApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidHost.init(this)
+        // Read settings and history, and set up the JSON parser, while the first screen is being
+        // created; the screen needs them soon after, and doing it on the UI thread held it up
+        Thread {
+            runCatching {
+                com.lagradost.cloudstream4.desktop.data.SettingsStore.state
+                com.lagradost.cloudstream4.desktop.data.LibraryStore.state
+            }
+        }.apply { name = "warm-up"; priority = Thread.NORM_PRIORITY }.start()
     }
 
     /**

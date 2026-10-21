@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.plugins
 
+import kotlinx.coroutines.delay
 import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.plugins.Repository
@@ -78,20 +79,30 @@ object ExtensionManager {
         APIHolder.allProviders.filter { it.sourcePlugin != null }.sortedBy { it.name.lowercase() }
 
     fun start() {
-        // Before any extension loads, so ids they add are stored under the right keys
-        com.lagradost.cloudstream4.desktop.LibrarySetup.init()
-        _state.update {
-            it.copy(
-                repositories = reposFile.read().map { r -> RepositoryState(r) }.toPersistentList(),
-                installed = installedFile.read().toPersistentList(),
-            )
-        }
-        DemoProvider.setEnabled(SettingsStore.state.value.demoProvider)
+        // All off the UI thread: the first JSON read sets up the parser's Kotlin support, which
+        // takes most of a second on slower TVs and held up the first screen
         scope.launch {
+            // Before any extension loads, so ids they add are stored under the right keys
+            com.lagradost.cloudstream4.desktop.LibrarySetup.init()
+            val savedRepos = reposFile.read()
+            val savedInstalled = installedFile.read()
+            // Merged, so anything added while the files were being read stays
+            _state.update {
+                it.copy(
+                    repositories = (savedRepos.map { r -> RepositoryState(r) } +
+                        it.repositories.filter { r -> savedRepos.none { saved -> saved.url == r.data.url } }).toPersistentList(),
+                    installed = (savedInstalled + it.installed.filter { p -> savedInstalled.none { saved -> saved.filePath == p.filePath } }).toPersistentList(),
+                )
+            }
+            DemoProvider.setEnabled(SettingsStore.state.value.demoProvider)
             loadAllInstalled()
+            // Checking repositories for updates can wait until the first screen has loaded
+            delay(REFRESH_DELAY_MS)
             _state.value.repositories.forEach { refreshRepository(it.data.url) }
         }
     }
+
+    private const val REFRESH_DELAY_MS = 15_000L
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
