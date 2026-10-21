@@ -91,7 +91,7 @@ private fun SearchEntry(selected: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(8.dp))
             .background(colors.onBackground.copy(alpha = if (selected || hovered) 0.12f else 0.07f))
             .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -120,7 +120,7 @@ private fun SidebarItem(icon: ImageVector, label: String, selected: Boolean, bad
                 }
             )
             .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

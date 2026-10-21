@@ -189,7 +189,7 @@ fun ReviewCard(review: ImdbReview, modifier: Modifier = Modifier, maxLines: Int 
     ) {
         Column(
             Modifier
-                .then(if (onClick != null) Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick) else Modifier)
+                .then(if (onClick != null) Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = tvIndication, onClick = onClick) else Modifier)
                 .padding(16.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {

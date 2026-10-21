@@ -147,7 +147,7 @@ fun PrimaryCapsuleButton(text: String, icon: ImageVector? = null, modifier: Modi
             .pressScale(interaction)
             .hoverable(interaction)
             .background(Color.White.copy(alpha = if (hovered) 1f else 0.92f), RoundedCornerShape(50))
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(horizontal = 22.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -170,7 +170,7 @@ fun GlassButton(icon: ImageVector, description: String, text: String? = null, mo
             .pressScale(interaction)
             .hoverable(interaction)
             .background(Color.White.copy(alpha = if (hovered) 0.28f else 0.16f), shape)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(if (text == null) PaddingValues(11.dp) else PaddingValues(horizontal = 18.dp, vertical = 11.dp)),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,

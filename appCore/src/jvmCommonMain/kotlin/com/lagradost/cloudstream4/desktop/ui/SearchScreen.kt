@@ -127,27 +127,31 @@ fun SearchScreen(model: SearchModel) {
     Column(Modifier.fillMaxSize()) {
         LargeTitle("Search")
         // A filled, rounded field like Apple's search fields, rather than an outlined form input
-        TextField(
-            value = state.query,
-            onValueChange = model::onQueryChange,
-            placeholder = { Text("Movies, shows and more", style = MaterialTheme.typography.bodyLarge) },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = {
-                if (state.query.isNotEmpty()) IconButton(onClick = model::clear) { Icon(Icons.Default.Clear, "Clear") }
-            },
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge,
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.1f),
-                unfocusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f),
-                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { model.search() }),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = appLayout.gutter).focusRequester(focus),
-        )
+        // On TV the screen opens with the box focused and no keyboard; OK opens it
+        TvTextFieldBox(Modifier.fillMaxWidth().padding(horizontal = appLayout.gutter), focusRequester = focus) { fieldModifier ->
+            TextField(
+                value = state.query,
+                onValueChange = model::onQueryChange,
+                placeholder = { Text("Movies, shows and more", style = MaterialTheme.typography.bodyLarge) },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = {
+                    if (state.query.isNotEmpty()) IconButton(onClick = model::clear) { Icon(Icons.Default.Clear, "Clear") }
+                },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.1f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f),
+                    focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                    unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { model.search() }),
+                // This field has no outline, so on TV it gets a ring when focused
+                modifier = fieldModifier,
+            )
+        }
         if (state.providers.size > 1) {
             FlowRow(
                 Modifier.padding(horizontal = appLayout.gutter, vertical = 12.dp),

@@ -608,7 +608,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         color = Color.White.copy(alpha = 0.85f),
                         maxLines = if (plotExpanded) Int.MAX_VALUE else 3,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { plotExpanded = !plotExpanded },
+                        modifier = Modifier.clickable(indication = tvIndication, interactionSource = remember { MutableInteractionSource() }) { plotExpanded = !plotExpanded },
                     )
                 }
                 Spacer(Modifier.height(10.dp))
@@ -685,7 +685,7 @@ private fun TabText(text: String, selected: Boolean, onClick: () -> Unit) {
         text,
         style = MaterialTheme.typography.titleLarge,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (selected) 1f else if (hovered) 0.8f else 0.45f),
-        modifier = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        modifier = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick),
     )
 }
 
@@ -699,7 +699,7 @@ private fun SubtleCapsule(icon: ImageVector, text: String, onClick: () -> Unit) 
             .pressScale(interaction)
             .hoverable(interaction)
             .background(MaterialTheme.colorScheme.onBackground.copy(alpha = if (hovered) 0.16f else 0.09f), RoundedCornerShape(50))
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

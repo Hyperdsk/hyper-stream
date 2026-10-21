@@ -113,21 +113,24 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    label = { Text("Repository link or code") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { ExtensionManager.addRepository(input); input = "" } }),
-                    modifier = Modifier.weight(1f),
-                )
+                TvTextFieldBox(Modifier.weight(1f)) { fieldModifier ->
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        label = { Text("Repository link or code") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { ExtensionManager.addRepository(input); input = "" } }),
+                        modifier = fieldModifier,
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Button(enabled = input.isNotBlank(), onClick = { ExtensionManager.addRepository(input); input = "" }) { Text("Add") }
             }
         }
 
         item {
+            TvTextFieldBox(Modifier.fillMaxWidth().padding(top = 8.dp)) { fieldModifier ->
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -137,8 +140,9 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
                     if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Clear search") }
                 },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                modifier = fieldModifier,
             )
+            }
         }
 
         val repos = state.repositories.filter {
@@ -306,10 +310,14 @@ private fun RepositoryScreen(repo: RepositoryState, onBack: () -> Unit) {
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (!appLayout.compact) OutlinedTextField(filter, { filter = it }, placeholder = { Text("Filter") }, singleLine = true, modifier = Modifier.width(260.dp))
+            if (!appLayout.compact) TvTextFieldBox(Modifier.width(260.dp)) { fieldModifier ->
+                OutlinedTextField(filter, { filter = it }, placeholder = { Text("Filter") }, singleLine = true, modifier = fieldModifier)
+            }
         }
         if (appLayout.compact) {
-            OutlinedTextField(filter, { filter = it }, placeholder = { Text("Filter") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+            TvTextFieldBox(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) { fieldModifier ->
+                OutlinedTextField(filter, { filter = it }, placeholder = { Text("Filter") }, singleLine = true, modifier = fieldModifier)
+            }
         }
         when {
             repo.loading && repo.plugins.isEmpty() -> LoadingBox()

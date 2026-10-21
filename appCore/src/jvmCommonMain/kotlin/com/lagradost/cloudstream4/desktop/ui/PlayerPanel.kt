@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.TextButton
@@ -100,7 +101,8 @@ fun BoxScope.PlayerPanel(
 ) {
     // Clicking the video area outside the panel closes it
     Box(
-        Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
+        // Not a stop for the remote: only a tap or click outside the panel closes it
+        Modifier.fillMaxSize().focusProperties { canFocus = false }.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
     )
     Column(
         Modifier
@@ -110,6 +112,7 @@ fun BoxScope.PlayerPanel(
             .fillMaxWidth(0.4f)
             .background(panelColor)
             // Swallow clicks so they don't reach the close area behind
+            .focusProperties { canFocus = false }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
             .padding(top = 12.dp),
     ) {
@@ -191,6 +194,7 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
             }
         }
         if (ui.links.size > 6) {
+            TvTextFieldBox(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { fieldModifier ->
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -199,8 +203,9 @@ private fun SourcesTab(ui: PlayerUiState, model: PlayerModel, onClose: () -> Uni
                 trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Clear") } },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = fieldModifier,
             )
+            }
             if (counts.size > 1) {
                 FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     QualityChip("All ${all.size}", quality == null) { quality = null }

@@ -1,5 +1,20 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.composed
@@ -35,3 +50,59 @@ fun androidx.compose.ui.Modifier.onPointerEvents(
 /** Android's back button and gesture while [enabled]. Desktop has none, so it does nothing there. */
 @Composable
 expect fun PlatformBackHandler(enabled: Boolean = true, onBack: () -> Unit)
+
+/**
+ * Holds a text field. On TV the remote stops on this box instead of the field, so moving past
+ * doesn't open the keyboard; OK (the remote's centre button) moves into the field and opens it,
+ * and moving away leaves it. [content] gets the modifier for the field. Elsewhere it's just the field.
+ */
+@Composable
+fun TvTextFieldBox(
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    /** Focuses the field (the box on TV), for screens that open ready to type. */
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
+    content: @Composable (androidx.compose.ui.Modifier) -> Unit,
+) {
+    if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
+        androidx.compose.foundation.layout.Box(modifier) {
+            content(androidx.compose.ui.Modifier.fillMaxWidth().then(focusRequester?.let { androidx.compose.ui.Modifier.focusRequester(it) } ?: androidx.compose.ui.Modifier))
+        }
+        return
+    }
+    var editing by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var boxFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val field = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    androidx.compose.foundation.layout.Box(
+        modifier
+            .then(focusRequester?.let { androidx.compose.ui.Modifier.focusRequester(it) } ?: androidx.compose.ui.Modifier)
+            .onFocusChanged { boxFocused = it.isFocused }
+            .onPreviewKeyEvent { e ->
+                val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                if (!ok) return@onPreviewKeyEvent false
+                // OK in the field after the keyboard was closed brings it back
+                if (e.type == KeyEventType.KeyUp) if (editing) keyboard?.show() else editing = true
+                true
+            }
+            .focusable(),
+    ) {
+        content(
+            androidx.compose.ui.Modifier.fillMaxWidth()
+                .focusRequester(field)
+                .focusProperties { canFocus = editing }
+                // Leaving the field with the remote ends editing, so the next pass skips the keyboard again
+                .onFocusChanged { if (editing && !it.hasFocus) editing = false },
+        )
+        if (boxFocused && !editing) {
+            androidx.compose.foundation.layout.Box(
+                androidx.compose.ui.Modifier.matchParentSize().border(3.dp, androidx.compose.ui.graphics.Color.White, RoundedCornerShape(12.dp))
+            )
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(editing) {
+        if (editing) {
+            runCatching { field.requestFocus() }
+            keyboard?.show()
+        }
+    }
+}
