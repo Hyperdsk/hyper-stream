@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -232,9 +234,13 @@ fun HomeScreen(model: HomeModel) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp)) {
+        val listState = rememberLazyListState()
+        val scrollScope = rememberCoroutineScope()
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
             if (state.hero.isNotEmpty()) {
-                item(key = "hero") { HeroCarousel(state.hero) }
+                item(key = "hero") {
+                    HeroCarousel(state.hero, onFocused = { scrollScope.launch { listState.animateScrollToItem(0) } })
+                }
             } else {
                 // Room for the floating provider picker when there is no hero
                 item(key = "title") { LargeTitle("Home") }

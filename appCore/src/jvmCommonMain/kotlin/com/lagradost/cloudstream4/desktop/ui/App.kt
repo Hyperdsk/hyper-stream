@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -66,6 +68,7 @@ class ModelStore {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
     LaunchedEffect(nav) {
@@ -79,7 +82,12 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layout = AppLayout.forWidth(maxWidth)
-        CompositionLocalProvider(LocalAppLayout provides layout) {
+        CompositionLocalProvider(
+            LocalAppLayout provides layout,
+            // Android TV's default scrolls every focused item to a fixed spot a third of the way
+            // down the screen, which pushed the home banner off the top; scroll only as needed instead
+            *(if (com.lagradost.cloudstream4.desktop.Platform.isTv) arrayOf(LocalBringIntoViewSpec provides ScrollOnlyAsNeeded) else emptyArray()),
+        ) {
             AppContent(nav, store, vlc)
         }
         SnackbarHost(
@@ -165,3 +173,18 @@ private val compactTabs = listOf(
 
 @Composable
 fun rememberNavigator() = remember { Navigator() }
+
+/** Brings a focused item into view with the smallest scroll, and none when it's already visible. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private object ScrollOnlyAsNeeded : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        val end = offset + size
+        return when {
+            offset >= 0f && end <= containerSize -> 0f
+            // Bigger than the screen: line up its start
+            size > containerSize -> offset
+            offset < 0f -> offset
+            else -> end - containerSize
+        }
+    }
+}

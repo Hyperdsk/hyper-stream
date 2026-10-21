@@ -61,7 +61,7 @@ import kotlinx.coroutines.delay
  * the pointer is over them. Text sits on a scrim towards the page colour, so it stays readable.
  */
 @Composable
-fun HeroCarousel(items: List<HeroItem>) {
+fun HeroCarousel(items: List<HeroItem>, onFocused: () -> Unit = {}) {
     if (items.isEmpty()) return
     val nav = LocalNavigator.current
     var index by remember { mutableIntStateOf(0) }
@@ -81,7 +81,11 @@ fun HeroCarousel(items: List<HeroItem>) {
 
     BoxWithConstraints(
         Modifier.fillMaxWidth().hoverable(interaction)
-            .onFocusChanged { focusInside = it.hasFocus }
+            .onFocusChanged {
+                // A remote landing on the hero shows all of it, from the top
+                if (it.hasFocus && !focusInside) onFocused()
+                focusInside = it.hasFocus
+            }
             // Touch: swipe sideways for the next or previous title
             .pointerInput(items.size) {
                 var total = 0f
@@ -120,7 +124,25 @@ fun HeroCarousel(items: List<HeroItem>) {
                 ),
             ) { i -> HeroText(items[i]) { nav.open(it) } }
 
-            if (items.size > 1) {
+            if (items.size > 1 && com.lagradost.cloudstream4.desktop.Platform.isTv) {
+                // TV: previous and next on the same line as Play and Details, so the remote reaches
+                // them by pressing right; they stay put while the slide changes, so focus does too
+                Row(
+                    Modifier.align(Alignment.BottomEnd).padding(end = 48.dp, bottom = 44.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GlassButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous") {
+                        index = (safeIndex - 1 + items.size) % items.size
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        items.indices.forEach { i -> Dot(i == safeIndex) { index = i } }
+                    }
+                    GlassButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next") {
+                        index = (safeIndex + 1) % items.size
+                    }
+                }
+            } else if (items.size > 1) {
                 Row(
                     // Phones: under the buttons, centred; wider screens: bottom right
                     if (compact) Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)

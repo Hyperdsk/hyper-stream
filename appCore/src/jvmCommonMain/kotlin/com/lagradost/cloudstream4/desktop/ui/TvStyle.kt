@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.border
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.State
@@ -215,6 +216,8 @@ fun Dot(selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.height(7.dp).width(width.dp)
             .background(Color.White.copy(alpha = if (selected) 0.95f else 0.4f), RoundedCornerShape(50))
+            // Too small to aim at with a remote; TVs change slides with the arrows instead
+            .focusProperties { canFocus = !com.lagradost.cloudstream4.desktop.Platform.isTv }
             .clickable(onClick = onClick)
     )
 }
