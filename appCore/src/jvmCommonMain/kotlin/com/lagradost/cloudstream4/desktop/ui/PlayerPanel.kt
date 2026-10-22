@@ -391,7 +391,7 @@ private fun SubtitlesTab(ui: PlayerUiState, playback: PlaybackState, model: Play
     LazyColumn(contentPadding = PaddingValues(12.dp)) {
         // VLC lists "Disable" with id -1, shown here as Off
         val tracks = playback.subtitleTracks
-        item { TrackRow("Off", playback.subtitleTrack < 0) { player.setSubtitleTrack(-1) } }
+        item { TrackRow("Off", playback.subtitleTrack < 0) { model.subtitlesOff() } }
         items(tracks.filter { it.id >= 0 }, key = { "sub-${it.id}" }) { t ->
             TrackRow(t.name, t.id == playback.subtitleTrack) { player.setSubtitleTrack(t.id) }
         }

@@ -131,4 +131,24 @@ class PlayerModelTest {
         assertNull(ui.error)
         model.dispose()
     }
+
+    @Test
+    fun searchingAgainOfflineKeepsTheSources() = runBlocking {
+        setUp()
+        var offline = false
+        APIHolder.allProviders.add(FakeApi("Offline") { _, callback ->
+            if (offline) throw java.io.IOException("No network")
+            callback(link("one", 1080))
+            callback(link("two", 720))
+        })
+        val model = PlayerModel(request("Offline"), FakeEngine())
+        delay(1_000)
+        assertEquals(2, model.state.value.links.size)
+        offline = true
+        model.searchAgain()
+        delay(1_000)
+        assertEquals(2, model.state.value.links.size, "the sources found before are kept")
+        assertTrue(!model.state.value.refreshing)
+        model.dispose()
+    }
 }

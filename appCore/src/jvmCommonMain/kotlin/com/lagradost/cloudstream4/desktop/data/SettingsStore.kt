@@ -30,6 +30,8 @@ data class AppSettings(
     @JsonProperty("skipButtons") val skipButtons: Boolean = true,
     /** Jump over intros and recaps without pressing the button. */
     @JsonProperty("autoSkipIntros") val autoSkipIntros: Boolean = false,
+    /** The subtitle language picked last ("english"), shown by itself on the next video; null is off. */
+    @JsonProperty("subtitleLanguage") val subtitleLanguage: String? = null,
     /** Start with the first source found instead of waiting for all of them. The rest load in the background. */
     @JsonProperty("playFirstSource") val playFirstSource: Boolean = false,
     @JsonProperty("seekSeconds") val seekSeconds: Int = 10,

@@ -193,7 +193,8 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         this.subtitles += subtitles
         pickedSubtitle = false
         http.setDefaultRequestProperties(source.headers)
-        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = true) }
+        // ExoPlayer keeps its speed for the next video: so does the state, or the menu said 1x
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = true) }
         currentUrl = source.url
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearOverrides()
@@ -288,7 +289,7 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         source = null
         currentUrl = null
         surface?.subtitles?.setCues(emptyList())
-        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = false) }
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = false) }
     }
 
     override fun release() {

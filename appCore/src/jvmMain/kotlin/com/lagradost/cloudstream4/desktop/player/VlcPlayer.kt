@@ -170,7 +170,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
         val url = source.url
         VlcLog.log("open ${if (url.startsWith("http://127.0.0.1")) "proxied stream" else url.substringBefore(':')} at $startMs ms")
         frame = null
-        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = true) }
+        // The speed carries over to the next video, as the player itself keeps it
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = true) }
         val options = buildList {
             add(":network-caching=$NETWORK_CACHING_MS")
             if (startMs > 0) add(":start-time=${startMs / 1000.0}")
@@ -180,6 +181,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
         // External subtitles are added but not selected, the user picks one
         subtitles.forEach { player.media().addSlave(MediaSlaveType.SUBTITLE, it, false) }
         player.audio().setVolume(_state.value.volume)
+        if (_state.value.rate != 1f) player.controls().setRate(_state.value.rate)
     }
 
     override fun togglePause() {
@@ -273,7 +275,7 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
         player.controls().stop()
         frame = null
         currentUrl = null
-        _state.update { PlaybackState(volume = it.volume, muted = it.muted, buffering = false) }
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = false) }
     }
 
     override fun release() {

@@ -648,6 +648,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         onZoom = { setZoom(it) },
                         canFullscreen = window != null,
                         playFocus = playFocus,
+                        onActive = ::poke,
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
                 }
@@ -675,7 +676,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 136.dp),
         ) {
             val stamp = activeSkip ?: return@AnimatedVisibility
-            SkipButton(stamp.buttonText) { model.skip(stamp) }
+            SkipButton(if (stamp.skipToNextEpisode && model.hasNext) "Next Episode" else "Skip ${stamp.stamp.type.label}") { model.skip(stamp) }
         }
 
         // Sources, subtitles and audio, in a side panel instead of long menus
@@ -710,12 +711,21 @@ private fun BottomControls(
     onZoom: (Float) -> Unit,
     canFullscreen: Boolean,
     playFocus: FocusRequester,
+    onActive: () -> Unit,
     modifier: Modifier,
 ) {
     val player = model.player ?: return
     val touch = Platform.isTouch
     val tv = Platform.isTv
     var dragging by remember { mutableStateOf(false) }
+    // A finger or mouse held still on the seek bar mustn't let the controls hide mid-drag (the
+    // seek would be lost with them)
+    LaunchedEffect(dragging) {
+        while (dragging) {
+            onActive()
+            delay(1_000)
+        }
+    }
     var dragValue by remember { mutableFloatStateOf(0f) }
     val length = playback.lengthMs.coerceAtLeast(1)
     val shown = if (dragging) dragValue else playback.timeMs.toFloat() / length

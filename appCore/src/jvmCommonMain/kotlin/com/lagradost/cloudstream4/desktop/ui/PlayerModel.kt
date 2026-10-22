@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import com.lagradost.cloudstream4.desktop.DesktopToasts
 import com.lagradost.cloudstream4.desktop.data.LinkCache
 import com.lagradost.cloudstream4.desktop.data.RememberedSource
 import com.lagradost.cloudstream4.desktop.data.SourceMemory
@@ -107,6 +108,8 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     private val memoryKey = SourceMemory.key(request.apiName, request.parentUrl)
     /** The background download of the provider's subtitles, see checkSubtitles. */
     private var subtitleCheck: Job? = null
+    /** Whether this source already shows the remembered subtitle language. */
+    private var autoSubtitled = false
 
     init {
         loadEpisode(request.index, request.startMs)
@@ -302,10 +305,16 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         scope.launch {
             val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
             val subs = java.util.Collections.synchronizedList(mutableListOf<SubtitleFile>())
-            providerCall {
+            val result = providerCall {
                 api.loadLinks(data, false, { subs += it }, { if (it.type.name != "TORRENT" && it.type.name != "MAGNET") links += it })
             }
             if (current.index != index) return@launch
+            // Nothing came back (offline, or the site is down): keep the sources there are
+            if (links.isEmpty()) {
+                update { copy(refreshing = false) }
+                DesktopToasts.show("Couldn't search again: " + (result.exceptionOrNull()?.userMessage() ?: "no sources found. The current ones are kept."))
+                return@launch
+            }
             val playing = playingUrl()
             val found = links.toList().distinctBy { it.url }.toMutableList()
             // Keep the link that's playing in the list, even if this search didn't return it
@@ -400,6 +409,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         // A source that failed before playing leaves the playhead at 0: keep the resume point
         val start = resumePosition()
         playToken++
+        autoSubtitled = false
         update { copy(current = index, error = null) }
         // Single video files stream over several connections, playlists stream segment by segment
         val source = StreamGateway.prepare(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO).copy(
@@ -416,12 +426,29 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         checkSubtitles()
     }
 
+    /** "English 2", "English (CC)" and "english" are the same language for remembering. */
+    private fun languageKey(lang: String) = lang.lowercase().substringBefore('(').substringBefore('[').trim().substringBefore(' ')
+
+    private fun rememberSubtitleLanguage(sub: SubtitleFile) {
+        val key = languageKey(sub.lang).takeIf { it.isNotBlank() } ?: return
+        autoSubtitled = true
+        if (SettingsStore.state.value.subtitleLanguage != key) SettingsStore.update { it.copy(subtitleLanguage = key) }
+    }
+
+    /** "Off": hides subtitles and stops picking a language by itself. */
+    fun subtitlesOff() {
+        player?.setSubtitleTrack(-1)
+        autoSubtitled = true
+        if (SettingsStore.state.value.subtitleLanguage != null) SettingsStore.update { it.copy(subtitleLanguage = null) }
+    }
+
     /** Shows [sub] in the player, downloading it first unless the background check already did. */
     fun loadSubtitle(sub: SubtitleFile) {
         val p = player ?: return
         when (val state = current.loadedSubtitles[sub.url]) {
             is SubtitleLoad.Ready -> {
                 p.addSubtitle(state.file.toPath().toUri().toString())
+                rememberSubtitleLanguage(sub)
                 update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loaded)) }
                 return
             }
@@ -436,6 +463,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                     // Another episode or source started meanwhile: don't put this one on it
                     if (token != playToken) return@onSuccess
                     p.addSubtitle(file.toPath().toUri().toString())
+                    rememberSubtitleLanguage(sub)
                     update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loaded)) }
                 }
                 .onFailure { e ->
@@ -465,6 +493,13 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                         limit.withPermit {
                             if (current.loadedSubtitles[sub.url] != null) return@withPermit
                             val result = runCatching { SubtitleFiles.fetch(sub) }
+                            // The language picked last time: show it as soon as one works
+                            if (result.isSuccess && !autoSubtitled && languageKey(sub.lang) == SettingsStore.state.value.subtitleLanguage) {
+                                autoSubtitled = true
+                                update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Ready(result.getOrThrow()))) }
+                                loadSubtitle(sub)
+                                return@withPermit
+                            }
                             update {
                                 // Don't overwrite a pick the user made meanwhile
                                 if (loadedSubtitles[sub.url] != null) this
@@ -511,16 +546,18 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
 
     private fun findSkips(durationMs: Long) {
         if (!SettingsStore.state.value.skipButtons) return
-        val index = current.index
-        val episode = current.episodes[index]
+        val episode = current.episodes[current.index]
         scope.launch {
             val show = loadResponse ?: providerByName(request.apiName)
                 ?.let { api -> providerCall { api.load(request.parentUrl) }.getOrNull() }
                 ?.also { loadResponse = it }
                 ?: return@launch
-            val skips = SkipStamps.find(show, episode, durationMs, hasNextEpisode = index < current.episodes.lastIndex)
-            // Ignore results that arrive after the user moved to another episode
-            if (current.index == index) update { copy(skips = skips.toPersistentList()) }
+            // Whether credits lead to a next episode is decided when shown: the episode list can
+            // still be loading now (started from Continue watching)
+            val skips = SkipStamps.find(show, episode, durationMs, hasNextEpisode = true)
+            // Ignore results that arrive after the user moved to another episode. By its data, not
+            // its position: loading the episode list moves the position of the same episode
+            if (current.episodes.getOrNull(current.index)?.data == episode.data) update { copy(skips = skips.toPersistentList()) }
         }
     }
 
