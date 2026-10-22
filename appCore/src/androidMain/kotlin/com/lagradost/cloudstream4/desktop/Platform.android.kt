@@ -9,7 +9,10 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 
 actual object Platform {
@@ -19,6 +22,15 @@ actual object Platform {
 
     actual val description: String
         get() = "Android ${Build.VERSION.RELEASE} · ${Build.MANUFACTURER} ${Build.MODEL}"
+
+    actual val appVersion: String
+        get() = runCatching {
+            AndroidHost.context.packageManager
+                .getPackageInfo(AndroidHost.context.packageName, 0)
+                .versionName
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "0.0.0"
+
+    actual val updateTarget: UpdateTarget = UpdateTarget.Android
 
     actual fun openUrl(url: String): Boolean = runCatching {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -30,6 +42,38 @@ actual object Platform {
     actual fun openFolder(folder: File) = Unit
 
     actual fun revealFile(file: File) = Unit
+
+    /**
+     * Android's package installer reads the APK through a content:// uri, so it's shared from the
+     * app's private updates folder. Without permission to install unknown apps, this opens the
+     * system switch first; the user then taps Update again.
+     */
+    actual suspend fun installUpdate(file: File): Boolean = withContext(Dispatchers.Main) {
+        val context = AndroidHost.activity ?: AndroidHost.context
+        if (!context.packageManager.canRequestPackageInstalls()) {
+            val packageUri = Uri.parse("package:${context.packageName}")
+            val opened = listOf(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, packageUri),
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri),
+            ).any { intent ->
+                runCatching {
+                    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.isSuccess
+            }
+            if (opened) DesktopToasts.show("Allow installs from Hyper Stream, then tap Update again.")
+            return@withContext opened
+        }
+        runCatching {
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            }
+            context.startActivity(intent)
+        }.isSuccess
+    }
 
     /**
      * Opens the system folder picker. Android only lets apps write to shared folders such as

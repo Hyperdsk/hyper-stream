@@ -3,6 +3,15 @@ package com.lagradost.cloudstream4.desktop
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
+/** The release builds that have their own downloadable update. */
+enum class UpdateTarget {
+    Android,
+    MacAppleSilicon,
+    MacIntel,
+    Windows,
+    Linux,
+}
+
 /** What differs between the Mac app and the Android phone and TV app, outside the player. */
 expect object Platform {
     /** Running on a TV, driven by a remote: bigger focus highlights, no touch gestures. */
@@ -14,6 +23,12 @@ expect object Platform {
     /** For the About line in Settings. */
     val description: String
 
+    /** The installed app's version, as shown in the store and the update check. */
+    val appVersion: String
+
+    /** Which release asset this build can install. */
+    val updateTarget: UpdateTarget
+
     /** Desktop apps can open folders in the file manager; Android can't. */
     val canOpenFolders: Boolean
 
@@ -23,6 +38,9 @@ expect object Platform {
 
     /** Shows [file] selected in the file manager, or opens it with another app on Android. */
     fun revealFile(file: File)
+
+    /** Starts the downloaded update's installer, or opens the system prompt that allows it. */
+    suspend fun installUpdate(file: File): Boolean
 
     /** Asks for a folder, or returns null when cancelled or not supported. */
     suspend fun chooseFolder(title: String): File?

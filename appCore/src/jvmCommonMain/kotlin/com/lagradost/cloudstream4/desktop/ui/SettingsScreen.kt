@@ -319,6 +319,9 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
         Text(AppDirs.root.absolutePath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
 
+        Section("Updates")
+        UpdateSettings()
+
         Section("About")
         Text(
             "Hyper Stream for Mac, Android and Android TV, built on CloudStream's open-source library. " +

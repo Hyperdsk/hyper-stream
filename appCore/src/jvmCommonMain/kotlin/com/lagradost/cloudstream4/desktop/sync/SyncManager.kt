@@ -106,7 +106,7 @@ object SyncManager {
     /** Settings that belong to one device's screen, input or storage, so they don't sync. */
     private val deviceSettings = setOf(
         "downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider",
-        "videoFit", "swipeControls",
+        "videoFit", "swipeControls", "lastUpdateCheckAt", "lastUpdateNotice",
     )
 
     // Sync is optional: whatever goes wrong in it (no network, a revoked sign-in) must never close the app

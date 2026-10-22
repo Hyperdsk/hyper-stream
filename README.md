@@ -32,6 +32,7 @@ Get the latest builds from [Releases](https://github.com/KamranAllahYar/hyper-st
 - **Touch and TV controls:** double-tap to seek, hold for 2x, swipe for brightness and volume on
   phones; full remote navigation on TVs.
 - **Downloads** for watching offline.
+- **In-app updates:** Settings → Updates checks GitHub for the release built for your platform, downloads it and opens its installer. Automatic checks are on by default.
 - **Library and progress:** bookmarks, watch status, Continue watching, and the source each title
   last played from.
 - **Google TV home screen:** Continue watching shows as a Hyper Stream row, and in Android's Watch

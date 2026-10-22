@@ -168,8 +168,8 @@ fi
 
 step "Committing the version and tagging $tag"
 sed -i '' -E "s/(findProperty\(\"appVersion\"\) as String\?\) \?: )\"[0-9.]+\"/\1\"$version\"/" \
-  desktopApp/build.gradle.kts androidApp/build.gradle.kts
-git add desktopApp/build.gradle.kts androidApp/build.gradle.kts
+  desktopApp/build.gradle.kts androidApp/build.gradle.kts appCore/build.gradle.kts
+git add desktopApp/build.gradle.kts androidApp/build.gradle.kts appCore/build.gradle.kts
 # [skip ci]: GitHub doesn't start workflows for this push; the builds are already made
 git commit -q -m "Hyper Stream $version [skip ci]"
 git tag -a "$tag" -m "Hyper Stream $version"

@@ -20,6 +20,21 @@ actual object Platform {
     actual val description: String
         get() = "Java ${System.getProperty("java.version")} · ${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
 
+    /** Set in the appCore jar's manifest by Gradle, from -PappVersion (see build.gradle.kts). */
+    actual val appVersion: String
+        get() = Platform::class.java.`package`?.implementationVersion?.takeIf { it.isNotBlank() } ?: "1.2.0"
+
+    actual val updateTarget: UpdateTarget
+        get() {
+            val arch = System.getProperty("os.arch").orEmpty().lowercase()
+            return when {
+                isMac && (arch.contains("aarch64") || arch.contains("arm64")) -> UpdateTarget.MacAppleSilicon
+                isMac -> UpdateTarget.MacIntel
+                os.contains("win") -> UpdateTarget.Windows
+                else -> UpdateTarget.Linux
+            }
+        }
+
     actual fun openUrl(url: String): Boolean = runCatching { Desktop.getDesktop().browse(URI(url)) }.isSuccess
 
     actual fun openFolder(folder: File) {
@@ -32,6 +47,13 @@ actual object Platform {
             if (desktop.isSupported(Desktop.Action.BROWSE_FILE_DIR)) desktop.browseFileDirectory(file)
             else desktop.open(file.parentFile)
         }
+    }
+
+    /** Opens the .dmg/.msi/.deb the update checker downloaded, so the system installer takes over. */
+    actual suspend fun installUpdate(file: File): Boolean = withContext(Dispatchers.IO) {
+        val opened = runCatching { Desktop.getDesktop().open(file) }.isSuccess
+        if (!opened) runCatching { Desktop.getDesktop().open(file.parentFile) }
+        opened
     }
 
     /** The native folder picker. Returns null when cancelled. */

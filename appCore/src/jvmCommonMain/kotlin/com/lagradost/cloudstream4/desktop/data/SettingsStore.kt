@@ -54,6 +54,12 @@ data class AppSettings(
     @JsonProperty("videoFit") val videoFit: String = "Fit",
     /** Touch screens: swipe up and down on the left of the player for brightness, on the right for volume. */
     @JsonProperty("swipeControls") val swipeControls: Boolean = true,
+    /** Look for a new release on GitHub, and mention it when one is found. */
+    @JsonProperty("checkForUpdates") val checkForUpdates: Boolean = true,
+    /** When the last successful update check happened, so automatic checks don't run too often. */
+    @JsonProperty("lastUpdateCheckAt") val lastUpdateCheckAt: Long = 0,
+    /** The newest version already announced, so one release is mentioned only once. */
+    @JsonProperty("lastUpdateNotice") val lastUpdateNotice: String? = null,
 )
 
 object SettingsStore {

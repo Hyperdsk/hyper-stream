@@ -104,6 +104,14 @@ compose.resources {
     generateResClass = always
 }
 
+// Platform.appVersion reads this on desktop; Android gets it from PackageManager instead. Release
+// builds pass -PappVersion, the same property desktopApp uses for its installers.
+tasks.named<org.gradle.jvm.tasks.Jar>("jvmJar") {
+    manifest {
+        attributes["Implementation-Version"] = (findProperty("appVersion") as String?) ?: "1.2.0"
+    }
+}
+
 // The extension compatibility sweep reads this folder, so a different folder means a new run
 tasks.withType<Test>().configureEach {
     inputs.property("csCompatDir", providers.environmentVariable("CS_COMPAT_DIR").orElse(""))

@@ -19,6 +19,9 @@ GitHub. Back it up: if it's lost, every device has to uninstall the app to take 
 Without it, a release build uses the debug key.
 One APK runs on phones, tablets and Android TV (it shows in the TV launcher with a banner).
 
+Settings → Updates checks GitHub for a newer release, downloads the APK and opens Android's package
+installer. The first time, Android asks for permission to install unknown apps for Hyper Stream.
+
 ## How it differs from the Mac app
 
 | Area | Android | Mac |

@@ -70,6 +70,7 @@ The screens, extension management, storage and downloads are shared with the And
 | Parallel streaming | `desktop/player/ParallelStream.kt`, `StreamProxy.kt` | Direct video files are fetched ahead in 2 MB chunks over up to 16 connections, and HLS segments are prefetched in parallel. Set under Player, Streaming connections. |
 | Skip intros | `desktop/player/SkipStamps.kt` | Same free sources as Android: AniSkip, TheIntroDB, IntroDB. Skip button, optional auto-skip, S key, and the fixed 85-second "Skip opening" button. |
 | Sync | `desktop/sync/` | Optional, under Settings, Sync: watch progress, library, settings, remembered sources, repositories and extensions sync across the Mac, phone and TV through Supabase. Sign in with an emailed code or link. See `backend/supabase/README.md`. |
+| Updates | `desktop/update/UpdateChecker.kt` | Settings → Updates checks GitHub, picks the macOS build for this Mac's architecture, downloads it and opens the `.dmg`. Windows and Linux open the `.msi`/`.deb` the same way. |
 | Demo provider | `desktop/plugins/DemoProvider.kt` | Off by default. Open movies from public test streams, for trying the app without extensions. |
 
 ## Not done yet

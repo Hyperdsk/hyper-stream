@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Where UpdateChecker saves the downloaded release APK (see Platform.dataFolder()). -->
+    <files-path name="updates" path="updates/" />
+</paths>

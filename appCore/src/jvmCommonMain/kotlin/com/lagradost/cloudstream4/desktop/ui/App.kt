@@ -54,7 +54,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream4.desktop.DesktopToasts
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.player.VideoEngine
+import com.lagradost.cloudstream4.desktop.update.UpdateChecker
+import com.lagradost.cloudstream4.desktop.update.UpdateState
 
 private data class Tab(val route: Route, val label: String, val icon: ImageVector)
 
@@ -97,6 +100,26 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         DesktopToasts.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    // Check GitHub for a new release while the app is open, and mention each new version once.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val result = UpdateChecker.check(automatic = true)
+            if (result is UpdateState.Available && SettingsStore.state.value.checkForUpdates) {
+                val version = result.release.version
+                if (SettingsStore.state.value.lastUpdateNotice != version) {
+                    SettingsStore.update { it.copy(lastUpdateNotice = version) }
+                    DesktopToasts.show("Hyper Stream $version is available. Open Settings > Updates to install it.")
+                }
+            }
+            val wait = if (result == UpdateState.Idle && SettingsStore.state.value.checkForUpdates) {
+                UpdateChecker.millisUntilAutomaticCheck()
+            } else {
+                6 * 60 * 60 * 1000L
+            }
+            kotlinx.coroutines.delay(wait)
+        }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
