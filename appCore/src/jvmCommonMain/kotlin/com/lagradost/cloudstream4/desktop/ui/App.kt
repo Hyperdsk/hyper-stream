@@ -70,6 +70,16 @@ class ModelStore {
     @Suppress("UNCHECKED_CAST")
     fun <M : ScreenModel<*>> get(route: Route, create: () -> M): M = models.getOrPut(route, create) as M
 
+    /** Closes every model, when the window that shows them goes away. */
+    fun disposeAll() {
+        models.values.forEach { it.dispose() }
+        models.clear()
+        sections.values.forEach { it.dispose() }
+        sections.clear()
+        home.dispose()
+        search.dispose()
+    }
+
     fun retain(stack: List<Route>) {
         val gone = models.keys - stack.toSet()
         gone.forEach { models.remove(it)?.dispose() }

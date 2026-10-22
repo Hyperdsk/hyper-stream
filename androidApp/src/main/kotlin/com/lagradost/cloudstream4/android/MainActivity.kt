@@ -72,6 +72,27 @@ class MainActivity : AppCompatActivity() {
         setContent {
             val nav = rememberNavigator()
             val store = remember { ModelStore() }
+            // While downloads run, a service keeps the app alive in the background, with a
+            // notification (asked for once, the first time a download starts)
+            val downloads by com.lagradost.cloudstream4.desktop.download.DownloadManager.entries.collectAsState()
+            val downloading = downloads.any {
+                it.status == com.lagradost.cloudstream4.desktop.download.DownloadStatus.Downloading ||
+                    it.status == com.lagradost.cloudstream4.desktop.download.DownloadStatus.Queued
+            }
+            LaunchedEffect(downloading) {
+                if (!downloading) return@LaunchedEffect
+                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+                }
+                DownloadService.startIfNeeded(this@MainActivity)
+            }
+            // The activity is closing for good (not just turning): close its screens' models too,
+            // or an old player screen keeps saving progress and reacting to the shared player
+            DisposableEffect(store) {
+                onDispose { if (!isChangingConfigurations) store.disposeAll() }
+            }
             val settings by SettingsStore.state.collectAsState()
 
             val showSettings by openSettings.collectAsState()
@@ -130,10 +151,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        (application as CloudStreamApplication).engine.inForeground = true
+    }
+
     override fun onStop() {
         super.onStop()
-        // Pause when the app goes to the background, like the Android app
+        // Pause when the app goes to the background, like the Android app, and keep a video that
+        // opens meanwhile (its links were still loading) from starting
         val engine = (application as CloudStreamApplication).engine
+        engine.inForeground = false
         if (engine.state.value.playing) engine.togglePause()
     }
 }

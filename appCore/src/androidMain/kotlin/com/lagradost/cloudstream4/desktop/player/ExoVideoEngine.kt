@@ -133,8 +133,16 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         }
     }
 
+    /**
+     * Whether the app is on screen (set by the activity). A video that opens while it's in the
+     * background (links can take a while) stays paused instead of playing with nothing showing.
+     */
+    var inForeground = true
+
     private fun refresh() {
         val s = player.playbackState
+        // The screen stays on only while a video plays or loads, so a paused one can sleep
+        surface?.keepScreenOn = player.playWhenReady && s != Player.STATE_ENDED && s != Player.STATE_IDLE
         _state.update {
             it.copy(
                 playing = player.playWhenReady && s != Player.STATE_ENDED,
@@ -193,7 +201,7 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
             .build()
         player.setMediaItem(mediaItem(source), startMs.coerceAtLeast(0))
         player.prepare()
-        player.playWhenReady = true
+        player.playWhenReady = inForeground
         applyVolume()
     }
 
@@ -307,6 +315,7 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
             factory = { ctx ->
                 PlayerSurface(ctx).also { view ->
                     surface = view
+                    view.keepScreenOn = player.playWhenReady
                     player.setVideoTextureView(view.texture)
                     view.setVideoSize(player.videoSize)
                 }
@@ -333,7 +342,6 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         }
 
         init {
-            keepScreenOn = true
             addView(frame, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER))
             addView(subtitles, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         }
