@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older; data_extraction_rules.xml covers newer versions -->
+<full-backup-content>
+    <!-- Kept out of backups and device transfer: the sync sign-in (a copied session would sign
+         another device in) and extension code (downloaded again from its repository) -->
+    <exclude domain="file" path="data/sync.json" />
+    <exclude domain="file" path="Extensions/" />
+    <exclude domain="file" path="Extensions-jvm/" />
+</full-backup-content>

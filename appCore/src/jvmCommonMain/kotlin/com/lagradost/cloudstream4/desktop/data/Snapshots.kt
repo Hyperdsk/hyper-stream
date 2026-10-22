@@ -20,8 +20,6 @@ object Snapshots {
     private const val WIDTH = 480
     private val dir by lazy { File(AppDirs.data, "snapshots").apply { mkdirs() } }
 
-    fun fileFor(apiName: String, episodeData: String): File =
-        File(dir, UUID.nameUUIDFromBytes("$apiName|$episodeData".toByteArray()).toString() + ".jpg")
 
     /**
      * Saves [frame] scaled down. Returns the file, or null when the frame is too dark to be
@@ -34,13 +32,19 @@ object Snapshots {
         if (isTooDark(pixels)) return null
         val trimmed = trimLetterbox(small, pixels)
         val bytes = trimmed.encodeJpeg(82) ?: return null
-        val file = fileFor(apiName, episodeData)
+        // A random name each time: other apps can open these through the TV home screen's
+        // provider, and a name made from the title would let them check what was watched
+        val file = File(dir, UUID.randomUUID().toString() + ".jpg")
         val tmp = File(file.path + ".tmp")
         tmp.writeBytes(bytes)
         if (!tmp.renameTo(file)) {
             file.delete()
             tmp.renameTo(file)
         }
+        // The episode's previous picture isn't needed any more
+        LibraryStore.state.value.history
+            .firstOrNull { it.apiName == apiName && it.episodeData == episodeData }
+            ?.snapshotPath?.takeIf { it != file.path }?.let { File(it).delete() }
         file
     }.getOrNull()
 

@@ -19,7 +19,8 @@ actual object DeviceControls {
         if (current >= 0f) return current
         // Following the system: start from the phone's brightness setting
         val system = runCatching { Settings.System.getInt(AndroidHost.context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) }.getOrNull()
-        return (system ?: 128) / 255f
+        // Most phones use 0-255, some a larger range: never start above full
+        return ((system ?: 128) / 255f).coerceIn(0.01f, 1f)
     }
 
     actual fun setBrightness(value: Float) {

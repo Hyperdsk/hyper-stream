@@ -59,8 +59,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) pendingResume.value = WatchNext.parse(intent?.data)
-        if (savedInstanceState == null) signInFrom(intent?.data)
+        // Reopened from Recents, Android hands back the intent that first started the app: don't
+        // replay its card or sign-in link
+        val fromRecents = (intent?.flags ?: 0) and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+        if (savedInstanceState == null && !fromRecents) pendingResume.value = WatchNext.parse(intent?.data)
+        if (savedInstanceState == null && !fromRecents) signInFrom(intent?.data)
         AndroidHost.attach(this)
         enableEdgeToEdge()
         // Volume buttons change the media volume, the same one the player's swipe changes
@@ -111,9 +114,12 @@ class MainActivity : AppCompatActivity() {
                 pendingResume.value = null
                 val history = LibraryStore.state.value.history
                 val entry = history.filter { it.apiName == api && it.parentUrl == url }.maxByOrNull { it.updatedAt } ?: return@LaunchedEffect
-                withTimeoutOrNull(20_000) { while (providerByName(api) == null) delay(250) }
+                val loaded = withTimeoutOrNull(20_000) { while (providerByName(api) == null) delay(250); true } == true
                 nav.open(Route.Home)
-                nav.open(Route.Player(entry.resumeRequest()))
+                // The extension isn't there (removed, or failed to load): say so rather than open a
+                // player that can only fail
+                if (loaded) nav.open(Route.Player(entry.resumeRequest()))
+                else com.lagradost.cloudstream4.desktop.DesktopToasts.show("The $api extension isn't loaded, so ${entry.name} can't play yet.")
             }
 
             // Back leaves the current screen, then goes to Home, then closes the app
@@ -154,6 +160,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         (application as CloudStreamApplication).engine.inForeground = true
+        com.lagradost.cloudstream4.desktop.sync.SyncManager.foreground = true
     }
 
     override fun onStop() {
@@ -162,6 +169,7 @@ class MainActivity : AppCompatActivity() {
         // opens meanwhile (its links were still loading) from starting
         val engine = (application as CloudStreamApplication).engine
         engine.inForeground = false
+        com.lagradost.cloudstream4.desktop.sync.SyncManager.foreground = false
         if (engine.state.value.playing) engine.togglePause()
     }
 }

@@ -141,11 +141,22 @@ object SyncManager {
                     .collect { wake.trySend(Unit) }
             }
             while (true) {
-                if (store.session != null) syncNow()
+                if (store.session != null && foreground) syncNow()
                 withTimeoutOrNull(60_000) { wake.receive() }
             }
         }
     }
+
+    /**
+     * Whether the app is on screen. Android sets it (MainActivity onStart/onStop): in the background
+     * the minute-by-minute passes stop, and coming back syncs at once.
+     */
+    @Volatile
+    var foreground = true
+        set(value) {
+            field = value
+            if (value) requestSync()
+        }
 
     fun requestSync() {
         wake.trySend(Unit)

@@ -34,7 +34,9 @@ actual object PluginLoader {
         val className = manifest.pluginClassName ?: error("${file.name} does not name its plugin class")
 
         // Android 14 refuses to load code from a file the app can still write to
-        file.setReadOnly()
+        if (!file.setReadOnly() && file.canWrite()) {
+            throw PluginLoadException("Couldn't make ${file.name} read-only, which Android requires before loading it.", IllegalStateException())
+        }
         val classLoader = DexClassLoader(file.absolutePath, optimizedDir().absolutePath, null, PluginLoader::class.java.classLoader)
         try {
             val instance = classLoader.loadClass(className).getDeclaredConstructor().newInstance() as BasePlugin
@@ -58,6 +60,8 @@ actual object PluginLoader {
         // Updating replaces the read-only file, so make it writable again
         file.setWritable(true)
         optimizedDir().listFiles()?.filter { it.name.startsWith(file.nameWithoutExtension) }?.forEach { it.delete() }
+        // Since Android 8 the compiled code goes in an oat folder beside the file, not optimizedDir
+        File(file.parentFile, "oat").walkBottomUp().filter { it.isFile && it.name.startsWith(file.nameWithoutExtension + ".") }.forEach { it.delete() }
     }
 
     private fun optimizedDir() = File(AndroidHost.context.codeCacheDir, "extensions").apply { mkdirs() }
