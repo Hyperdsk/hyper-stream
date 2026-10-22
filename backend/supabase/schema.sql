@@ -7,7 +7,8 @@
 
 create table if not exists public.hs_sync_items (
   user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  kind text not null check (kind in ('history', 'bookmark', 'settings', 'source', 'repository', 'extension')),
+  -- history, bookmark, setting(s), source, repository, extension, search, and kinds later versions add
+  kind text not null constraint hs_sync_items_kind_check check (kind ~ '^[a-z]{1,32}$'),
   item_key text not null,
   data jsonb,
   deleted boolean not null default false,
@@ -19,6 +20,11 @@ create table if not exists public.hs_sync_items (
 );
 
 create index if not exists hs_sync_items_pull on public.hs_sync_items (user_id, updated_at);
+
+-- Projects made before 2026-10-22 only allowed a fixed list of kinds, which rejected search history
+-- and made every sync fail: allow any short lowercase kind
+alter table public.hs_sync_items drop constraint if exists hs_sync_items_kind_check;
+alter table public.hs_sync_items add constraint hs_sync_items_kind_check check (kind ~ '^[a-z]{1,32}$');
 
 alter table public.hs_sync_items enable row level security;
 
@@ -39,7 +45,9 @@ create policy "Remove own sync items" on public.hs_sync_items
   for delete to authenticated using ((select auth.uid()) = user_id);
 
 -- Saves a batch of changes. A change only replaces what's stored if it was made later, so an old
--- device coming back online can't overwrite newer progress. Returns how many rows changed.
+-- device coming back online can't overwrite newer progress. Times more than 5 minutes ahead of the
+-- server's clock are cut back to it, so a device with a wrong clock can't make its changes win
+-- forever. Returns how many rows changed.
 create or replace function public.hs_push(items jsonb)
 returns integer
 language plpgsql
@@ -50,7 +58,8 @@ declare
   changed integer;
 begin
   insert into public.hs_sync_items (user_id, kind, item_key, data, deleted, client_updated_at, updated_at)
-  select auth.uid(), i ->> 'kind', i ->> 'key', i -> 'data', coalesce((i ->> 'deleted')::boolean, false), (i ->> 'at')::bigint, now()
+  select auth.uid(), i ->> 'kind', i ->> 'key', i -> 'data', coalesce((i ->> 'deleted')::boolean, false),
+         least((i ->> 'at')::bigint, (extract(epoch from now()) * 1000)::bigint + 300000), now()
   from jsonb_array_elements(items) as i
   on conflict (user_id, kind, item_key) do update
     set data = excluded.data,
@@ -69,6 +78,8 @@ grant execute on function public.hs_push(jsonb) to authenticated;
 -- TV sign-in. A signed-in phone or Mac asks for a one-time 8-digit code (hs_create_tv_code); the TV
 -- sends it to the tv-sign-in edge function, which signs the TV in to the same account. Codes last
 -- 10 minutes and work once. Only that function (with the service role) reads this table.
+-- Codes come from a secure random source, and the function allows only a few wrong tries per
+-- address (hs_tv_attempts), so guessing a live code isn't practical.
 create table if not exists public.hs_tv_codes (
   code text primary key,
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -91,7 +102,7 @@ begin
   end if;
   delete from public.hs_tv_codes where user_id = auth.uid() or expires_at < now();
   loop
-    new_code := lpad(floor(random() * 100000000)::bigint::text, 8, '0');
+    new_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 100000000)::text, 8, '0');
     begin
       insert into public.hs_tv_codes (code, user_id, expires_at) values (new_code, auth.uid(), now() + interval '10 minutes');
       exit;
@@ -105,3 +116,11 @@ $$;
 
 revoke all on function public.hs_create_tv_code() from public, anon;
 grant execute on function public.hs_create_tv_code() to authenticated;
+
+-- Wrong TV codes, by address, for the tv-sign-in function's limit. Service role only.
+create table if not exists public.hs_tv_attempts (
+  ip text not null,
+  at timestamptz not null default now()
+);
+create index if not exists hs_tv_attempts_by_ip on public.hs_tv_attempts (ip, at);
+alter table public.hs_tv_attempts enable row level security;
