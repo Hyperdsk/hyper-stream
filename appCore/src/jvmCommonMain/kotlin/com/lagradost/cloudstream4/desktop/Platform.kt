@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop
 
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
 /** What differs between the Mac app and the Android phone and TV app, outside the player. */
@@ -28,6 +29,15 @@ expect object Platform {
 
     /** Where downloads go unless the user picks another folder. */
     fun defaultDownloadFolder(): File
+
+    /** True when Android needs extra access before the default Downloads folder can be used. */
+    val downloadFolderNeedsAccess: Boolean
+
+    /** Asks the system for access to the default Downloads folder. Returns true when a prompt was shown. */
+    fun requestDownloadFolderAccess(): Boolean
+
+    /** Changes when folder access may have changed, so screens showing the download folder refresh. */
+    val storageRevision: StateFlow<Int>
 
     /** The app's data folder: settings, history, extensions. */
     fun dataFolder(): File

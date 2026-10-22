@@ -115,8 +115,18 @@ class SplitAudioHlsTest {
             // The playlist's subtitles are saved next to it
             assertTrue(entry.subtitles.any { File(it).readText().contains("Hello") }, "subtitles: ${entry.subtitles}")
 
+            // Moving the download carries the whole package, and it is still recognised as one
+            val destination = Files.createTempDirectory("cs-split-moved").toFile()
+            assertEquals(1, DownloadManager.move(listOf(id), destination).moved)
+            val moved = DownloadManager.entry("SplitTest", "movie")!!
+            assertTrue(moved.isPackage, "saved as ${moved.filePath}")
+            assertTrue(moved.file!!.exists())
+            assertTrue(moved.file!!.path.startsWith(destination.canonicalPath), moved.file!!.path)
+            assertFalse(dir.exists(), "the old package folder is removed")
+            assertFalse(File(folder, "Split Movie").exists(), "the old title folder is empty and removed")
+
             DownloadManager.delete(id)
-            assertFalse(dir.exists(), "the package folder is removed")
+            assertFalse(moved.file!!.parentFile!!.exists(), "the moved package folder is removed")
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-split" } }
             server.stop(0)

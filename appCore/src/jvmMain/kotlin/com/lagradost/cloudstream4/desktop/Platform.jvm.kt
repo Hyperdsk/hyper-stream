@@ -1,6 +1,9 @@
 package com.lagradost.cloudstream4.desktop
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.io.File
@@ -45,6 +48,13 @@ actual object Platform {
     }
 
     actual fun defaultDownloadFolder(): File = File(System.getProperty("user.home"), "Movies/CloudStream")
+
+    actual val downloadFolderNeedsAccess: Boolean = false
+
+    actual fun requestDownloadFolderAccess(): Boolean = false
+
+    private val storageChanges = MutableStateFlow(0)
+    actual val storageRevision: StateFlow<Int> = storageChanges.asStateFlow()
 
     actual fun dataFolder(): File {
         val home = System.getProperty("user.home")

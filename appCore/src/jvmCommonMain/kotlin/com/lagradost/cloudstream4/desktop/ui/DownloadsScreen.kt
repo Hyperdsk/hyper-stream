@@ -2,6 +2,8 @@ package com.lagradost.cloudstream4.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Pause
@@ -35,6 +38,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,15 +49,41 @@ import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream4.desktop.download.DownloadEntry
 import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.download.DownloadStatus
+import com.lagradost.cloudstream4.desktop.DesktopToasts
 import com.lagradost.cloudstream4.desktop.Platform
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import kotlinx.coroutines.launch
 import java.io.File
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DownloadsScreen() {
     val nav = LocalNavigator.current
     val entries by DownloadManager.entries.collectAsState()
+    // Re-read the folder when Android's access to Downloads is granted or taken away
+    val storageRevision by Platform.storageRevision.collectAsState()
+    val scope = rememberCoroutineScope()
     var confirmDelete by remember { mutableStateOf<DownloadEntry?>(null) }
 
+    fun moveDownloads(ids: List<String>) {
+        if (ids.isEmpty()) return
+        scope.launch {
+            val destination = Platform.chooseFolder("Move downloads to") ?: return@launch
+            val result = DownloadManager.move(ids, destination)
+            val firstFile = DownloadManager.entries.value.firstOrNull { it.id in ids }?.file
+            val message = when {
+                result.moved == 0 && result.failed > 0 -> "Couldn't move the downloads. Check that the folder can be written to."
+                result.moved == 0 -> "Those downloads are already in the folder."
+                result.moved == 1 -> "Moved to ${firstFile?.parentFile?.path ?: destination.path}."
+                else -> "Moved ${result.moved} downloads to ${destination.path}." +
+                    if (result.failed > 0) " ${result.failed} couldn't be moved." else ""
+            }
+            DesktopToasts.show(message)
+        }
+    }
+
+    val settings by SettingsStore.state.collectAsState()
+    val folderPath = remember(storageRevision, settings.downloadFolder, entries) { DownloadManager.folder.path }
     confirmDelete?.let { entry ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
@@ -81,13 +111,14 @@ fun DownloadsScreen() {
                     listOfNotNull(
                         downloading.takeIf { it > 0 }?.let { "$it downloading" },
                         waiting.takeIf { it > 0 }?.let { "$it waiting" },
-                        // The folder only means something where you can open it (not inside Android's app storage)
-                        if (com.lagradost.cloudstream4.desktop.Platform.canOpenFolders) "${formatBytes(used)} in ${DownloadManager.folder.path.replace(System.getProperty("user.home").orEmpty().ifEmpty { "\u0000" }, "~")}"
-                        else "${formatBytes(used)} used",
+                        "${formatBytes(used)} in ${folderLabel(folderPath)}",
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (Platform.downloadFolderNeedsAccess) OutlinedButton(onClick = { Platform.requestDownloadFolderAccess() }) {
+                Text("Allow access to Downloads")
             }
             if (Platform.canOpenFolders) OutlinedButton(onClick = { Platform.openFolder(DownloadManager.folder) }) {
                 Icon(Icons.Default.FolderOpen, null)
@@ -116,22 +147,27 @@ fun DownloadsScreen() {
                         )
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(first.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                    val done = group.count { it.status == DownloadStatus.Completed }
-                                    Text(
-                                        listOfNotNull(first.apiName, if (group.size > 1) "$done of ${group.size} downloaded" else null).joinToString(" · "),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                // Whole-season controls, once there is more than one episode
-                                if (group.size > 1) {
-                                    val running = group.any { it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued }
-                                    val stopped = group.any { it.status == DownloadStatus.Paused || it.status == DownloadStatus.Failed }
-                                    if (running) TextButton(onClick = { DownloadManager.pauseAll(first.apiName, first.parentUrl) }) { Text("Pause all") }
-                                    if (stopped) TextButton(onClick = { DownloadManager.resumeAll(first.apiName, first.parentUrl) }) { Text("Resume all") }
+                            Text(first.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            val done = group.count { it.status == DownloadStatus.Completed }
+                            Text(
+                                listOfNotNull(first.apiName, if (group.size > 1) "$done of ${group.size} downloaded" else null).joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            // Whole-season controls, once there is more than one episode
+                            val running = group.any { it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued }
+                            val stopped = group.any { it.status == DownloadStatus.Paused || it.status == DownloadStatus.Failed }
+                            val finished = group.filter { it.status == DownloadStatus.Completed }
+                            if ((group.size > 1 && (running || stopped)) || finished.size > 1) {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (group.size > 1 && running) TextButton(onClick = { DownloadManager.pauseAll(first.apiName, first.parentUrl) }) { Text("Pause all") }
+                                    if (group.size > 1 && stopped) TextButton(onClick = { DownloadManager.resumeAll(first.apiName, first.parentUrl) }) { Text("Resume all") }
+                                    // Finished episodes can be moved together to another folder
+                                    if (finished.size > 1) {
+                                        TextButton(onClick = { moveDownloads(finished.map { it.id }) }) {
+                                            Text(if (finished.size == group.size) "Move season" else "Move ${finished.size} episodes")
+                                        }
+                                    }
                                 }
                             }
                             Spacer(Modifier.height(6.dp))
@@ -141,6 +177,7 @@ fun DownloadsScreen() {
                                     showLabel = group.size > 1 || entry.season != null || entry.episode != null,
                                     onPlay = { request -> nav.open(Route.Player(request)) },
                                     onDelete = { confirmDelete = entry },
+                                    onMove = { moveDownloads(listOf(entry.id)) },
                                     playable = group,
                                 )
                             }
@@ -159,6 +196,7 @@ private fun DownloadRow(
     playable: List<DownloadEntry>,
     onPlay: (PlayRequest) -> Unit,
     onDelete: () -> Unit,
+    onMove: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -200,6 +238,7 @@ private fun DownloadRow(
                         )
                     )
                 }) { Icon(Icons.Default.PlayArrow, "Play") }
+                IconButton(onClick = onMove) { Icon(Icons.AutoMirrored.Filled.DriveFileMove, "Move") }
                 if (Platform.canOpenFolders) IconButton(onClick = { entry.file?.let(::reveal) }) { Icon(Icons.Default.FolderOpen, "Show in Finder") }
             }
             DownloadStatus.Downloading, DownloadStatus.Queued ->
@@ -241,6 +280,12 @@ private fun statusText(entry: DownloadEntry): String {
 }
 
 private fun reveal(file: File) = Platform.revealFile(file)
+
+/** Shortens a home folder to "~" on desktop, and leaves Android's paths alone. */
+private fun folderLabel(path: String): String {
+    val home = System.getProperty("user.home").orEmpty()
+    return if (home.length > 1 && path.startsWith(home)) "~" + path.removePrefix(home) else path
+}
 
 private fun ordinal(n: Int): String {
     val suffix = if (n % 100 in 11..13) "th" else when (n % 10) { 1 -> "st"; 2 -> "nd"; 3 -> "rd"; else -> "th" }

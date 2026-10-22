@@ -30,12 +30,11 @@ One APK runs on phones, tablets and Android TV (it shows in the TV launcher with
 | Player controls | Touch: tap shows or hides controls, double-tap left or right seeks, hold for 2x, big centre buttons. TV remote: arrows seek while the controls are hidden and move between buttons while shown; OK plays or pauses; media keys work. | Mouse and keyboard. |
 | TV home screen | Continue watching appears as a "Hyper Stream" row on Google TV and Android TV, and in Android's Watch Next list (`WatchNext.kt`). Cards show the picture of where you stopped and open the player there. Google TV only shows Watch Next from apps it has verified, so the row is what shows there. | None. |
 | Sync | Optional, under Settings, Sync: progress, library, settings, sources and extensions through Supabase (`backend/supabase`). Same as the Mac app. | Same. |
-| Data | The app's private files folder. Downloads go to the app's Movies folder (`Android/data/com.lagradost.cloudstream4.app/files/Movies`). | `~/Library/Application Support/CloudStream`, `~/Movies/CloudStream`. |
+| Data | The app's private files folder. Downloads go to `Downloads/hyperstream` once the app is allowed access to files (Android 11+); until then they stay in the app's own `Android/data/com.lagradost.cloudstream4.app/files/Download/hyperstream` folder. The folder can be changed under Settings, and finished downloads can be moved from the Downloads screen. | `~/Library/Application Support/CloudStream`, `~/Movies/CloudStream`. |
 
 ## Not done yet
 
 - Seek bar thumbnails (the Mac app uses a second VLC player).
 - Parallel connections while streaming: ExoPlayer fetches over one connection.
-- Choosing a download folder.
 - Extensions that use CloudStream app classes this app doesn't provide fail to load, with the missing class named on the Extensions screen. Provided: `Plugin`, `CommonActivity`, `RepositoryManager`, `CloudStreamApp` (context and saved values), `DataStore`, `MainActivity` events, `CloudflareKiller` and signed-out account-sync classes, plus AppCompat and Material Components for extension settings screens.
 - Picture-in-picture, Chromecast, account sync.

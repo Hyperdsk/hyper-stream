@@ -11,6 +11,9 @@
 #                                 and add them to the release (about 15 minutes; uses Actions minutes)
 #   --add-platforms v1.2.0        only that, for a release that's already published
 #
+# Android-only releases are made by .github/workflows/android-release.yml from a tag such as
+# v1.2.1-android. This script still makes the combined desktop and Android releases.
+#
 # What a Mac can build:
 #   macOS Apple silicon (.dmg and a portable .zip) and Android/Android TV (.apk), always.
 #   macOS Intel (.dmg and .zip) too, when an Intel (x86_64) JDK 17 is installed; it runs under Rosetta.
@@ -77,9 +80,11 @@ if ! $dry_run; then
   gh auth status >/dev/null 2>&1 || fail "Sign in to GitHub with: gh auth login"
 fi
 
-last=$(git tag --list 'v*' --sort=-v:refname | head -1)
+last=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 if [ -z "$version" ]; then
-  IFS=. read -r major minor patch <<<"${last#v}"
+  last_version="${last#v}"
+  # An Android-only release tag is v1.2.1-android; use the same version for the next full release.
+  IFS=. read -r major minor patch <<<"${last_version%%-*}"
   version="$major.$minor.$((patch + 1))"
 fi
 tag="v$version"
@@ -89,6 +94,7 @@ IFS=. read -r major minor patch <<<"$version"
 # (GitHub's test builds use their run number, which stays far below.)
 code=$((major * 10000 + minor * 100 + patch))
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "$tag already exists."
+[ -z "$(git tag --list "$tag-*")" ] || fail "$version is already used by another tag (Android-only release)."
 echo "Releasing $tag (Android version code $code), last release ${last:-none}"
 
 grep -q '^hyperstream.keystorePassword=' "$HOME/.gradle/gradle.properties" 2>/dev/null \

@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.lagradost.cloudstream4.desktop.DesktopToasts
 import com.lagradost.cloudstream4.desktop.data.AppDirs
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
@@ -229,15 +230,31 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
 
         Section("Downloads")
-        Text(
-            if (Platform.canOpenFolders) DownloadManager.folder.path else "In Hyper Stream's own storage on this device.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        if (Platform.canOpenFolders) Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
+        // Re-read the folder when Android's access to Downloads is granted or taken away
+        val storageRevision by Platform.storageRevision.collectAsState()
+        val folder = remember(storageRevision, settings.downloadFolder) { DownloadManager.folder }
+        Text(folder.path, style = MaterialTheme.typography.bodyMedium)
+        if (Platform.downloadFolderNeedsAccess) {
+            Text(
+                "Allow access to files to save downloads in the Downloads folder. Until then they stay in Hyper Stream's own storage.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
             val folderScope = rememberCoroutineScope()
+            if (Platform.downloadFolderNeedsAccess) {
+                OutlinedButton(onClick = {
+                    if (Platform.requestDownloadFolderAccess()) DesktopToasts.show("Allow access to files, then come back to Settings.")
+                }) { Text("Allow access") }
+            }
             OutlinedButton(onClick = {
                 folderScope.launch {
-                    Platform.chooseFolder("Choose a download folder")?.let { dir -> SettingsStore.update { it.copy(downloadFolder = dir.path) } }
+                    Platform.chooseFolder("Choose a download folder")?.let { dir ->
+                        SettingsStore.update { it.copy(downloadFolder = dir.path) }
+                        DesktopToasts.show("New downloads go to ${dir.path}.")
+                    }
                 }
             }) { Text("Change folder") }
             if (settings.downloadFolder != null) {
@@ -281,7 +298,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             modifier = Modifier.padding(top = 6.dp),
         )
         Text(
-            "Finished downloads stay where they are when you change the folder.",
+            "Finished downloads stay where they are when you change the folder. Move them from the Downloads screen.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp),

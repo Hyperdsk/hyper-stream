@@ -42,7 +42,7 @@ data class AppSettings(
     @JsonProperty("searchTypes") val searchTypes: Set<String> = emptySet(),
     /** Built-in provider with open movies, for trying the app without extensions. */
     @JsonProperty("demoProvider") val demoProvider: Boolean = false,
-    /** Where downloads are saved. Null means ~/Movies/CloudStream. */
+    /** Where downloads are saved. Null means the platform default: ~/Movies/CloudStream, or Downloads/hyperstream on Android. */
     @JsonProperty("downloadFolder") val downloadFolder: String? = null,
     /** Connections per download for hosts that allow it, like Internet Download Manager. */
     @JsonProperty("downloadConnections") val downloadConnections: Int = 8,

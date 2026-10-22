@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -248,6 +249,44 @@ class DownloadManagerTest {
             println("Picked source failure: ${failed.error}")
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-picked" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun movesFinishedDownloadsAndTheirSubtitles() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl").toString())
+        val folder = Files.createTempDirectory("cs-downloads-move").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val api = TestProvider(base).apply { name = "MoveTest"; sourcePlugin = "test-move" }
+        APIHolder.allProviders.add(api)
+        try {
+            val episode = PlayableEpisode("move1", "Move Me", 1, 1)
+            DownloadManager.enqueue(DownloadRequest("MoveTest", "$base/move", "Move Show", null, null, episode))
+            val id = DownloadManager.idFor("MoveTest", "move1")
+            val done = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == id && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+            }.first { it.id == id }
+            assertEquals(DownloadStatus.Completed, done.status, done.error)
+            val subtitle = File(done.subtitles.single())
+            assertTrue(subtitle.exists())
+
+            val destination = Files.createTempDirectory("cs-moved").toFile()
+            val result = DownloadManager.move(listOf(id), destination)
+            assertEquals(1, result.moved, "failed: ${result.failed}")
+
+            val moved = DownloadManager.entry("MoveTest", "move1")!!
+            assertTrue(moved.file!!.exists())
+            assertTrue(moved.file!!.path.startsWith(destination.canonicalPath), moved.file!!.path)
+            assertTrue(!File(folder, "Move Show").exists(), "the old title folder should be empty and removed")
+            assertTrue(moved.subtitles.single().startsWith(destination.canonicalPath), moved.subtitles.single())
+            assertTrue(File(moved.subtitles.single()).exists())
+            assertTrue(!subtitle.exists(), "the subtitle should have moved from ${subtitle.path}")
+            println("Moved to ${moved.file} with ${moved.subtitles}")
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-move" } }
             server.stop(0)
         }
     }

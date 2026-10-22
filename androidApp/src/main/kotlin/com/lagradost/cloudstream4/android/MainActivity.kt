@@ -41,6 +41,11 @@ class MainActivity : AppCompatActivity() {
     /** A title to resume, from a Continue watching card on the TV home screen: (provider, page url). */
     private val pendingResume = kotlinx.coroutines.flow.MutableStateFlow<Pair<String, String>?>(null)
 
+    /** The system folder picker, used to change the download folder or move downloads. */
+    private val folderPicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+        AndroidHost.folderPicked(uri)
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -65,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null && !fromRecents) pendingResume.value = WatchNext.parse(intent?.data)
         if (savedInstanceState == null && !fromRecents) signInFrom(intent?.data)
         AndroidHost.attach(this)
+        AndroidHost.openFolderPicker = { folderPicker.launch(null) }
         enableEdgeToEdge()
         // Volume buttons change the media volume, the same one the player's swipe changes
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
@@ -157,10 +163,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Access to Downloads may have been granted in system settings while the app was away
+        AndroidHost.storageChanged()
+    }
+
     override fun onStart() {
         super.onStart()
         (application as CloudStreamApplication).engine.inForeground = true
         com.lagradost.cloudstream4.desktop.sync.SyncManager.foreground = true
+    }
+
+    override fun onDestroy() {
+        AndroidHost.openFolderPicker = null
+        super.onDestroy()
     }
 
     override fun onStop() {

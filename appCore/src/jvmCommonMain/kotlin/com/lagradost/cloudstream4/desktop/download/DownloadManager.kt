@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -116,6 +117,9 @@ data class DownloadEntry(
     @get:JsonIgnore
     val sizeOnDisk: Long get() = file?.let { f -> if (isPackage) f.parentFile?.listFiles()?.sumOf { it.length() } ?: 0L else f.length() } ?: 0L
 }
+
+/** What happened when finished downloads were moved to another folder. */
+data class MoveResult(val moved: Int, val skipped: Int, val failed: Int)
 
 /** What the details screen hands over to start a download. */
 data class DownloadRequest(
@@ -269,6 +273,110 @@ object DownloadManager {
         _entries.update { list -> list.filterNot { it.id == id }.toPersistentList() }
         save()
         pump()
+    }
+
+    /**
+     * Moves finished downloads to [destination], keeping each title's own folder and subtitles.
+     * Incomplete downloads are left where they are, since resuming depends on their path.
+     */
+    suspend fun move(ids: Collection<String>, destination: File): MoveResult = withContext(Dispatchers.IO) {
+        val selected = _entries.value.filter { it.id in ids }
+        val finished = selected.filter { it.status == DownloadStatus.Completed }
+        val skipped = selected.size - finished.size
+        if (finished.isEmpty()) return@withContext MoveResult(0, skipped, 0)
+        if (!destination.isDirectory && !destination.mkdirs()) {
+            return@withContext MoveResult(0, skipped, finished.size)
+        }
+        if (!destination.canWrite()) return@withContext MoveResult(0, skipped, finished.size)
+
+        val moved = mutableMapOf<String, DownloadEntry>()
+        var failed = 0
+        for (entry in finished) {
+            val updated = runCatching { moveEntry(entry, destination) }.getOrNull()
+            if (updated != null) moved[entry.id] = updated else failed++
+        }
+        if (moved.isNotEmpty()) {
+            _entries.update { list -> list.map { moved[it.id] ?: it }.toPersistentList() }
+            save()
+        }
+        MoveResult(moved.size, skipped, failed)
+    }
+
+    private fun moveEntry(entry: DownloadEntry, destination: File): DownloadEntry? {
+        val file = entry.file ?: return null
+        if (!file.exists()) return null
+        val titleDir = File(destination, safeName(entry.title)).apply { mkdirs() }
+
+        if (entry.isPackage) {
+            val sourceFolder = file.parentFile ?: return null
+            val targetFolder = uniqueTarget(sourceFolder, titleDir)
+            if (!movePath(sourceFolder, targetFolder)) return null
+            val newFile = File(targetFolder, file.name)
+            val subtitles = moveSubtitles(entry.subtitles, titleDir)
+            removeEmptyTitleFolder(sourceFolder.parentFile)
+            return entry.copy(filePath = newFile.path, subtitles = subtitles)
+        }
+
+        val target = uniqueTarget(file, titleDir)
+        if (!movePath(file, target)) return null
+        val subtitles = moveSubtitles(entry.subtitles, titleDir)
+        removeEmptyTitleFolder(file.parentFile)
+        return entry.copy(filePath = target.path, subtitles = subtitles)
+    }
+
+    /** [target] itself when it is already the source, otherwise a free name in [dir]. */
+    private fun uniqueTarget(source: File, dir: File): File {
+        val direct = File(dir, source.name)
+        if (direct.absoluteFile.normalize() == source.absoluteFile.normalize()) return source
+        if (!direct.exists()) return direct
+        val directory = source.isDirectory
+        // Keep a package's ".hls" ending, which is how a split-track download is recognised
+        val hlsFolder = directory && source.extension.equals("hls", ignoreCase = true)
+        val base = if (directory && !hlsFolder) source.name else source.nameWithoutExtension
+        val extension = when {
+            hlsFolder -> ".hls"
+            directory -> ""
+            else -> source.extension.takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty()
+        }
+        var n = 2
+        while (true) {
+            val candidate = File(dir, if (extension.isEmpty()) "$base ($n)" else "$base ($n)$extension")
+            if (!candidate.exists()) return candidate
+            n++
+        }
+    }
+
+    /** Moves one file or folder, copying first when the destination is on another volume. */
+    private fun movePath(source: File, target: File): Boolean {
+        if (source.absoluteFile.normalize() == target.absoluteFile.normalize()) return true
+        target.parentFile?.mkdirs()
+        if (source.renameTo(target)) return true
+        // Different volumes: copy first, then remove the source
+        return try {
+            if (source.isDirectory) source.copyRecursively(target, overwrite = false)
+            else source.copyTo(target, overwrite = false)
+            if (target.exists()) source.deleteRecursively() else false
+        } catch (t: Throwable) {
+            // Leave no half-copied file or folder behind
+            target.deleteRecursively()
+            false
+        }
+    }
+
+    private fun moveSubtitles(subtitles: List<String>, titleDir: File): List<String> =
+        subtitles.map { path ->
+            val source = File(path)
+            if (!source.exists()) return@map path
+            val target = uniqueTarget(source, titleDir)
+            if (movePath(source, target)) target.path else path
+        }
+
+    /** Removes the title's folder after moving, unless it still has something in it. */
+    private fun removeEmptyTitleFolder(dir: File?) {
+        if (dir == null) return
+        val current = folder.absoluteFile.normalize()
+        val title = dir.absoluteFile.normalize()
+        if (title.parentFile == current && title.listFiles()?.isEmpty() == true) title.delete()
     }
 
     /** Starts queued downloads up to the parallel limit, oldest first. */
