@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,7 +32,9 @@ import androidx.compose.ui.unit.dp
 import com.lagradost.cloudstream4.desktop.sync.SyncManager
 import kotlinx.coroutines.delay
 
+// Button rows wrap: on a phone four buttons don't fit on one line
 /** Settings' Sync section: sign in with an emailed link (or, on a TV, a code from a signed-in phone or Mac), then see when it last synced. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SyncSettings() {
     val ui by SyncManager.ui.collectAsState()
@@ -57,7 +61,7 @@ fun SyncSettings() {
                     },
                     style = body, color = dim,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = SyncManager::requestSync, enabled = !ui.syncing) { Text("Sync now") }
                     if (!com.lagradost.cloudstream4.desktop.Platform.isTv) {
                         OutlinedButton(onClick = { SyncManager.showTvCode() }, enabled = !ui.busy) { Text("Sign in another device") }
@@ -75,7 +79,7 @@ fun SyncSettings() {
                         color = if (ui.choosingPassword) MaterialTheme.colorScheme.onBackground else dim,
                     )
                     PasswordField(password, { password = it }, label = "New password", onDone = { SyncManager.setPassword(password); settingPassword = false })
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { SyncManager.setPassword(password); settingPassword = false }, enabled = password.length >= 6 && !ui.busy) { Text("Save password") }
                         TextButton(onClick = { settingPassword = false; SyncManager.skipNewPassword() }) { Text(if (ui.choosingPassword) "Not now" else "Cancel") }
                     }
@@ -119,7 +123,7 @@ fun SyncSettings() {
                     )
                 }
                 PasswordField(code, { code = it }, onDone = { SyncManager.signInWithPassword(email, code, create = false) })
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                     val ready = email.contains('@') && code.length >= 6 && !ui.busy
                     Button(onClick = { SyncManager.signInWithPassword(email, code, create = false) }, enabled = ready) {
                         Text(if (ui.busy) "Signing in…" else "Sign in")
@@ -136,7 +140,7 @@ fun SyncSettings() {
                         "To change the password, use Forgot password on your phone or Mac.",
                     style = body, color = dim,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { code = ""; mode = "code" }) { Text("Enter a code") }
                     TextButton(onClick = { mode = "password" }) { Text("Back") }
                 }
@@ -159,7 +163,7 @@ fun SyncSettings() {
                         modifier = fieldModifier,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = { SyncManager.verify(code) }, enabled = code.isNotBlank() && !ui.busy) {
                         Text(if (ui.busy) "Signing in…" else "Continue")
                     }
@@ -201,7 +205,7 @@ fun SyncSettings() {
                         modifier = fieldModifier,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { SyncManager.signInWithTvCode(code, resetPassword = true) }, enabled = code.length == 8 && !ui.busy) { Text("Continue") }
                     TextButton(onClick = { code = ""; mode = "password" }) { Text("Back to sign in") }
                 }
@@ -248,7 +252,7 @@ fun SyncSettings() {
                         modifier = fieldModifier,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = { SyncManager.verify(code) }, enabled = code.isNotBlank() && !ui.busy) {
                         Text(if (ui.busy) "Signing in…" else "Sign in")
                     }

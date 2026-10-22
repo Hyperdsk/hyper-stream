@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.background
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.layout.ContentScale
@@ -561,7 +562,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                     val facts = listOfNotNull(
                         response.year?.toString(),
-                        response.type.name,
+                        response.type.label,
                         response.duration?.takeIf { it > 0 }?.let { if (it >= 60) "${it / 60}h ${it % 60}m" else "${it}m" },
                         (response as? EpisodeResponse)?.showStatus?.name,
                         response.score?.toStringNull(0.1, 10, 1)?.let { "★ $it" },
@@ -648,7 +649,12 @@ private fun PlayButton(route: Route.Details, response: LoadResponse, state: Deta
         else -> Triple("Play", state.allEpisodes.firstOrNull()?.playable, 0L)
     }
     if (!state.isMovieLike && state.allEpisodes.isEmpty()) return
-    PrimaryCapsuleButton(label, Icons.Default.PlayArrow) {
+    // TV: a title opens with Play focused, so OK plays and the arrows start from there
+    val playFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    if (com.lagradost.cloudstream4.desktop.Platform.isTv) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    }
+    PrimaryCapsuleButton(label, Icons.Default.PlayArrow, Modifier.focusRequester(playFocus)) {
         model.playRequest(target, start)?.let { nav.open(Route.Player(it)) }
     }
 }
@@ -729,8 +735,7 @@ private fun EpisodeCard(
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .tvLift(interaction, hoverScale = 1.05f)
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+                .clip(RoundedCornerShape(12.dp)),
         ) {
             RemoteImage(ep.posterUrl ?: fallbackImage, if (ep.posterUrl != null) null else headers, Modifier.fillMaxSize())
             if (hovered) {
@@ -740,6 +745,10 @@ private fun EpisodeCard(
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.Default.PlayArrow, "Play", tint = Color.White, modifier = Modifier.size(28.dp)) }
             }
+            // The card's click area is a layer of its own, beside the download button rather than
+            // around it: a remote can't move focus into a clickable's children, so on TV the button
+            // was out of reach
+            Box(Modifier.matchParentSize().clickable(interactionSource = interaction, indication = null, onClick = onClick))
             // Download stays visible once started, otherwise it appears on hover. Touch screens and remotes can't hover, so there it always shows.
             if (hovered || download != null || com.lagradost.cloudstream4.desktop.Platform.isTouch || com.lagradost.cloudstream4.desktop.Platform.isTv) {
                 Box(Modifier.align(Alignment.TopEnd).padding(6.dp).background(Color.Black.copy(alpha = 0.6f), CircleShape)) {

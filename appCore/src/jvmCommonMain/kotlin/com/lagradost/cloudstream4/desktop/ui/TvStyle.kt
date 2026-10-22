@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.border
@@ -128,7 +129,7 @@ fun Modifier.tvLift(interaction: MutableInteractionSource, hoverScale: Float = 1
         clip = false
     }.then(
         // A remote has no pointer, so the focused card also gets an outline
-        if (focused && com.lagradost.cloudstream4.desktop.Platform.isTv) Modifier.border(3.dp, Color.White, RoundedCornerShape(cornerRadius)) else Modifier
+        if (focused && com.lagradost.cloudstream4.desktop.Platform.isTv) Modifier.border(3.dp, focusRingColor, RoundedCornerShape(cornerRadius)) else Modifier
     ).hoverable(interaction)
 }
 
@@ -171,11 +172,14 @@ fun GlassButton(icon: ImageVector, description: String, text: String? = null, mo
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHighlightedAsState()
     val shape = if (text == null) CircleShape else RoundedCornerShape(50)
+    // Light glass over dark imagery; on the light theme's plain backgrounds (the top bar, a page) a
+    // dark glass, so the white icon and text still show
+    val glass = if (isLightTheme) Color.Black.copy(alpha = if (hovered) 0.62f else 0.48f) else Color.White.copy(alpha = if (hovered) 0.28f else 0.16f)
     Row(
         modifier
             .pressScale(interaction)
             .hoverable(interaction)
-            .background(Color.White.copy(alpha = if (hovered) 0.28f else 0.16f), shape)
+            .background(glass, shape)
             .clickable(interactionSource = interaction, indication = tvIndication, onClick = onClick)
             .padding(if (text == null) PaddingValues(11.dp) else PaddingValues(horizontal = 18.dp, vertical = 11.dp)),
         verticalAlignment = Alignment.CenterVertically,
@@ -206,18 +210,31 @@ fun LargeTitle(text: String, modifier: Modifier = Modifier, trailing: @Composabl
     }
 }
 
-/** Darkens imagery towards the page background, so text over it stays readable. */
+/**
+ * The shade behind text over imagery. Always dark, whatever the theme: the text on it is white,
+ * and shading towards a light theme's white page made it white on white.
+ */
+private val imageShade = Color(0xFF0B0B0F)
+
+/** Darkens imagery from the middle down, then blends into the page background at the very bottom. */
 fun bottomScrim(background: Color) = Brush.verticalGradient(
     0f to Color.Transparent,
-    0.55f to background.copy(alpha = 0.55f),
+    0.55f to imageShade.copy(alpha = 0.55f),
+    0.88f to imageShade.copy(alpha = 0.85f),
     1f to background,
 )
 
-fun leftScrim(background: Color) = Brush.horizontalGradient(
-    0f to background.copy(alpha = 0.92f),
-    0.45f to background.copy(alpha = 0.55f),
+fun leftScrim(@Suppress("UNUSED_PARAMETER") background: Color) = Brush.horizontalGradient(
+    0f to imageShade.copy(alpha = 0.92f),
+    0.45f to imageShade.copy(alpha = 0.55f),
     0.75f to Color.Transparent,
 )
+
+/** Whether the app shows its light theme (then white-on-image controls need a darker base). */
+val isLightTheme: Boolean @Composable get() = MaterialTheme.colorScheme.background.luminance() > 0.5f
+
+/** The TV focus ring's colour: white on the dark theme, the accent on the light one, where white wouldn't show. */
+val focusRingColor: Color @Composable get() = if (isLightTheme) MaterialTheme.colorScheme.primary else Color.White
 
 /** Square-ish spacer used between shelves. */
 @Composable

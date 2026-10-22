@@ -57,6 +57,15 @@ private class FocusRingNode(private val source: InteractionSource) : Modifier.No
         val width = 3.dp.toPx()
         // Capsules get a capsule ring, larger shapes rounded corners
         val radius = minOf(size.height / 2f, 14.dp.toPx())
+        // A thin dark edge under the white ring keeps it visible on white (the light theme's
+        // backgrounds and buttons) as well as on dark
+        drawRoundRect(
+            color = Color.Black.copy(alpha = 0.55f),
+            topLeft = Offset(width / 2, width / 2),
+            size = Size(size.width - width, size.height - width),
+            cornerRadius = CornerRadius(radius),
+            style = Stroke(width + 2.dp.toPx()),
+        )
         drawRoundRect(
             color = Color.White,
             topLeft = Offset(width / 2, width / 2),

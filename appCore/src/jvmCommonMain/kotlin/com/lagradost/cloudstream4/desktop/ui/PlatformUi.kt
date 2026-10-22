@@ -109,7 +109,7 @@ fun TvTextFieldBox(
         )
         if (boxFocused && !editing) {
             androidx.compose.foundation.layout.Box(
-                androidx.compose.ui.Modifier.matchParentSize().border(3.dp, androidx.compose.ui.graphics.Color.White, RoundedCornerShape(12.dp))
+                androidx.compose.ui.Modifier.matchParentSize().border(3.dp, focusRingColor, RoundedCornerShape(12.dp))
             )
         }
     }

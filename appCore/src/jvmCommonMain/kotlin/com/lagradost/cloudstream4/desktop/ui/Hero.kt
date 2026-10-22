@@ -1,5 +1,7 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,7 +66,7 @@ import kotlinx.coroutines.delay
 fun HeroCarousel(items: List<HeroItem>, onFocused: () -> Unit = {}) {
     if (items.isEmpty()) return
     val nav = LocalNavigator.current
-    var index by remember { mutableIntStateOf(0) }
+    var index by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHighlightedAsState()
     val background = MaterialTheme.colorScheme.background
@@ -115,9 +117,10 @@ fun HeroCarousel(items: List<HeroItem>, onFocused: () -> Unit = {}) {
             Box(Modifier.fillMaxSize().background(leftScrim(background)))
             Box(Modifier.fillMaxSize().background(bottomScrim(background)))
 
-            Crossfade(
+            // The old title fades out before the new one fades in, so two never overlap
+            AnimatedContent(
                 targetState = safeIndex,
-                animationSpec = tween(450),
+                transitionSpec = { fadeIn(tween(280, delayMillis = 180)) togetherWith fadeOut(tween(180)) },
                 modifier = Modifier.align(Alignment.BottomStart).then(
                     if (compact) Modifier.padding(start = appLayout.gutter, bottom = 40.dp, end = appLayout.gutter)
                     else Modifier.padding(start = 72.dp, bottom = 44.dp, end = 72.dp)
@@ -194,7 +197,7 @@ private fun HeroText(item: HeroItem, open: (Route) -> Unit) {
         Spacer(Modifier.height(12.dp))
         val meta = listOfNotNull(
             details?.year?.toString(),
-            (details?.type ?: item.search.type)?.name,
+            (details?.type ?: item.search.type)?.label,
             details?.duration?.takeIf { it > 0 }?.let { if (it >= 60) "${it / 60}h ${it % 60}m" else "${it}m" },
             details?.score?.toStringNull(0.1, 10, 1)?.let { "★ $it" },
             details?.tags?.filter { it.isNotBlank() }?.take(3)?.takeIf { it.isNotEmpty() }?.joinToString(", "),

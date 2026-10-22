@@ -150,6 +150,8 @@ private fun searches(provider: SearchProvider, excluded: Set<String>, types: Set
 }
 
 class SearchModel : ScreenModel<SearchState>(SearchState()) {
+    /** Whether the search box was focused on arrival already (see SearchScreen). */
+    var autoFocused = false
     private var searchJob: Job? = null
     private var debounceJob: Job? = null
 
@@ -250,7 +252,14 @@ fun SearchScreen(model: SearchModel) {
     val history by SearchHistory.entries.collectAsState()
     val focus = remember { FocusRequester() }
     var picking by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // Ready to type on arrival, but only once per visit to an empty Search: on phones focusing the
+    // box opens the keyboard, which would cover the results every time you came back to them
+    LaunchedEffect(Unit) {
+        if (com.lagradost.cloudstream4.desktop.Platform.isTv || (state.query.isEmpty() && !model.autoFocused)) {
+            model.autoFocused = true
+            runCatching { focus.requestFocus() }
+        }
+    }
 
     val searched = state.providers.count { searches(it, settings.searchExcluded, settings.searchTypes) }
     // Only the filters some installed extension can use
@@ -446,16 +455,17 @@ private fun RecentSearches(queries: List<String>, onSearch: (String) -> Unit, on
             }
         }
         items(queries, key = { SearchHistory.key(it) }) { query ->
-            ListItem(
-                headlineContent = { Text(query) },
-                leadingContent = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                trailingContent = {
-                    IconButton(onClick = { onRemove(query) }) { Icon(Icons.Default.Close, "Remove $query from recent searches") }
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.widthIn(max = 720.dp).padding(horizontal = appLayout.gutter - 16.dp)
-                    .clickable(indication = tvIndication ?: LocalIndication.current, interactionSource = null) { onSearch(query) },
-            )
+            // The search and its remove button sit side by side, so a remote can reach both
+            Row(Modifier.widthIn(max = 720.dp).padding(horizontal = appLayout.gutter - 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                ListItem(
+                    headlineContent = { Text(query) },
+                    leadingContent = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.weight(1f)
+                        .clickable(indication = tvIndication ?: LocalIndication.current, interactionSource = null) { onSearch(query) },
+                )
+                IconButton(onClick = { onRemove(query) }) { Icon(Icons.Default.Close, "Remove $query from recent searches") }
+            }
         }
     }
 }

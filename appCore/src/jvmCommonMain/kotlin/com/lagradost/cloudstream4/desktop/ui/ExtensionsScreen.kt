@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -217,28 +218,36 @@ private fun Hint(text: String) = Text(text, color = MaterialTheme.colorScheme.on
 
 @Composable
 private fun RepoCard(repo: RepositoryState, onClick: () -> Unit) {
+    // The open area and the buttons are side by side, not nested: a remote can't move focus into
+    // a clickable's children, so Refresh and Remove were out of reach on TV
     Surface(
-        onClick = onClick,
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            RemoteImage(repo.data.iconUrl ?: repo.repository?.iconUrl, null, Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    when {
-                        repo.loading -> "Loading…"
-                        repo.error != null -> repo.error
-                        else -> "${repo.plugins.size} extensions" + (repo.repository?.description?.let { " · $it" } ?: "")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (repo.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        Row(Modifier.padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                    .clickable(indication = tvIndication ?: androidx.compose.foundation.LocalIndication.current, interactionSource = null, onClick = onClick)
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RemoteImage(repo.data.iconUrl ?: repo.repository?.iconUrl, null, Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        when {
+                            repo.loading -> "Loading…"
+                            repo.error != null -> repo.error
+                            else -> "${repo.plugins.size} extensions" + (repo.repository?.description?.let { " · $it" } ?: "")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (repo.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             IconButton(onClick = { ExtensionManager.refreshRepository(repo.data.url) }) { Icon(Icons.Default.Refresh, "Refresh") }
             IconButton(onClick = { ExtensionManager.removeRepository(repo.data.url) }) { Icon(Icons.Default.Delete, "Remove repository") }

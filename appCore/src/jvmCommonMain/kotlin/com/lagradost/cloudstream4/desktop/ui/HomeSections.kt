@@ -40,3 +40,16 @@ fun rememberAvailableSections(): List<HomeSection> {
     val extensions by ExtensionManager.state.collectAsState()
     return remember(extensions.providersVersion) { availableSections(ExtensionManager.providers()) }
 }
+
+/** How a kind of media reads on screen: "TV Series", not the code name "TvSeries". */
+val TvType.label: String
+    get() = when (this) {
+        TvType.TvSeries -> "TV Series"
+        TvType.AsianDrama -> "Asian Drama"
+        TvType.AnimeMovie -> "Anime Movie"
+        TvType.OVA -> "OVA"
+        TvType.NSFW -> "NSFW"
+        TvType.AudioBook -> "Audiobook"
+        TvType.CustomMedia, TvType.Others -> "Other"
+        else -> name.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ")
+    }

@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
@@ -256,7 +257,8 @@ fun HomeScreen(model: HomeModel) {
             snapshotFlow { noBanner || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 160 }
                 .collect { bar?.solid = it }
         }
-        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
+        // A remote coming back into the page lands on the row it left
+        LazyColumn(Modifier.fillMaxSize().focusRestorer(), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
             if (state.hero.isNotEmpty()) {
                 item(key = "hero") {
                     HeroCarousel(state.hero, onFocused = { scrollScope.launch { listState.animateScrollToItem(0) } })

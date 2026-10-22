@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -292,6 +293,8 @@ fun PosterRow(
         Spacer(Modifier.height(12.dp))
         LazyRow(
             state = listState,
+            // A remote coming back into the row lands on the poster it left, not the first
+            modifier = Modifier.focusRestorer(),
             // Vertical room so the hover lift and its shadow aren't clipped
             contentPadding = PaddingValues(start = appLayout.gutter, end = appLayout.gutter, top = 10.dp, bottom = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(appLayout.shelfSpacing),

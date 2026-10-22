@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,13 +121,21 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
 private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
     CompositionLocalProvider(LocalNavigator provides nav) {
         val route = nav.current
+        // Each screen on the back stack keeps its scroll positions, carousel slide and tabs while
+        // another screen (a title, the player) is open on top, so Back returns to where you were
+        val saved = rememberSaveableStateHolder()
+        val keys = remember { mutableSetOf<String>() }
+        LaunchedEffect(nav.stack.toList()) {
+            val live = nav.stack.map { it.toString() }.toSet()
+            (keys - live).forEach { saved.removeState(it); keys -= it }
+        }
         if (route is Route.Player) {
             val model = store.get(route) { PlayerModel(route.request, vlc) }
             PlayerScreen(model) { nav.back() }
             return@CompositionLocalProvider
         }
 
-        val screen: @Composable () -> Unit = {
+        val screenFor: @Composable (Route) -> Unit = { route ->
             when (route) {
                 Route.Home -> HomeScreen(store.home)
                 is Route.Section -> HomeScreen(store.home(route.section))
@@ -138,6 +147,10 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
                 is Route.Details -> DetailsScreen(route, store.get(route) { DetailsModel(route) })
                 is Route.Player -> Unit
             }
+        }
+        val screen: @Composable () -> Unit = {
+            keys += route.toString()
+            saved.SaveableStateProvider(route.toString()) { screenFor(route) }
         }
 
         if (appLayout.compact) {
@@ -158,6 +171,14 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
             // Remotes: down from the bar goes into the page (the bar is drawn over the page, and
             // focus search alone didn't cross into it)
             val page = remember { FocusRequester() }
+            // TV: back on a page (after a title, the player or another tab), the remote starts in
+            // the page where it was, not on the top bar's first tab
+            if (com.lagradost.cloudstream4.desktop.Platform.isTv && route !is Route.Details) {
+                LaunchedEffect(route) {
+                    kotlinx.coroutines.delay(150)
+                    runCatching { page.requestFocus() }
+                }
+            }
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 CompositionLocalProvider(LocalTopBarState provides bar) {
                     Box(
