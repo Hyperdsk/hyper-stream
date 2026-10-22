@@ -243,11 +243,14 @@ fun ShelfGap() = Spacer(Modifier.height(8.dp))
 @Composable
 fun Dot(selected: Boolean, onClick: () -> Unit) {
     val width by animateFloatAsState(if (selected) 22f else 7f, tvSpring())
+    // The dot is small; the area that takes a tap or click around it is bigger
     Box(
-        Modifier.height(7.dp).width(width.dp)
-            .background(Color.White.copy(alpha = if (selected) 0.95f else 0.4f), RoundedCornerShape(50))
+        Modifier
             // Too small to aim at with a remote; TVs change slides with the arrows instead
             .focusProperties { canFocus = !com.lagradost.cloudstream4.desktop.Platform.isTv }
-            .clickable(onClick = onClick)
-    )
+            .clickable(indication = null, interactionSource = null, onClick = onClick)
+            .padding(horizontal = 3.dp, vertical = 12.dp)
+    ) {
+        Box(Modifier.height(7.dp).width(width.dp).background(Color.White.copy(alpha = if (selected) 0.95f else 0.4f), RoundedCornerShape(50)))
+    }
 }

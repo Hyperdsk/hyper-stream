@@ -1,5 +1,8 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -661,7 +664,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CenterButton(Icons.Default.Replay10, "Back ${seekMs / 1000}s", 36) { poke(); player.seekBy(-seekMs) }
-                        CenterButton(if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play or pause", 52) { poke(); player.togglePause() }
+                        CenterButton(if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playback.playing) "Pause" else "Play", 52) { poke(); player.togglePause() }
                         CenterButton(Icons.Default.Forward10, "Forward ${seekMs / 1000}s", 36) { poke(); player.seekBy(seekMs) }
                     }
                 }
@@ -753,7 +756,7 @@ private fun BottomControls(
             if (!touch) ControlButton(Icons.Default.Replay10, "Back ${seekMs / 1000}s") { player.seekBy(-seekMs) }
             if (!touch) {
                 ControlButton(
-                    if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play or pause", size = 40,
+                    if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playback.playing) "Pause" else "Play", size = 40,
                     modifier = Modifier.focusRequester(playFocus),
                 ) { player.togglePause() }
             }
@@ -765,7 +768,7 @@ private fun BottomControls(
             }
 
             Spacer(Modifier.width(12.dp))
-            ControlButton(if (playback.muted || playback.volume == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp, "Mute") {
+            ControlButton(if (playback.muted || playback.volume == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp, if (playback.muted) "Unmute" else "Mute") {
                 player.toggleMute()
             }
             // Phones and TVs have volume buttons
@@ -773,7 +776,7 @@ private fun BottomControls(
                 SlimSlider(
                     value = playback.volume / 200f,
                     onValueChange = { player.setVolume((it * 200).toInt()) },
-                    modifier = Modifier.width(120.dp),
+                    modifier = Modifier.width(120.dp).semantics { contentDescription = "Volume"; stateDescription = "${playback.volume}%" },
                 )
                 Text(
                     "${playback.volume}%",
@@ -973,6 +976,8 @@ internal fun SeekBar(
             onValueChange = onValueChange,
             onValueChangeFinished = onValueChangeFinished,
             enabled = lengthMs > 0,
+            description = "Seek",
+            spoken = if (lengthMs > 0) "${formatTime((value * lengthMs).toLong())} of ${formatTime(lengthMs)}" else null,
             interaction = interaction,
             active = active,
             // Where the pointer is, ahead of the playhead: how far a click would jump
@@ -1059,6 +1064,8 @@ private fun SlimSlider(
     interaction: MutableInteractionSource = remember { MutableInteractionSource() },
     active: Boolean = false,
     aheadTo: Float? = null,
+    description: String? = null,
+    spoken: String? = null,
 ) {
     val focused by interaction.collectIsFocusedAsState()
     val hovered by interaction.collectIsHoveredAsState()
@@ -1098,7 +1105,12 @@ private fun SlimSlider(
                 bar(0f, value, accent)
             }
         },
-        modifier = modifier.hoverable(interaction),
+        modifier = modifier.hoverable(interaction).then(
+            if (description != null) Modifier.semantics {
+                contentDescription = description
+                spoken?.let { stateDescription = it }
+            } else Modifier
+        ),
     )
 }
 

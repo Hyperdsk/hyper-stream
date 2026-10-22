@@ -1,5 +1,8 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.foundation.background
@@ -104,10 +107,18 @@ fun SettingsScreen(vlcAvailable: Boolean) {
             CloudStreamPrimaryColor.entries.forEach { color ->
                 val selected = settings.primaryColor == color
                 Box(
-                    Modifier.size(32.dp)
+                    // 40 points: big enough to tap, and named for screen readers
+                    Modifier.size(40.dp)
                         .background(color.swatch, CircleShape)
                         .border(if (selected) 3.dp else 0.dp, MaterialTheme.colorScheme.onBackground, CircleShape)
-                        .clickable { SettingsStore.update { it.copy(primaryColor = color) } }
+                        .clip(CircleShape)
+                        .clickable(indication = tvIndication ?: androidx.compose.foundation.LocalIndication.current, interactionSource = null) {
+                            SettingsStore.update { it.copy(primaryColor = color) }
+                        }
+                        .semantics {
+                            contentDescription = color.name.lowercase().replaceFirstChar { it.uppercase() } + " accent"
+                            this.selected = selected
+                        }
                 )
             }
         }
@@ -146,7 +157,11 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
         Text(
             "Intro, recap and credit times come from AniSkip, TheIntroDB and IntroDB, the same sources as the Android app. " +
-                "Not every episode has them. Press S in the player to skip.",
+                "Not every episode has them. " + when {
+                    com.lagradost.cloudstream4.desktop.Platform.isTv -> "Press OK while the Skip button shows."
+                    com.lagradost.cloudstream4.desktop.Platform.isTouch -> "Tap the Skip button when it shows."
+                    else -> "Press S in the player to skip."
+                },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -214,7 +229,10 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         }
 
         Section("Downloads")
-        Text(DownloadManager.folder.path, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            if (Platform.canOpenFolders) DownloadManager.folder.path else "In Hyper Stream's own storage on this device.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
         if (Platform.canOpenFolders) Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
             val folderScope = rememberCoroutineScope()
             OutlinedButton(onClick = {
@@ -223,7 +241,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
                 }
             }) { Text("Change folder") }
             if (settings.downloadFolder != null) {
-                OutlinedButton(onClick = { SettingsStore.update { it.copy(downloadFolder = null) } }) { Text("Use Movies folder") }
+                OutlinedButton(onClick = { SettingsStore.update { it.copy(downloadFolder = null) } }) { Text("Use the default folder") }
             }
         }
         Label("Downloads at the same time")

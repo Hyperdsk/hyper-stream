@@ -158,7 +158,8 @@ private fun TopTab(
             .background(background)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = if (selected) null else tvIndication, onClick = onClick)
-            .padding(horizontal = if (label == null) 10.dp else if (tight) 12.dp else 16.dp, vertical = 8.dp),
+            // Taller on touch screens (tablets), where a tab must be about 48 points to tap reliably
+            .padding(horizontal = if (label == null) 10.dp else if (tight) 12.dp else 16.dp, vertical = if (com.lagradost.cloudstream4.desktop.Platform.isTouch) 13.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) Icon(icon, description, tint = content, modifier = Modifier.size(22.dp))

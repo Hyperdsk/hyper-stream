@@ -58,7 +58,7 @@ fun DownloadsScreen() {
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
             title = { Text("Delete download?") },
-            text = { Text("${entry.title}${entry.playable.label.takeIf { entry.season != null || entry.episode != null }?.let { " · $it" } ?: ""} will be removed from your Mac.") },
+            text = { Text("${entry.title}${entry.playable.label.takeIf { entry.season != null || entry.episode != null }?.let { " · $it" } ?: ""} will be deleted from this device.") },
             confirmButton = { TextButton(onClick = { DownloadManager.delete(entry.id); confirmDelete = null }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
@@ -81,7 +81,9 @@ fun DownloadsScreen() {
                     listOfNotNull(
                         downloading.takeIf { it > 0 }?.let { "$it downloading" },
                         waiting.takeIf { it > 0 }?.let { "$it waiting" },
-                        "${formatBytes(used)} in ${DownloadManager.folder.path.replace(System.getProperty("user.home").orEmpty().ifEmpty { "\u0000" }, "~")}",
+                        // The folder only means something where you can open it (not inside Android's app storage)
+                        if (com.lagradost.cloudstream4.desktop.Platform.canOpenFolders) "${formatBytes(used)} in ${DownloadManager.folder.path.replace(System.getProperty("user.home").orEmpty().ifEmpty { "\u0000" }, "~")}"
+                        else "${formatBytes(used)} used",
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

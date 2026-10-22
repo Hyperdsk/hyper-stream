@@ -73,6 +73,8 @@ fun ExtensionsScreen() {
         )
     }
 
+    // Back (Android, the TV remote) closes an open repository before leaving Extensions
+    PlatformBackHandler(enabled = repo != null) { openRepo = null }
     if (repo != null) {
         RepositoryScreen(repo, onBack = { openRepo = null })
     } else {
@@ -250,7 +252,17 @@ private fun RepoCard(repo: RepositoryState, onClick: () -> Unit) {
                 }
             }
             IconButton(onClick = { ExtensionManager.refreshRepository(repo.data.url) }) { Icon(Icons.Default.Refresh, "Refresh") }
-            IconButton(onClick = { ExtensionManager.removeRepository(repo.data.url) }) { Icon(Icons.Default.Delete, "Remove repository") }
+            var confirm by remember { mutableStateOf(false) }
+            IconButton(onClick = { confirm = true }) { Icon(Icons.Default.Delete, "Remove repository") }
+            if (confirm) {
+                ConfirmDialog(
+                    "Remove ${repo.repository?.name ?: repo.data.name}?",
+                    "Its extensions stay installed until you uninstall them.",
+                    "Remove",
+                    onConfirm = { ExtensionManager.removeRepository(repo.data.url) },
+                    onDismiss = { confirm = false },
+                )
+            }
         }
     }
 }
@@ -268,7 +280,17 @@ private fun InstalledRow(plugin: InstalledPlugin?, status: PluginStatus?, localN
             StatusText(status)
         }
         if (plugin != null) {
-            IconButton(onClick = { ExtensionManager.uninstall(plugin) }) { Icon(Icons.Default.Delete, "Uninstall") }
+            var confirm by remember { mutableStateOf(false) }
+            IconButton(onClick = { confirm = true }) { Icon(Icons.Default.Delete, "Uninstall") }
+            if (confirm) {
+                ConfirmDialog(
+                    "Uninstall ${plugin.name}?",
+                    "Its titles stay in your library, but won't open until it's installed again.",
+                    "Uninstall",
+                    onConfirm = { ExtensionManager.uninstall(plugin) },
+                    onDismiss = { confirm = false },
+                )
+            }
         }
     }
     HorizontalDivider()

@@ -1,5 +1,8 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -67,7 +70,10 @@ fun LibraryScreen() {
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(items, key = { "${it.apiName}|${it.url}" }) { item ->
-                    PosterCard(item, if (appLayout.compact) 104.dp else 150.dp) { nav.open(Route.Details(item.apiName, item.url, item.name)) }
+                    // Cells grow to fill the row; the poster sits in the middle of its cell, so the gaps match
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                        PosterCard(item, if (appLayout.compact) 104.dp else 150.dp) { nav.open(Route.Details(item.apiName, item.url, item.name)) }
+                    }
                 }
             }
         }

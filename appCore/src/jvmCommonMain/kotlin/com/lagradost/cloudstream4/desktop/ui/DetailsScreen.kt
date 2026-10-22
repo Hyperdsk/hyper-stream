@@ -594,10 +594,11 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                             DownloadButton(download, tint = Color.White) { model.download(movie) }
                         }
                     }
-                    response.trailers.firstOrNull()?.let { trailer ->
+                    // TVs usually have no web browser, so these would only show an error there
+                    response.trailers.firstOrNull()?.takeIf { !com.lagradost.cloudstream4.desktop.Platform.isTv }?.let { trailer ->
                         GlassButton(Icons.Default.Theaters, "Trailer", text = "Trailer") { openInBrowser(trailer.extractorUrl) }
                     }
-                    webPage(route.apiName, response.url)?.let { page ->
+                    webPage(route.apiName, response.url)?.takeIf { !com.lagradost.cloudstream4.desktop.Platform.isTv }?.let { page ->
                         GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(page) }
                     }
                 }
@@ -851,7 +852,7 @@ internal fun InformationSection(imdb: ImdbInfo) {
     Column(Modifier.fillMaxWidth().padding(start = appLayout.pageMargin, end = appLayout.gutter, top = 28.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Information", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
-            SubtleCapsule(Icons.Default.OpenInBrowser, "View on IMDb") { openInBrowser(imdb.url) }
+            if (!com.lagradost.cloudstream4.desktop.Platform.isTv) SubtleCapsule(Icons.Default.OpenInBrowser, "View on IMDb") { openInBrowser(imdb.url) }
         }
         Spacer(Modifier.height(16.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(if (appLayout.compact) 16.dp else 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {

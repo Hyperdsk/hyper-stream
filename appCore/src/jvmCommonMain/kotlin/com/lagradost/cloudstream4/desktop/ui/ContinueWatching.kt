@@ -138,7 +138,7 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
                 }
                 if (!Platform.isTv && !Platform.isTouch) Row(Modifier.align(Alignment.TopEnd).padding(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     CardAction(Icons.Outlined.Info, "Details", onDetails)
-                    CardAction(Icons.Default.Close, "Remove from Continue watching", onRemove)
+                    CardAction(Icons.Default.Close, "Remove from Up Next", onRemove)
                 }
             }
             // Progress, red like the seek bar's played part

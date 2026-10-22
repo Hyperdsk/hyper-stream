@@ -304,7 +304,9 @@ fun PosterRow(
             }
             if (loadingMore) {
                 item {
-                    Box(Modifier.size(80.dp, 240.dp), contentAlignment = Alignment.Center) {
+                    // As tall as the row's posters, so the row doesn't jump while the next page loads
+                    val posterHeight = if (horizontal) appLayout.widePoster * 9f / 16f else appLayout.poster * 1.5f
+                    Box(Modifier.size(80.dp, posterHeight), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                     }
                 }
@@ -376,4 +378,16 @@ fun formatTime(ms: Long): String {
     val m = (total % 3600) / 60
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
+/** Asks before something that can't simply be undone, such as removing or uninstalling. */
+@Composable
+fun ConfirmDialog(title: String, body: String, action: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { onDismiss(); onConfirm() }) { Text(action) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
