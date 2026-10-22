@@ -54,6 +54,12 @@ data class SyncStore(
     @JsonProperty("known") val known: Map<String, KnownItem> = emptyMap(),
     @JsonProperty("pending") val pending: Map<String, PendingItem> = emptyMap(),
     @JsonProperty("lastSyncedAt") val lastSyncedAt: Long? = null,
+    /**
+     * The sign-in or reset email this device asked for, and when. Only a link back for that address,
+     * soon after, signs it in, so a web page can't sign the app in to another account.
+     */
+    @JsonProperty("pendingEmail") val pendingEmail: String? = null,
+    @JsonProperty("pendingAt") val pendingAt: Long? = null,
 )
 
 data class SyncUiState(
@@ -150,6 +156,7 @@ object SyncManager {
         try {
             SignInRedirect.prepare()
             SupabaseClient.sendLink(address, SignInRedirect.url)
+            save { it.copy(pendingEmail = address, pendingAt = System.currentTimeMillis()) }
             _ui.update { it.copy(busy = false, codeSentTo = address) }
         } catch (e: CancellationException) {
             throw e
@@ -169,6 +176,7 @@ object SyncManager {
         try {
             SignInRedirect.prepare()
             SupabaseClient.sendPasswordReset(address, SignInRedirect.url)
+            save { it.copy(pendingEmail = address, pendingAt = System.currentTimeMillis()) }
             _ui.update { it.copy(busy = false, resetSentTo = address) }
         } catch (e: CancellationException) {
             throw e
@@ -177,7 +185,10 @@ object SyncManager {
         }
     }
 
-    fun cancelReset() = _ui.update { it.copy(resetSentTo = null, error = null) }
+    fun cancelReset() {
+        save { it.copy(pendingEmail = null, pendingAt = null) }
+        _ui.update { it.copy(resetSentTo = null, error = null) }
+    }
 
     private fun emailError(t: Throwable): String {
         val message = t.message.orEmpty()
@@ -194,6 +205,7 @@ object SyncManager {
         try {
             val session = if (input.contains("://") || "access_token=" in input) SupabaseClient.verifyLink(input)
             else SupabaseClient.verifyCode(email ?: error("Ask for a sign-in email first."), input.filter { it.isDigit() })
+            requireRequested(session)
             signedIn(session, email ?: _ui.value.resetSentTo, choosingPassword = isRecovery(input))
         } catch (e: CancellationException) {
             throw e
@@ -208,7 +220,9 @@ object SyncManager {
     /** Where a sign-in link returned to this device (the Mac's page or hyperstream://auth on Android). */
     suspend fun completeRedirect(link: String) {
         try {
-            signedIn(SupabaseClient.sessionFromRedirect(link), _ui.value.codeSentTo ?: _ui.value.resetSentTo, choosingPassword = isRecovery(link))
+            val session = SupabaseClient.sessionFromRedirect(link)
+            requireRequested(session)
+            signedIn(session, _ui.value.codeSentTo ?: _ui.value.resetSentTo, choosingPassword = isRecovery(link))
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -218,6 +232,19 @@ object SyncManager {
     }
 
     fun completeRedirectLater(link: String) = scope.launch { runCatching { completeRedirect(link) } }
+
+    /**
+     * A link signs in only if this device asked for an email to that address in the last two hours
+     * (a link lasts one). Any page can open hyperstream://auth or the Mac's local sign-in page with a
+     * session for an account of its own; without this check the app would switch to that account,
+     * send it this device's library and install the extensions it lists.
+     */
+    private fun requireRequested(session: SyncSession) {
+        val pending = store.pendingEmail?.takeIf { (store.pendingAt ?: 0) > System.currentTimeMillis() - 2 * 60 * 60_000 }
+        if (pending == null || !pending.equals(session.email, ignoreCase = true)) {
+            throw java.io.IOException("This link isn't for the sign-in asked for on this device. Ask for a new email here, then open its link.")
+        }
+    }
 
     /**
      * Signs a TV (or any device) in with the code from a signed-in phone or Mac. With [resetPassword],
@@ -312,7 +339,10 @@ object SyncManager {
         requestSync()
     }
 
-    fun cancelCode() = _ui.update { it.copy(codeSentTo = null, error = null) }
+    fun cancelCode() {
+        save { it.copy(pendingEmail = null, pendingAt = null) }
+        _ui.update { it.copy(codeSentTo = null, error = null) }
+    }
 
     /** Stops syncing on this device. Its data stays as it is. */
     fun signOut() = scope.launch {

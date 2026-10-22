@@ -51,7 +51,11 @@ class SyncManagerTest {
         createContext("/auth/v1/verify") { ex ->
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-1", "email" to "me@example.com")))
         }
-        createContext("/auth/v1/user") { ex -> ex.json(mapOf("id" to "user-1", "email" to "me@example.com")) }
+        createContext("/auth/v1/user") { ex ->
+            // A token from someone else's account, as a hostile page would use
+            if ("attacker" in ex.requestHeaders.getFirst("Authorization").orEmpty()) ex.json(mapOf("id" to "user-9", "email" to "attacker@evil.test"))
+            else ex.json(mapOf("id" to "user-1", "email" to "me@example.com"))
+        }
         createContext("/auth/v1/signup") { ex ->
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-2", "email" to "new@example.com")))
         }
@@ -89,6 +93,7 @@ class SyncManagerTest {
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-sync-revoked").toString())
         try {
             // A session about to expire, so the next sync refreshes it
+            SyncManager.sendLink("me@example.com").join()
             SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=old&expires_in=1&type=magiclink")
             assertTrue(SyncManager.ui.value.signedIn)
 
@@ -202,11 +207,20 @@ class SyncManagerTest {
             assertTrue(!SyncManager.ui.value.choosingPassword && SyncManager.ui.value.error == null, "the new password was saved")
             SyncManager.signOut().join()
             // An ordinary sign-in link doesn't ask
+            SyncManager.sendLink("me@example.com").join()
             SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=def&expires_in=3600&type=magiclink")
             assertTrue(SyncManager.ui.value.signedIn && !SyncManager.ui.value.choosingPassword)
             SyncManager.signOut().join()
 
+            // A link this device didn't ask for, or for another account, doesn't sign it in
+            assertTrue(runCatching { SyncManager.completeRedirect("hyperstream://auth#access_token=abc&refresh_token=def&expires_in=3600&type=magiclink") }.isFailure)
+            assertTrue(!SyncManager.ui.value.signedIn, "no sign-in was asked for")
+            SyncManager.sendLink("me@example.com").join()
+            assertTrue(runCatching { SyncManager.completeRedirect("hyperstream://auth#access_token=attacker&refresh_token=x&expires_in=3600&type=magiclink") }.isFailure)
+            assertTrue(!SyncManager.ui.value.signedIn, "a link for someone else's account is refused")
+
             // Opening the emailed link on the Mac: it returns to the app's local page, which hands over the session
+            SyncManager.sendLink("me@example.com").join()
             com.lagradost.cloudstream4.desktop.sync.SignInRedirect.prepare()
             val page = com.lagradost.cloudstream4.desktop.sync.SignInRedirect.url
             if (page != null) {
