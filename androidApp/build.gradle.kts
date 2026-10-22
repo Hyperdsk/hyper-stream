@@ -16,7 +16,7 @@ android {
         // CI passes its run number, so each build installs over the last one
         versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 1
         // CI passes the release tag, e.g. -PappVersion=1.2.0
-        versionName = (findProperty("appVersion") as String?) ?: "1.2.0"
+        versionName = (findProperty("appVersion") as String?) ?: "1.2.2"
     }
 
     // One key for every release build, here and on CI, so each build installs over the last. Android
