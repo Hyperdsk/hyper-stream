@@ -136,7 +136,8 @@ class SyncManagerTest {
             val pushed = synchronized(rows) { rows["history" to "Prov|ep1"] }
             assertNotNull(pushed, "progress was pushed")
             assertEquals(60_000, pushed.data!!["positionMs"].asLong())
-            assertTrue(synchronized(rows) { rows.containsKey("settings" to "app") }, "settings were pushed")
+            assertTrue(synchronized(rows) { rows.containsKey("setting" to "themeMode") }, "settings were pushed, one per setting")
+            assertTrue(synchronized(rows) { !rows.containsKey("setting" to "volume") }, "device settings stay on the device")
 
             // Another device bookmarks a title and watches further
             remote("bookmark", "Prov|other", Bookmark("other", "Prov", "Other", null, null, null, WatchType.WATCHING, updatedAt = 2_000), at = 2_000)
@@ -153,16 +154,24 @@ class SyncManagerTest {
             assertEquals(400_000, LibraryStore.state.value.progress("Prov", "ep1")?.positionMs, "newer local progress kept")
             assertEquals(400_000, synchronized(rows) { rows["history" to "Prov|ep1"] }!!.data!!["positionMs"].asLong(), "and sent")
 
-            // The same settings read back with their keys in another order (as Postgres stores them)
-            // aren't a change, so nothing is sent back
-            val stored = synchronized(rows) { rows["settings" to "app"]!! }
+            // The same item read back with its keys in another order (as Postgres stores JSON objects)
+            // isn't a change, so nothing is sent back
+            val stored = synchronized(rows) { rows["history" to "Prov|ep1"]!! }
             val reordered = jsonMapper.createObjectNode().apply {
                 stored.data!!.fieldNames().asSequence().toList().reversed().forEach { set<JsonNode>(it, stored.data.get(it)) }
             }
-            synchronized(rows) { rows["settings" to "app"] = stored.copy(data = reordered, at = stored.at + 1, updatedAt = serverTime()) }
+            synchronized(rows) { rows["history" to "Prov|ep1"] = stored.copy(data = reordered, at = stored.at + 1, updatedAt = serverTime()) }
             SyncManager.syncNow()
             SyncManager.syncNow()
-            assertEquals(stored.at + 1, synchronized(rows) { rows["settings" to "app"]!! }.at, "unchanged settings weren't sent again")
+            assertEquals(stored.at + 1, synchronized(rows) { rows["history" to "Prov|ep1"]!! }.at, "an unchanged item wasn't sent again")
+
+            // Two devices change different settings: both changes stay
+            com.lagradost.cloudstream4.desktop.data.SettingsStore.update { it.copy(seekSeconds = 30) }
+            remote("setting", "autoPlayNext", mapOf("value" to false), at = System.currentTimeMillis())
+            SyncManager.syncNow()
+            assertEquals(30, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.seekSeconds, "this device's change kept")
+            assertEquals(false, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.autoPlayNext, "the other device's change arrived")
+            assertEquals(30, synchronized(rows) { rows["setting" to "seekSeconds"] }!!.data!!["value"].asInt(), "and this one was sent")
 
             // A removal on another device removes it here
             remote("bookmark", "Prov|other", null, at = 6_000, deleted = true)
@@ -187,6 +196,16 @@ class SyncManagerTest {
             com.lagradost.cloudstream4.desktop.data.SearchHistory.remove("dune")
             SyncManager.syncNow()
             assertTrue(synchronized(rows) { rows["search" to "dune"] }?.deleted == true, "removing it here removed it there")
+
+            // A data file that couldn't be read: its items are missing, not deleted, so no deletions go out
+            LibraryStore.setBookmark(Bookmark("kept", "Prov", "Kept", null, null, null, WatchType.WATCHING), "Prov", "kept")
+            SyncManager.syncNow()
+            com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable += "bookmarks.json"
+            LibraryStore.setBookmark(null, "Prov", "kept")
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["bookmark" to "Prov|kept"] }?.deleted == false, "nothing deleted while a file is unreadable")
+            assertNotNull(LibraryStore.state.value.bookmark("Prov", "kept"), "and the server's copy came back")
+            com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable.clear()
 
             SyncManager.signOut().join()
             assertTrue(!SyncManager.ui.value.signedIn)

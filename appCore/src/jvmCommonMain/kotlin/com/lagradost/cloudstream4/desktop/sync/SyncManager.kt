@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
 import com.lagradost.cloudstream4.desktop.data.AppSettings
+import com.lagradost.cloudstream4.desktop.data.DataHealth
 import com.lagradost.cloudstream4.desktop.data.Bookmark
 import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
@@ -92,14 +93,21 @@ data class SyncUiState(
 object SyncManager {
     private const val HISTORY = "history"
     private const val BOOKMARK = "bookmark"
+    /** Before 1.2.1 all settings were one item; still applied when an older device sends it. */
     private const val SETTINGS = "settings"
+    /** One setting per item, so changes to different settings on two devices both survive. */
+    private const val SETTING = "setting"
     private const val SOURCE = "source"
     private const val REPOSITORY = "repository"
     private const val EXTENSION = "extension"
     private const val SEARCH = "search"
 
     /** Settings that belong to one device: folders, connection counts, volume. Everything else syncs. */
-    private val deviceSettings = setOf("downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider")
+    /** Settings that belong to one device's screen, input or storage, so they don't sync. */
+    private val deviceSettings = setOf(
+        "downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider",
+        "videoFit", "swipeControls",
+    )
 
     // Sync is optional: whatever goes wrong in it (no network, a revoked sign-in) must never close the app
     private val scope = CoroutineScope(
@@ -434,8 +442,9 @@ object SyncManager {
                 known[id] = KnownItem(hash, maxOf(item.at, known[id]?.at ?: 0))
                 continue
             }
-            // Removed here but not sent yet: only a later change elsewhere brings it back
-            val removedHere = mine == null && known[id] != null
+            // Removed here but not sent yet: only a later change elsewhere brings it back. Unless a data
+            // file couldn't be read: then it's missing, not removed, and the server's copy restores it
+            val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty()
             val myAt = mine?.at ?: known[id]?.at ?: 0
             if ((mine == null && !removedHere) || item.at > myAt) {
                 if (applyLocal(item.kind, item.key, value)) known[id] = KnownItem(hash, item.at)
@@ -463,7 +472,10 @@ object SyncManager {
                 next[id] = KnownItem(hash, at)
             }
         }
-        for (id in next.keys - current.keys - store.pending.keys) {
+        // Gone since the last pass: a deletion. Not while a data file is unreadable, or its whole
+        // contents would be deleted on every device
+        val deletions = if (DataHealth.unreadable.isEmpty()) next.keys - current.keys - store.pending.keys else emptySet()
+        for (id in deletions) {
             val (kind, key) = id.split('/', limit = 2)
             changes += LocalChange(kind, key, null, deleted = true, at = now)
             next.remove(id)
@@ -484,7 +496,8 @@ object SyncManager {
         library.history.forEach { items += LocalItem(HISTORY, LibraryStore.historyKey(it), it.copy(snapshotPath = null), it.updatedAt) }
         library.bookmarks.forEach { items += LocalItem(BOOKMARK, LibraryStore.bookmarkKey(it), it, it.updatedAt) }
         SourceMemory.all().forEach { (key, source) -> items += LocalItem(SOURCE, key, source, source.savedAt) }
-        items += LocalItem(SETTINGS, "app", syncedSettings(SettingsStore.state.value), null)
+        // No change time is kept per setting: one that differs from what was last synced is sent as new
+        syncedSettings(SettingsStore.state.value).forEach { (name, value) -> items += LocalItem(SETTING, name, mapOf("value" to value), null) }
         SearchHistory.entries.value.forEach { items += LocalItem(SEARCH, SearchHistory.key(it.query), it, it.at) }
         ExtensionManager.repositories().forEach { items += LocalItem(REPOSITORY, it.url, it, null) }
         ExtensionManager.state.value.installed.forEach { plugin ->
@@ -512,6 +525,7 @@ object SyncManager {
             BOOKMARK -> jsonMapper.treeToValue(data, Bookmark::class.java)
             SOURCE -> jsonMapper.treeToValue(data, RememberedSource::class.java)
             SETTINGS -> jsonMapper.convertValue(data, object : TypeReference<Map<String, Any?>>() {}).filterKeys { it !in deviceSettings }
+            SETTING -> jsonMapper.convertValue(data, object : TypeReference<Map<String, Any?>>() {})
             REPOSITORY -> jsonMapper.treeToValue(data, RepositoryData::class.java)
             EXTENSION -> jsonMapper.convertValue(data, object : TypeReference<Map<String, Any?>>() {})
             SEARCH -> jsonMapper.treeToValue(data, SearchHistoryEntry::class.java)
@@ -525,13 +539,9 @@ object SyncManager {
         HISTORY -> { LibraryStore.applyRemoteHistory(key, value as HistoryEntry); true }
         BOOKMARK -> { LibraryStore.applyRemoteBookmark(key, value as Bookmark); true }
         SOURCE -> { SourceMemory.applyRemote(key, value as RememberedSource); true }
-        SETTINGS -> {
-            val remote = value as Map<String, Any?>
-            SettingsStore.update { current ->
-                val merged = jsonMapper.convertValue(current, object : TypeReference<MutableMap<String, Any?>>() {})
-                merged.putAll(remote)
-                runCatching { jsonMapper.convertValue(merged, AppSettings::class.java) }.getOrDefault(current)
-            }
+        SETTINGS -> { mergeSettings(value as Map<String, Any?>); true }
+        SETTING -> {
+            if (key !in deviceSettings) mergeSettings(mapOf(key to (value as Map<String, Any?>)["value"]))
             true
         }
         REPOSITORY -> {
@@ -541,6 +551,15 @@ object SyncManager {
         EXTENSION -> installExtension(value as Map<String, Any?>)
         SEARCH -> { SearchHistory.applyRemote(key, value as SearchHistoryEntry); true }
         else -> true
+    }
+
+    /** Puts [remote] settings over this device's, leaving the rest as they are. */
+    private fun mergeSettings(remote: Map<String, Any?>) {
+        SettingsStore.update { current ->
+            val merged = jsonMapper.convertValue(current, object : TypeReference<MutableMap<String, Any?>>() {})
+            merged.putAll(remote)
+            runCatching { jsonMapper.convertValue(merged, AppSettings::class.java) }.getOrDefault(current)
+        }
     }
 
     /** Installs an extension another device has, once its repository's list is loaded. */

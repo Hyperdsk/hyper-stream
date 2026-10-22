@@ -31,8 +31,18 @@ val jsonMapper = jacksonObjectMapper()
     .configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false)
 
 /**
- * A single JSON file holding one value. Writes go to a temp file first and are then moved
- * into place, so a crash mid-write never corrupts the stored data.
+ * Data files that existed but couldn't be read this run. Their contents are missing from the app,
+ * not deleted, so sync mustn't send them as deletions to other devices (see SyncManager).
+ */
+object DataHealth {
+    val unreadable: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+}
+
+/**
+ * A single JSON file holding one value. Writes go to a temp file, flushed to disk, which then
+ * replaces the old one, so neither a crash nor a power cut leaves a half-written file. A file that
+ * can't be read (damaged, or from a newer version) is kept as name.unreadable-<time> rather than
+ * overwritten, and noted in [DataHealth].
  */
 class JsonFile<T : Any>(
     name: String,
@@ -45,14 +55,19 @@ class JsonFile<T : Any>(
     fun read(): T = try {
         if (file.exists()) jsonMapper.readValue(file, type) else default()
     } catch (t: Throwable) {
-        System.err.println("Could not read ${file.name}, using defaults: ${t.message}")
+        System.err.println("Could not read ${file.name}, using defaults and keeping a copy: ${t.message}")
+        runCatching { file.copyTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"), overwrite = true) }
+        DataHealth.unreadable += file.name
         default()
     }
 
     @Synchronized
     fun write(value: T) {
         val tmp = File(file.parentFile, "${file.name}.tmp")
-        jsonMapper.writerWithDefaultPrettyPrinter().writeValue(tmp, value)
+        java.io.FileOutputStream(tmp).use { out ->
+            out.write(jsonMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(value))
+            out.fd.sync()
+        }
         try {
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } catch (_: AtomicMoveNotSupportedException) {
