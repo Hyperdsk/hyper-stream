@@ -85,7 +85,7 @@ object LibraryStore {
             val rest = s.bookmarks.removingAll { it.apiName == apiName && it.url == url }
             s.copy(bookmarks = if (bookmark == null) rest else rest.addingAt(0, bookmark))
         }
-        bookmarksFile.write(_state.value.bookmarks)
+        bookmarksFile.writeLatest { _state.value.bookmarks }
     }
 
     fun saveProgress(entry: HistoryEntry) {
@@ -96,7 +96,8 @@ object LibraryStore {
             val rest = s.history.removingAll { it.apiName == entry.apiName && it.episodeData == entry.episodeData }
             s.copy(history = rest.addingAt(0, merged))
         }
-        historyFile.write(_state.value.history)
+        // Every few seconds while playing: written in the background, not on the screen's thread
+        historyFile.writeSoon { _state.value.history }
     }
 
     fun removeFromContinueWatching(apiName: String, parentUrl: String) {
@@ -105,7 +106,7 @@ object LibraryStore {
                 if (it.apiName == apiName && it.parentUrl == parentUrl) it.copy(positionMs = it.durationMs) else it
             }.toPersistentList())
         }
-        historyFile.write(_state.value.history)
+        historyFile.writeLatest { _state.value.history }
     }
 
     fun clearHistory() {
@@ -126,7 +127,7 @@ object LibraryStore {
             if (entry == null) s.copy(history = rest)
             else s.copy(history = (rest + entry.copy(snapshotPath = local?.snapshotPath)).sortedByDescending { it.updatedAt }.toPersistentList())
         }
-        historyFile.write(_state.value.history)
+        historyFile.writeLatest { _state.value.history }
     }
 
     /** Applies another device's bookmark; null removes it. */
@@ -135,6 +136,6 @@ object LibraryStore {
             val rest = s.bookmarks.removingAll { bookmarkKey(it) == key }
             s.copy(bookmarks = if (bookmark == null) rest else (rest + bookmark).sortedByDescending { it.updatedAt }.toPersistentList())
         }
-        bookmarksFile.write(_state.value.bookmarks)
+        bookmarksFile.writeLatest { _state.value.bookmarks }
     }
 }

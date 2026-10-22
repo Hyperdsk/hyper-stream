@@ -74,6 +74,32 @@ class JsonFile<T : Any>(
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
+
+    /**
+     * Saves the value [latest] returns at the moment of writing. Two threads that change a store
+     * and then save could otherwise write in the wrong order, the older value last.
+     */
+    @Synchronized
+    fun writeLatest(latest: () -> T) = write(latest())
+
+    private val queued = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Saves in the background, soon: for frequent saves (watch progress every few seconds) that
+     * shouldn't hold up the screen. Saves asked for while one is queued are one save.
+     */
+    fun writeSoon(latest: () -> T) {
+        if (queued.compareAndSet(false, true)) {
+            writer.execute {
+                queued.set(false)
+                runCatching { writeLatest(latest) }.onFailure { System.err.println("Could not save ${file.name}: $it") }
+            }
+        }
+    }
+
+    companion object {
+        private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "data-writer").apply { isDaemon = true } }
+    }
 }
 
 inline fun <reified T : Any> jsonFile(name: String, noinline default: () -> T): JsonFile<T> =

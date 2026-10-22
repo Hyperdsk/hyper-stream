@@ -63,6 +63,6 @@ object SettingsStore {
 
     fun update(block: (AppSettings) -> AppSettings) {
         _state.update(block)
-        file.write(_state.value)
+        file.writeLatest { _state.value }
     }
 }

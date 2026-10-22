@@ -84,6 +84,8 @@ private const val HERO_COUNT = 6
 class HomeModel(val section: HomeSection? = null) : ScreenModel<HomeState>(HomeState()) {
     private var job: Job? = null
     private var heroJob: Job? = null
+    /** Next pages being fetched; switching extension cancels them, or their items joined the new rows. */
+    private val moreJobs = mutableListOf<Job>()
 
     init {
         scope.launch {
@@ -116,6 +118,8 @@ class HomeModel(val section: HomeSection? = null) : ScreenModel<HomeState>(HomeS
 
     fun load() {
         job?.cancel()
+        moreJobs.forEach { it.cancel() }
+        moreJobs.clear()
         val api = current.provider?.let { providerByName(it) }
         if (api == null) {
             update { copy(rows = persistentListOf(), loading = false, error = null) }
@@ -197,13 +201,16 @@ class HomeModel(val section: HomeSection? = null) : ScreenModel<HomeState>(HomeS
         if (!row.hasNext || row.loadingMore) return
         val api = current.provider?.let { providerByName(it) } ?: return
         setRow(key) { copy(loadingMore = true) }
-        scope.launch {
+        val provider = current.provider
+        moreJobs.removeAll { it.isCompleted }
+        moreJobs += scope.launch {
             providerCall { api.getMainPage(row.page + 1, row.request) }
                 .onSuccess { response ->
                     val lists = response?.items.orEmpty()
                     val list = lists.firstOrNull { it.name == row.name } ?: lists.singleOrNull()
                     val known = row.items.map { it.url }.toSet()
                     val added = list?.list.orEmpty().filter { it.url !in known }
+                    if (current.provider != provider) return@onSuccess
                     setRow(key) {
                         copy(
                             items = (items + added).toPersistentList(),

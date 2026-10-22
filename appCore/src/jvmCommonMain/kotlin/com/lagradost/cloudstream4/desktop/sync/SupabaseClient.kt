@@ -185,20 +185,23 @@ object SupabaseClient {
     }
 
     /**
-     * Everything stored since [since] (server time), oldest first. A batch saved together shares one
-     * timestamp, so pages within it are fetched by offset.
+     * Everything stored since [since] (server time), oldest first, a page at a time. Pages follow
+     * on from the last row's time rather than a fixed offset into the whole set, which shifted
+     * (skipping rows) when another device saved during a long pull. Rows saved together share one
+     * time, so within that time it skips the rows it already has.
      */
     suspend fun pull(session: SyncSession, since: String?): List<RemoteItem> {
         val all = mutableListOf<RemoteItem>()
         val pageSize = 500
-        var offset = 0
+        var from = since
+        var seenAtFrom = 0
         while (true) {
             val url = "${SyncConfig.URL}/rest/v1/hs_sync_items".toHttpUrl().newBuilder()
                 .addQueryParameter("select", "kind,item_key,data,deleted,client_updated_at,updated_at")
                 .addQueryParameter("order", "updated_at.asc,kind.asc,item_key.asc")
                 .addQueryParameter("limit", "$pageSize")
-                .addQueryParameter("offset", "$offset")
-                .apply { if (since != null) addQueryParameter("updated_at", "gte.$since") }
+                .addQueryParameter("offset", "$seenAtFrom")
+                .apply { if (from != null) addQueryParameter("updated_at", "gte.$from") }
                 .build()
             val page = call(Request.Builder().url(url).header("apikey", SyncConfig.KEY).header("Authorization", "Bearer ${session.accessToken}").get())
                 ?.map { row ->
@@ -213,7 +216,10 @@ object SupabaseClient {
                 }.orEmpty()
             all += page
             if (page.size < pageSize) break
-            offset += pageSize
+            val last = page.last().serverTime
+            val atLast = page.count { it.serverTime == last }
+            seenAtFrom = if (last == from) seenAtFrom + atLast else atLast
+            from = last
         }
         return all
     }

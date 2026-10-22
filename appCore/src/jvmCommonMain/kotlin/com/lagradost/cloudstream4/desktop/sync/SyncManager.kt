@@ -382,7 +382,10 @@ object SyncManager {
         val saved = store.session ?: return@withLock null
         if (saved.refreshToken != current.refreshToken) return@withLock saved
         try {
-            SupabaseClient.refresh(current).also { fresh -> save { it.copy(session = fresh) } }
+            val fresh = SupabaseClient.refresh(current)
+            // Signed out (or into another account) while the refresh was out: don't bring it back
+            if (store.session?.refreshToken != current.refreshToken) return@withLock store.session
+            fresh.also { save { it.copy(session = fresh) } }
         } catch (e: SyncAuthException) {
         // The session was revoked or expired for good: sign in again
         save { SyncStore() }
@@ -390,6 +393,9 @@ object SyncManager {
             null
         }
     }
+
+    private fun overlap(cursor: String): String =
+        runCatching { java.time.OffsetDateTime.parse(cursor).minusSeconds(10).toString() }.getOrDefault(cursor)
 
     // ---------- Syncing ----------
 
@@ -416,7 +422,10 @@ object SyncManager {
 
     private suspend fun pass(session: SyncSession) {
         // Pull first, so a new device adopts what's already there before sending its own
-        val remote = SupabaseClient.pull(session, store.cursor)
+        // A few seconds back from where the last pass ended: a save that started earlier but
+        // finished later carries an earlier time, and would otherwise never be pulled. Rows seen
+        // twice change nothing
+        val remote = SupabaseClient.pull(session, store.cursor?.let(::overlap))
         val local = localItems()
         val known = store.known.toMutableMap()
         val pending = store.pending.toMutableMap()

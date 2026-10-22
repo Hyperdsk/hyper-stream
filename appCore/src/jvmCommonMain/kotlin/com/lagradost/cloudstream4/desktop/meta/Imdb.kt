@@ -96,6 +96,7 @@ private data class CachedImdb(
  */
 object Imdb {
     private const val TTL_MS = 3L * 24 * 60 * 60 * 1000
+    private const val MISS_TTL_MS = 6L * 60 * 60 * 1000
     private const val BROWSER_UA =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
@@ -105,11 +106,15 @@ object Imdb {
     /** Details for [response], or null when IMDb has no matching title. Cached for a few days. */
     suspend fun forTitle(response: LoadResponse): ImdbInfo? = withContext(Dispatchers.IO) {
         val key = "${response.apiName}|${response.url}"
-        cache[key]?.takeIf { System.currentTimeMillis() - it.savedAt < TTL_MS }?.let { return@withContext it.info }
+        val now = System.currentTimeMillis()
+        // No match is kept for a few hours only: it can be a passing IMDb error, not a missing title
+        cache[key]?.takeIf { now - it.savedAt < (if (it.info == null) MISS_TTL_MS else TTL_MS) }?.let { return@withContext it.info }
         val id = runCatching { response.getImdbId() }.getOrNull()?.takeIf { it.startsWith("tt") }
             ?: findId(response.name, response.year, response.type)
         val info = id?.let { fetch(it) }
-        cache[key] = CachedImdb(info, System.currentTimeMillis())
+        cache[key] = CachedImdb(info, now)
+        // Expired entries go, so the file doesn't grow with every title ever opened
+        cache.entries.removeIf { now - it.value.savedAt > TTL_MS }
         file.write(HashMap(cache))
         info
     }
