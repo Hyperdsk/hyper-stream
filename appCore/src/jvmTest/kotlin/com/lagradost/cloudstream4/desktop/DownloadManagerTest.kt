@@ -39,6 +39,8 @@ class DownloadManagerTest {
     // MPEG-TS packets start with 0x47
     private val segments = List(3) { i -> ByteArray(188 * 50) { if (it % 188 == 0) 0x47 else (i * 31 + it).toByte() } }
     private val key = Random(2).nextBytes(16)
+    private val fmp4Init = "ftyp-fmp4-init".encodeToByteArray()
+    private val fmp4Segments = List(2) { i -> ByteArray(256) { (i * 7 + it).toByte() } }
     private val rangeRequests = AtomicInteger()
 
     private fun encrypt(data: ByteArray, index: Int): ByteArray {
@@ -89,6 +91,19 @@ class DownloadManagerTest {
         }
         createContext("/hls/key.bin") { it.send(key) }
         segments.indices.forEach { i -> createContext("/hls/seg$i.ts") { it.send(encrypt(segments[i], i)) } }
+        createContext("/fmp4/index.m3u8") { ex ->
+            val playlist = buildString {
+                appendLine("#EXTM3U")
+                appendLine("#EXT-X-VERSION:6")
+                appendLine("#EXT-X-TARGETDURATION:4")
+                appendLine("#EXT-X-MAP:URI=\"init.mp4\"")
+                fmp4Segments.indices.forEach { appendLine("#EXTINF:4.0,"); appendLine("seg$it.m4s") }
+                appendLine("#EXT-X-ENDLIST")
+            }
+            ex.send(playlist.toByteArray(), type = "application/vnd.apple.mpegurl")
+        }
+        createContext("/fmp4/init.mp4") { it.send(fmp4Init) }
+        fmp4Segments.indices.forEach { i -> createContext("/fmp4/seg$i.m4s") { it.send(fmp4Segments[i]) } }
         createContext("/subs.vtt") { it.send("WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n".toByteArray(), type = "text/vtt") }
         start()
     }
@@ -103,8 +118,11 @@ class DownloadManagerTest {
             callback: (ExtractorLink) -> Unit,
         ): Boolean {
             subtitleCallback(newSubtitleFile("English", "$base/subs.vtt"))
-            if (data == "direct") callback(newExtractorLink(name, "Direct", "$base/movie.mp4", ExtractorLinkType.VIDEO) { quality = 720 })
-            else callback(newExtractorLink(name, "HLS", "$base/hls/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
+            when (data) {
+                "direct" -> callback(newExtractorLink(name, "Direct", "$base/movie.mp4", ExtractorLinkType.VIDEO) { quality = 720 })
+                "fmp4" -> callback(newExtractorLink(name, "HLS", "$base/fmp4/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
+                else -> callback(newExtractorLink(name, "HLS", "$base/hls/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
+            }
             return true
         }
     }
@@ -287,6 +305,31 @@ class DownloadManagerTest {
             println("Moved to ${moved.file} with ${moved.subtitles}")
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-move" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun downloadsFragmentedMp4HlsWithItsInitSegment() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl-fmp4").toString())
+        val folder = Files.createTempDirectory("cs-downloads-fmp4").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val api = TestProvider(base).apply { sourcePlugin = "test-fmp4-single" }
+        APIHolder.allProviders.add(api)
+        try {
+            DownloadManager.enqueue(DownloadRequest("DownloadTest", "$base/fmp4", "Fmp4 Movie", null, null, PlayableEpisode("fmp4", null, null, null)))
+            val id = DownloadManager.idFor("DownloadTest", "fmp4")
+            val entry = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == id && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+            }.first { it.id == id }
+            assertEquals(DownloadStatus.Completed, entry.status, entry.error)
+            assertEquals("mp4", entry.file!!.extension)
+            assertContentEquals(fmp4Init + fmp4Segments.reduce { a, b -> a + b }, entry.file!!.readBytes())
+            DownloadManager.delete(id)
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-fmp4-single" } }
             server.stop(0)
         }
     }

@@ -497,6 +497,31 @@ object DownloadManager {
         return false
     }
 
+    /** fMP4 streams keep their codec setup in a separate init segment; without it nothing plays. */
+    private suspend fun fetchInitSegment(items: M3u8Helper2.LazyHlsDownloadData): ByteArray? {
+        val url = items.initSegmentUrl ?: return null
+        var last: Throwable? = null
+        for (attempt in 0 until 3) {
+            try {
+                val body = app.get(url, headers = items.headers, verify = false).body
+                return body.bytes().also { body.close() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                last = t
+                if (attempt < 2) delay(1_500)
+            }
+        }
+        throw IOException("The stream's initialization segment failed to download.", last)
+    }
+
+    private fun File.startsWith(bytes: ByteArray): Boolean {
+        if (!exists() || length() < bytes.size) return false
+        val head = ByteArray(bytes.size)
+        RandomAccessFile(this, "r").use { it.readFully(head) }
+        return head.contentEquals(bytes)
+    }
+
     private fun headersFor(link: SavedLink): Map<String, String> = buildMap {
         put("User-Agent", USER_AGENT)
         if (link.referer.isNotBlank()) put("Referer", link.referer)
@@ -660,11 +685,25 @@ object DownloadManager {
         val base = targetBase(entry)
         // Extension is decided at the end from the data, "ts" or "mp4"
         val part = File(base.path + ".hls.part")
+        val init = fetchInitSegment(items)
 
         val sameLink = entry.link?.url == link.url && part.exists() && entry.segmentsTotal == items.size
         var index = if (sameLink) entry.segmentsDone else 0
         var written = if (sameLink) entry.bytesDone else 0L
         RandomAccessFile(part, "rw").use { it.setLength(written) }
+        if (init != null && !part.startsWith(init)) {
+            // Older partial downloads started with the first media segment. Keep those bytes and
+            // put the init segment in front instead of downloading them again.
+            if (part.length() > 0) {
+                val media = part.readBytes()
+                part.writeBytes(init + media)
+                written += init.size
+            } else {
+                part.writeBytes(init)
+                written = init.size.toLong()
+                index = 0
+            }
+        }
         set(id) { it.copy(filePath = part.path, segmentsTotal = items.size, segmentsDone = index, bytesDone = written) }
 
         FileOutputStream(part, true).use { out ->
@@ -714,6 +753,8 @@ object DownloadManager {
 
         val video = M3u8Helper2.hslLazy(M3u8Helper.M3u8Stream(variant.url.toString(), variant.format.height.takeIf { it > 0 }, headers), selectBest = true, requireAudio = false)
         val sound = M3u8Helper2.hslLazy(M3u8Helper.M3u8Stream(audio.url.toString(), null, headers), selectBest = true, requireAudio = false)
+        val videoInit = fetchInitSegment(video)
+        val audioInit = fetchInitSegment(sound)
 
         val base = targetBase(entry)
         val dir = HlsPackage.folderFor(base)
@@ -723,6 +764,8 @@ object DownloadManager {
         dir.mkdirs()
         val videoTrack = HlsTrack(dir, "video").apply { load() }
         val audioTrack = HlsTrack(dir, "audio").apply { load() }
+        videoInit?.let { videoTrack.saveInit(it) }
+        audioInit?.let { audioTrack.saveInit(it) }
         set(id) { it.copy(filePath = File(dir, HlsPackage.MASTER).path, segmentsTotal = total) }
 
         val meter = SpeedMeter(videoTrack.bytes + audioTrack.bytes)

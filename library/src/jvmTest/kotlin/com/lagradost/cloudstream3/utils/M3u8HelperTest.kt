@@ -27,6 +27,7 @@ class M3u8HelperTest {
             val body = when (path) {
                 "/a/b/index.m3u8" -> playlist(key = null).encodeToByteArray()
                 "/a/b/encrypted.m3u8" -> playlist(key = "/keys/k.bin").encodeToByteArray()
+                "/a/b/fmp4.m3u8" -> playlist(key = null, init = "init.mp4").encodeToByteArray()
                 "/a/b/seg0.ts", "/root/seg1.ts", "/proto/seg2.ts" -> segment
                 "/keys/k.bin" -> ByteArray(16)
                 else -> null
@@ -43,10 +44,12 @@ class M3u8HelperTest {
         server.stop(0)
     }
 
-    private fun playlist(key: String?): String = buildString {
+    private fun playlist(key: String?, init: String? = null): String = buildString {
         appendLine("#EXTM3U")
+        appendLine("#EXT-X-VERSION:6")
         appendLine("#EXT-X-TARGETDURATION:10")
         if (key != null) appendLine("#EXT-X-KEY:METHOD=AES-128,URI=\"$key\"")
+        if (init != null) appendLine("#EXT-X-MAP:URI=\"$init\"")
         appendLine("#EXTINF:10.0,")
         appendLine("seg0.ts")
         appendLine("#EXTINF:10.0,")
@@ -74,6 +77,16 @@ class M3u8HelperTest {
         for (index in 0 until data.size) {
             assertContentEquals(segment, data.resolveLink(index))
         }
+    }
+
+    @Test
+    fun hslLazyFindsTheInitSegmentOfAFragmentedMp4Playlist() = runBlocking {
+        val data = M3u8Helper2.hslLazy(
+            M3u8Helper.M3u8Stream("http://$host/a/b/fmp4.m3u8"),
+            requireAudio = false,
+        )
+
+        assertEquals("http://$host/a/b/init.mp4", data.initSegmentUrl)
     }
 
     @Test

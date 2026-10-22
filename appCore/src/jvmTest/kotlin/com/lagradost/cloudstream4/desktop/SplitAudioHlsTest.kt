@@ -44,9 +44,11 @@ class SplitAudioHlsTest {
         responseBody.use { it.write(bytes) }
     }
 
-    private fun media(names: List<String>, duration: Double) = buildString {
+    private fun media(names: List<String>, duration: Double, init: String? = null) = buildString {
         appendLine("#EXTM3U")
+        appendLine("#EXT-X-VERSION:${if (init != null) 6 else 3}")
         appendLine("#EXT-X-TARGETDURATION:${duration.toInt() + 1}")
+        if (init != null) appendLine("#EXT-X-MAP:URI=\"$init\"")
         names.forEach { appendLine("#EXTINF:$duration,"); appendLine(it) }
         appendLine("#EXT-X-ENDLIST")
     }.toByteArray()
@@ -129,6 +131,75 @@ class SplitAudioHlsTest {
             assertFalse(moved.file!!.parentFile!!.exists(), "the moved package folder is removed")
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-split" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun savesTheInitSegmentsOfAFragmentedMp4Package() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-fmp4").toString())
+        val folder = Files.createTempDirectory("cs-downloads-fmp4").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val videoInit = "ftyp-video-init".encodeToByteArray()
+        val audioInit = "ftyp-audio-init".encodeToByteArray()
+        val videoSegments = List(2) { i -> ByteArray(256) { (i + it).toByte() } }
+        val audioSegments = List(2) { i -> ByteArray(192) { (i * 3 + it).toByte() } }
+        val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
+            createContext("/fmp4/master.m3u8") { ex ->
+                val text = """
+                    #EXTM3U
+                    #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="eng",NAME="English",DEFAULT=YES,URI="audio.m3u8"
+                    #EXT-X-STREAM-INF:BANDWIDTH=900000,AUDIO="aac",RESOLUTION=1280x720
+                    720p/index.m3u8
+                """.trimIndent()
+                ex.send(text.toByteArray(), "application/vnd.apple.mpegurl")
+            }
+            createContext("/fmp4/720p/index.m3u8") {
+                it.send(media(videoSegments.indices.map { i -> "v$i.m4s" }, 4.0, init = "init.mp4"))
+            }
+            createContext("/fmp4/720p/init.mp4") { it.send(videoInit) }
+            videoSegments.indices.forEach { i -> createContext("/fmp4/720p/v$i.m4s") { it.send(videoSegments[i]) } }
+            createContext("/fmp4/audio.m3u8") {
+                it.send(media(audioSegments.indices.map { i -> "s$i.m4s" }, 3.0, init = "init.mp4"))
+            }
+            createContext("/fmp4/audio/init.mp4") { it.send(audioInit) }
+            // The audio playlist's relative init segment resolves to /fmp4/init.mp4
+            createContext("/fmp4/init.mp4") { it.send(audioInit) }
+            audioSegments.indices.forEach { i -> createContext("/fmp4/s$i.m4s") { it.send(audioSegments[i]) } }
+            start()
+        }
+        val base = "http://127.0.0.1:${server.address.port}"
+        val provider = object : MainAPI() {
+            override var name = "Fmp4Test"
+            override var mainUrl = base
+            override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+                callback(newExtractorLink(name, "Fmp4", "$base/fmp4/master.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
+                return true
+            }
+        }.apply { sourcePlugin = "test-fmp4" }
+        APIHolder.allProviders.add(provider)
+        try {
+            val episode = PlayableEpisode("fmp4", null, null, null)
+            DownloadManager.enqueue(DownloadRequest("Fmp4Test", "$base/movie", "Fmp4 Movie", null, null, episode))
+            val id = DownloadManager.idFor("Fmp4Test", "fmp4")
+            val entry = withTimeout(60_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == id && (it.status == DownloadStatus.Completed || it.status == DownloadStatus.Failed) } }
+            }.first { it.id == id }
+            assertEquals(DownloadStatus.Completed, entry.status, entry.error)
+            val dir = entry.file!!.parentFile
+
+            assertEquals(videoInit.toList(), File(dir, "video.init").readBytes().toList())
+            assertEquals(audioInit.toList(), File(dir, "audio.init").readBytes().toList())
+            assertEquals(videoSegments.sumOf { it.size }.toLong(), File(dir, "video.mp4").length())
+            assertEquals(audioSegments.sumOf { it.size }.toLong(), File(dir, "audio.mp4").length())
+            val videoPlaylist = File(dir, "video.m3u8").readText()
+            assertTrue("#EXT-X-MAP:URI=\"video.init\"" in videoPlaylist, videoPlaylist)
+            assertTrue("#EXT-X-BYTERANGE:${videoSegments[0].size}@0" in videoPlaylist, videoPlaylist)
+            assertTrue("#EXT-X-MAP:URI=\"audio.init\"" in File(dir, "audio.m3u8").readText())
+
+            DownloadManager.delete(id)
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-fmp4" } }
             server.stop(0)
         }
     }

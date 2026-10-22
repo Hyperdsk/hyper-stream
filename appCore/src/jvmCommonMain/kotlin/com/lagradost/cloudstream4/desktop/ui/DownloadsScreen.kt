@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -147,7 +148,12 @@ fun DownloadsScreen() {
                         )
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(first.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                first.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable { nav.open(Route.Details(first.apiName, first.parentUrl, first.title)) },
+                            )
                             val done = group.count { it.status == DownloadStatus.Completed }
                             Text(
                                 listOfNotNull(first.apiName, if (group.size > 1) "$done of ${group.size} downloaded" else null).joinToString(" · "),

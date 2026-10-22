@@ -11,13 +11,15 @@ import kotlin.math.ceil
  * one file, and local playlists address every segment by byte range. Both VLC and ExoPlayer
  * play the folder's master.m3u8 offline, with seeking.
  *
- * Folder layout: `video.ts`, `audio.ts` (or .aac, .mp4), an `.idx` file per track listing each
- * segment's duration and size (so an interrupted download resumes), and the playlists.
+ * Folder layout: `video.ts`, `audio.ts` (or .aac, .mp4), an optional `.init` file for fragmented
+ * MP4 streams, an `.idx` file per track listing each segment's duration and size (so an
+ * interrupted download resumes), and the playlists.
  */
 internal class HlsTrack(private val dir: File, private val name: String) {
     data class Segment(val duration: Double, val length: Long)
 
     private val index = File(dir, "$name.idx")
+    private val initFile = File(dir, "$name.init")
     val segments = mutableListOf<Segment>()
     private var data: File? = null
 
@@ -27,7 +29,9 @@ internal class HlsTrack(private val dir: File, private val name: String) {
     /** Picks up a previous run: keeps the segments its index lists and cuts off anything written after. */
     fun load() {
         segments.clear()
-        data = dir.listFiles()?.firstOrNull { it.name.startsWith("$name.") && it.extension !in setOf("idx", "m3u8") }
+        data = dir.listFiles()?.firstOrNull {
+            it.name.startsWith("$name.") && it.extension !in setOf("idx", "m3u8", "init")
+        }
         if (index.exists()) {
             index.readLines().mapNotNullTo(segments) { line ->
                 val (d, l) = line.split(' ').takeIf { it.size == 2 } ?: return@mapNotNullTo null
@@ -43,6 +47,11 @@ internal class HlsTrack(private val dir: File, private val name: String) {
         }
     }
 
+    /** Saves the fMP4 initialization segment, without which its media segments can't be decoded. */
+    fun saveInit(chunk: ByteArray) {
+        if (chunk.isNotEmpty()) initFile.writeBytes(chunk)
+    }
+
     fun append(chunk: ByteArray, duration: Double) {
         val file = data ?: File(dir, "$name.${extensionOf(chunk)}").also { data = it }
         FileOutputStream(file, true).use { it.write(chunk) }
@@ -54,12 +63,15 @@ internal class HlsTrack(private val dir: File, private val name: String) {
     /** Writes `name.m3u8`, every segment a byte range of the track file. */
     fun writePlaylist(): String {
         val file = checkNotNull(data) { "No $name data was downloaded." }
+        val hasInit = initFile.exists() && initFile.length() > 0
         val text = buildString {
             appendLine("#EXTM3U")
-            appendLine("#EXT-X-VERSION:4")
+            // EXT-X-MAP was added in version 5; keep older TS playlists at version 4
+            appendLine("#EXT-X-VERSION:${if (hasInit) 6 else 4}")
             appendLine("#EXT-X-PLAYLIST-TYPE:VOD")
             appendLine("#EXT-X-TARGETDURATION:${ceil(segments.maxOfOrNull { it.duration } ?: 10.0).toInt().coerceAtLeast(1)}")
             appendLine("#EXT-X-MEDIA-SEQUENCE:0")
+            if (hasInit) appendLine("#EXT-X-MAP:URI=\"${initFile.name}\"")
             var offset = 0L
             for (s in segments) {
                 appendLine("#EXTINF:${s.duration},")

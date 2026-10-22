@@ -79,6 +79,7 @@ object M3u8Helper2 {
         Regex("""#EXT-X-STREAM-INF:(?:(?:.*?(?:RESOLUTION=\d+x(\d+)).*?\s+(.*))|(?:.*?\s+(.*)))""")
     private val TS_EXTENSION_REGEX =
         Regex("""#EXTINF:(([0-9]*[.])?[0-9]+|).*\n(.+?\n)""") // fuck it we ball, who cares about the type anyways
+    private val MAP_URI_REGEX = Regex("URI=\"([^\"]+)\"")
 
     private fun absoluteExtensionDetermination(url: String): String? {
         val split = url.split("/")
@@ -186,6 +187,8 @@ object M3u8Helper2 {
         val allTsLinks: List<TsLink>,
         val relativeUrl: String,
         val headers: Map<String, String>,
+        /** The initialization segment listed by #EXT-X-MAP, absent for MPEG-TS playlists. */
+        val initSegmentUrl: String? = null,
     ) {
 
         val size get() = allTsLinks.size
@@ -342,6 +345,13 @@ object M3u8Helper2 {
         }
 
         val relativeUrl = getParentLink(playlistStream.streamUrl)
+        // Fragmented MP4 playlists keep their ftyp/moov data in a separate init segment.
+        // The media segments are unplayable without it.
+        val initSegmentUrl = playlistResponse.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("#EXT-X-MAP:") }
+            ?.let { MAP_URI_REGEX.find(it)?.groupValues?.getOrNull(1) }
+            ?.let { resolveUrl(playlistStream.streamUrl, it) }
         val allTsList = TS_EXTENSION_REGEX.findAll(playlistResponse + "\n").map { ts ->
             val time = ts.groupValues[1]
             val url = resolveUrl(playlistStream.streamUrl, ts.groupValues[3].trim())
@@ -356,7 +366,8 @@ object M3u8Helper2 {
             isEncrypted = encryptionState,
             allTsLinks = allTsList,
             relativeUrl = relativeUrl,
-            headers = playlistStream.headers
+            headers = playlistStream.headers,
+            initSegmentUrl = initSegmentUrl
         )
     }
 }
