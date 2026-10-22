@@ -93,6 +93,21 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     private var loadResponse: LoadResponse? = request.loadResponse
     private val autoSkipped = mutableSetOf<VideoSkipStamp>()
 
+    // Declared before init: init starts the first episode, and anything declared after it would be
+    // reset to its initial value once init finished
+    /** True while playing a link from the cache: if it fails, search again instead of trying the rest. */
+    private var startedFromCache = false
+
+    /**
+     * Bumped for each episode load and each source started. Results that arrive later for an
+     * earlier one (links, subtitles) are dropped instead of landing on what plays now.
+     */
+    private var loadToken = 0L
+    private var playToken = 0L
+    private val memoryKey = SourceMemory.key(request.apiName, request.parentUrl)
+    /** The background download of the provider's subtitles, see checkSubtitles. */
+    private var subtitleCheck: Job? = null
+
     init {
         loadEpisode(request.index, request.startMs)
         loadEpisodeList()
@@ -135,10 +150,17 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             }
             scope.launch {
                 p.state.distinctUntilChangedBy { it.ended }.collect { s ->
-                    if (s.ended) {
-                        saveProgress(finished = true)
-                        if (SettingsStore.state.value.autoPlayNext && hasNext) next()
+                    if (!s.ended) return@collect
+                    // A stream can also stop early (the connection ended): only the real end
+                    // counts as watched; earlier, carry on from there as after an error
+                    val nearEnd = s.lengthMs <= 0 || s.timeMs >= s.lengthMs - 60_000 || s.timeMs >= s.lengthMs * 0.95
+                    if (!nearEnd) {
+                        pendingStartMs = s.timeMs
+                        onSourceFailed()
+                        return@collect
                     }
+                    saveProgress(finished = true)
+                    if (SettingsStore.state.value.autoPlayNext && hasNext) next()
                 }
             }
             scope.launch {
@@ -149,11 +171,17 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         }
     }
 
-    /** True while playing a link from the cache: if it fails, search again instead of trying the rest. */
-    private var startedFromCache = false
+
+    /** Where playback should start or carry on: the playhead once it moved, else the resume point. */
+    private fun resumePosition(): Long = player?.state?.value?.timeMs?.takeIf { it > 0 } ?: pendingStartMs
+
+    /** "Reload links": search again from where the video was, not from the start. */
+    fun reload() = loadEpisode(current.index, resumePosition(), useCache = false)
 
     fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true, useCache: Boolean = true) {
         saveProgress()
+        val token = ++loadToken
+        playToken++
         linksJob?.cancel()
         player?.stop()
         StreamGateway.clear()
@@ -201,10 +229,16 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                     api.loadLinks(
                         data,
                         false,
-                        { sub -> update { copy(subtitles = (subtitles + sub).distinctBy { it.url }.toPersistentList()) } },
+                        { sub ->
+                            if (token == loadToken) update { copy(subtitles = (subtitles + sub).distinctBy { it.url }.toPersistentList()) }
+                        },
                         { link ->
-                            if (link.type.name != "TORRENT" && link.type.name != "MAGNET") {
+                            if (token == loadToken && link.type.name != "TORRENT" && link.type.name != "MAGNET") {
                                 update { copy(links = (links + link).distinctBy { it.url }.toPersistentList()) }
+                                // Every source tried so far failed: try this one as it arrives
+                                scope.launch {
+                                    if (token == loadToken && current.current == null && current.failed.isNotEmpty()) playBest()
+                                }
                             }
                         },
                     )
@@ -232,6 +266,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             }
             if (current.current == null) playBest()
             loader.join()
+            if (token != loadToken) return@launch
             update {
                 copy(
                     loadingLinks = false,
@@ -239,6 +274,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                 )
             }
             if (current.current == null && current.links.isNotEmpty()) playBest()
+            if (current.current == null && current.links.isNotEmpty() && current.error == null) {
+                update { copy(error = "None of the ${links.size} sources could be played.") }
+            }
             update { copy(foundAt = System.currentTimeMillis()) }
             LinkCache.put(request.apiName, data, current.links, current.subtitles, playingUrl())
         }
@@ -325,7 +363,6 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         return same + other
     }
 
-    private val memoryKey = SourceMemory.key(request.apiName, request.parentUrl)
 
     private fun matchesRemembered(link: ExtractorLink, last: RememberedSource): Boolean {
         val info = link.info()
@@ -360,7 +397,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             return
         }
         val link = current.links.getOrNull(index) ?: return
-        val start = if (current.current == null) pendingStartMs else p.state.value.timeMs
+        // A source that failed before playing leaves the playhead at 0: keep the resume point
+        val start = resumePosition()
+        playToken++
         update { copy(current = index, error = null) }
         // Single video files stream over several connections, playlists stream segment by segment
         val source = StreamGateway.prepare(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO).copy(
@@ -390,9 +429,12 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             else -> Unit
         }
         update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loading)) }
+        val token = playToken
         scope.launch {
             runCatching { SubtitleFiles.fetch(sub) }
                 .onSuccess { file ->
+                    // Another episode or source started meanwhile: don't put this one on it
+                    if (token != playToken) return@onSuccess
                     p.addSubtitle(file.toPath().toUri().toString())
                     update { copy(loadedSubtitles = loadedSubtitles.put(sub.url, SubtitleLoad.Loaded)) }
                 }
@@ -407,7 +449,6 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
      * a few at a time, so the list shows which ones work and picking one is instant. Waiting for
      * the first frame keeps this from slowing the start of the video.
      */
-    private var subtitleCheck: Job? = null
 
     private fun checkSubtitles() {
         val p = player ?: return
@@ -444,7 +485,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     private fun onSourceFailed() {
         // A downloaded file that won't play falls back to streaming
         if (current.offlineFile != null) {
-            loadEpisode(current.index, player?.state?.value?.timeMs ?: 0, allowOffline = false)
+            loadEpisode(current.index, resumePosition(), allowOffline = false)
             return
         }
         // The cached link stopped working (expired): search the sites again
@@ -462,6 +503,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             playLink(next)
         } else if (!current.loadingLinks) {
             update { copy(error = "None of the ${links.size} sources could be played.") }
+        } else {
+            // More sources are still coming: nothing plays until one arrives (see the link callback)
+            update { copy(current = null) }
         }
     }
 

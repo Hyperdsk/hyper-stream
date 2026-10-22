@@ -509,7 +509,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (ui.links.isNotEmpty()) OutlinedButton(onClick = { openMenu = "panel:Sources" }) { Text("Choose a source") }
-                        Button(onClick = { model.loadEpisode(ui.index) }) { Text("Reload links") }
+                        Button(onClick = { model.reload() }) { Text("Reload links") }
                     }
                 }
 

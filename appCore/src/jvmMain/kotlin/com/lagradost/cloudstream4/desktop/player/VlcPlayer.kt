@@ -194,6 +194,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
     override fun seekTo(ms: Long) {
         val length = _state.value.lengthMs
         val target = if (length > 0) ms.coerceIn(0, length) else ms.coerceAtLeast(0)
+        // After the end libVLC has stopped the input and ignores jumps: start it again first
+        if (_state.value.ended) player.controls().play()
         player.controls().setTime(target)
         _state.update { it.copy(timeMs = target, ended = false) }
     }
