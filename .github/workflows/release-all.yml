@@ -48,13 +48,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-          # The Mac script creates and fills the whole release before pushing its tag. Don't build
-          # anything again in that case. A draft or partial release is completed below.
+          # The Mac script can create and fill the whole release before pushing its tag, including
+          # as a draft for checking. Don't rebuild or publish that release; a partial release is
+          # completed below.
           if gh release view "$tag" >/dev/null 2>&1; then
-            draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
             count=$(gh release view "$tag" --json assets --jq '[.assets[] | select(.name | startswith("HyperStream-"))] | length')
-            if [ "$draft" = "false" ] && [ "$count" -ge 9 ]; then
-              echo "::notice::$tag is already published with all platform builds; nothing to do."
+            if [ "$count" -ge 9 ]; then
+              echo "::notice::$tag already has all platform builds; leaving it alone."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
