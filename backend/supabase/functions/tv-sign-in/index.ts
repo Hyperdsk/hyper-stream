@@ -1,8 +1,8 @@
 // Signs a TV in with the 8-digit code a signed-in phone or Mac showed (see hs_create_tv_code).
 // Deploy with "Verify JWT" off: the TV isn't signed in yet and calls it with the publishable key.
 // Returns a one-time sign-in token for that account, which the TV exchanges for its own session.
-// Each address gets a few wrong codes per 15 minutes (and everyone together a few hundred a minute),
-// so a live code can't be found by trying them all.
+// Each address gets a few wrong codes per 15 minutes (and everyone together a thousand a minute),
+// so a live code can't be found by trying them all (see hs_redeem_tv_code in schema.sql).
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const json = (body: unknown, status = 200) =>
@@ -30,29 +30,23 @@ Deno.serve(async (req) => {
   if (!key) return json({ error: "The function has no server key." }, 500);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, key, { auth: { persistSession: false } });
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const since = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-  const { count: mine } = await admin.from("hs_tv_attempts").select("*", { count: "exact", head: true }).eq("ip", ip).gt("at", since(15));
-  const { count: everyone } = await admin.from("hs_tv_attempts").select("*", { count: "exact", head: true }).gt("at", since(1));
-  if ((mine ?? 0) >= 10 || (everyone ?? 0) >= 300) {
-    return json({ error: "Too many wrong codes. Wait 15 minutes, then show a new code." }, 429);
+  // The address the platform's edge saw. X-Forwarded-For's first entry is whatever the caller
+  // wrote there, so it's only the last resort
+  const ip = req.headers.get("cf-connecting-ip")?.trim() ||
+    req.headers.get("x-real-ip")?.trim() ||
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown";
+  // Limits, the code's single use and noting a wrong try, all in one database step (schema.sql)
+  const { data: userId, error: redeemError } = await admin.rpc("hs_redeem_tv_code", { p_code: code, p_ip: ip });
+  if (redeemError) {
+    if (redeemError.message?.includes("too_many_attempts")) {
+      return json({ error: "Too many wrong codes. Wait 15 minutes, then show a new code." }, 429);
+    }
+    return json({ error: "Couldn't check the code. Try again." }, 500);
   }
-  // Used once: taken out of the table as it's read
-  const { data: row } = await admin
-    .from("hs_tv_codes")
-    .delete()
-    .eq("code", code)
-    .gt("expires_at", new Date().toISOString())
-    .select("user_id")
-    .maybeSingle();
-  if (!row) {
-    await admin.from("hs_tv_attempts").insert({ ip });
-    // Old attempts aren't needed once they're out of every window
-    await admin.from("hs_tv_attempts").delete().lt("at", since(60 * 24));
-    return json({ error: "That code is wrong or has expired. Show a new one." }, 400);
-  }
+  if (!userId) return json({ error: "That code is wrong or has expired. Show a new one." }, 400);
 
-  const { data: user, error: userError } = await admin.auth.admin.getUserById(row.user_id);
+  const { data: user, error: userError } = await admin.auth.admin.getUserById(userId as string);
   const email = user?.user?.email;
   if (userError || !email) return json({ error: "Couldn't find that account." }, 400);
 

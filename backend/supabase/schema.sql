@@ -26,6 +26,14 @@ create index if not exists hs_sync_items_pull on public.hs_sync_items (user_id, 
 alter table public.hs_sync_items drop constraint if exists hs_sync_items_kind_check;
 alter table public.hs_sync_items add constraint hs_sync_items_kind_check check (kind ~ '^[a-z]{1,32}$');
 
+-- Limits on what one row may hold. The app sends very long keys as their hash and keeps items
+-- over 64 KB on the device, so these only stop a client (or anyone with an account) from filling
+-- the database. "not valid": rows already stored aren't checked
+alter table public.hs_sync_items drop constraint if exists hs_sync_items_key_size;
+alter table public.hs_sync_items add constraint hs_sync_items_key_size check (length(item_key) <= 2048) not valid;
+alter table public.hs_sync_items drop constraint if exists hs_sync_items_data_size;
+alter table public.hs_sync_items add constraint hs_sync_items_data_size check (data is null or octet_length(data::text) <= 262144) not valid;
+
 alter table public.hs_sync_items enable row level security;
 
 drop policy if exists "Read own sync items" on public.hs_sync_items;
@@ -57,6 +65,11 @@ as $$
 declare
   changed integer;
 begin
+  -- Far more than a real library needs; stops one account from filling the database
+  if jsonb_array_length(items) > 1000
+     or (select count(*) from public.hs_sync_items where user_id = auth.uid()) > 200000 then
+    raise exception 'Too many sync items';
+  end if;
   insert into public.hs_sync_items (user_id, kind, item_key, data, deleted, client_updated_at, updated_at)
   select auth.uid(), i ->> 'kind', i ->> 'key', i -> 'data', coalesce((i ->> 'deleted')::boolean, false),
          least((i ->> 'at')::bigint, (extract(epoch from now()) * 1000)::bigint + 300000), now()
@@ -123,4 +136,37 @@ create table if not exists public.hs_tv_attempts (
   at timestamptz not null default now()
 );
 create index if not exists hs_tv_attempts_by_ip on public.hs_tv_attempts (ip, at);
+create index if not exists hs_tv_attempts_by_time on public.hs_tv_attempts (at);
 alter table public.hs_tv_attempts enable row level security;
+
+-- Takes a TV code (once) and returns its account, or null for a wrong or expired code. Checking
+-- the limits, using the code and noting a wrong try happen in one step, one call at a time, so
+-- many calls at once can't get past the limits. Each address gets 10 wrong codes per 15 minutes;
+-- everyone together 1000 a minute, which keeps guessing a live code (10 minutes, 1 in 100 million
+-- a try) impractical even from many addresses, while leaving plenty of room for real sign-ins.
+create or replace function public.hs_redeem_tv_code(p_code text, p_ip text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  found uuid;
+begin
+  perform pg_advisory_xact_lock(hashtext('hs_redeem_tv_code'));
+  if (select count(*) from public.hs_tv_attempts where ip = p_ip and at > now() - interval '15 minutes') >= 10
+     or (select count(*) from public.hs_tv_attempts where at > now() - interval '1 minute') >= 1000 then
+    raise exception 'too_many_attempts';
+  end if;
+  delete from public.hs_tv_codes where code = p_code and expires_at > now() returning user_id into found;
+  if found is null then
+    insert into public.hs_tv_attempts (ip) values (p_ip);
+    -- Old attempts aren't needed once they're out of every window
+    delete from public.hs_tv_attempts where at < now() - interval '1 day';
+  end if;
+  return found;
+end;
+$$;
+
+revoke all on function public.hs_redeem_tv_code(text, text) from public, anon, authenticated;
+grant execute on function public.hs_redeem_tv_code(text, text) to service_role;
