@@ -43,10 +43,21 @@ import java.util.concurrent.Executors
  * proxy, which adds the headers. HLS playlists are rewritten so every segment, key and
  * variant playlist also goes through the proxy with the same headers.
  *
- * Only listens on the loopback address and only serves urls registered by this app.
+ * Only listens on the loopback address, and only fetches a session's own url, the urls its
+ * playlists list, and paths a player resolves against its own url (on the same host).
  */
 object StreamProxy {
     private val sessions = ConcurrentHashMap<String, Map<String, String>>()
+
+    /** Each session's own url, as registered. */
+    private val originals = ConcurrentHashMap<String, String>()
+
+    /**
+     * For each session, per playlist url: the urls its current and previous versions list. Live
+     * playlists change every few seconds; the previous version still counts, since the player may
+     * be reading a segment the newest one has just dropped.
+     */
+    private val references = ConcurrentHashMap<String, ConcurrentHashMap<String, Pair<Set<String>, Set<String>>>>()
 
     /** Counts bytes and open connections to the hosts, for [stats]. */
     internal object meter {
@@ -162,12 +173,16 @@ object StreamProxy {
         }
         val session = UUID.randomUUID().toString().replace("-", "")
         sessions[session] = all
+        originals[session] = url
         if (parallel) parallelSessions += session
         return local(session, url)
     }
 
     fun clear() {
         sessions.clear()
+        originals.clear()
+        references.clear()
+        playlistOrders.clear()
         parallelSessions.clear()
         streams.values.forEach { (it as? ParallelStream)?.close() }
         streams.clear()
@@ -202,7 +217,9 @@ object StreamProxy {
             val query = exchange.requestURI.rawQuery?.let { "?$it" } ?: ""
             runCatching { URI(original).resolve(rest + query).toString() }.getOrNull()
         } else original
-        if (headers == null || target == null || target.toHttpUrlOrNull() == null) {
+        if (headers == null || target == null || target.toHttpUrlOrNull() == null || original == null ||
+            !allowed(session, original) || (target != original && !allowed(session, target) && !sameHost(target, original))
+        ) {
             exchange.sendResponseHeaders(404, -1)
             return
         }
@@ -278,6 +295,16 @@ object StreamProxy {
                 }
             }
         }
+    }
+
+    /** Whether [url] is the session's own url or one of its playlists lists, so the proxy may fetch it with the session's headers. */
+    private fun allowed(session: String, url: String): Boolean =
+        originals[session] == url || references[session]?.values?.any { (now, before) -> url in now || url in before } == true
+
+    private fun sameHost(a: String, b: String): Boolean {
+        val x = a.toHttpUrlOrNull() ?: return false
+        val y = b.toHttpUrlOrNull() ?: return false
+        return x.scheme == y.scheme && x.host == y.host && x.port == y.port
     }
 
     /** Serves a video file through [ParallelStream]. False when the host can't do ranges. */
@@ -382,8 +409,25 @@ object StreamProxy {
     }
 
     private fun segment(url: String, headers: Map<String, String>): Deferred<Segment> = synchronized(segments) {
-        segments.getOrPut(url) { segmentScope.async { segmentPermits.withPermit { fetchSegment(url, headers) } } }
+        segments.getOrPut(url) { segmentScope.async { segmentPermits.withPermit { fetchSegment(url, headers) }.also { trimSegments() } } }
     }
+
+    /** Fetched-ahead segments are kept in memory: at most [MAX_SEGMENT_BYTES] of them, least recently used out first. */
+    private fun trimSegments() = synchronized(segments) {
+        var total = segments.values.sumOf { s -> if (s.isCompleted && !s.isCancelled) runCatching { s.getCompleted().bytes.size.toLong() }.getOrDefault(0) else 0L }
+        val iterator = segments.entries.iterator()
+        while (total > MAX_SEGMENT_BYTES && segments.size > 4 && iterator.hasNext()) {
+            val (_, segment) = iterator.next()
+            if (!segment.isCompleted) continue
+            total -= runCatching { segment.getCompleted().bytes.size.toLong() }.getOrDefault(0)
+            iterator.remove()
+        }
+    }
+
+    private const val MAX_SEGMENT_BYTES = 256L shl 20
+
+    /** Each media playlist's segment order, "session|playlist url", to forget segments a live playlist has dropped. */
+    private val playlistOrders = ConcurrentHashMap<String, List<String>>()
 
     private fun countedBytes(input: java.io.InputStream): ByteArray = input.use {
         val out = java.io.ByteArrayOutputStream()
@@ -423,17 +467,21 @@ object StreamProxy {
     /** Points every uri in the playlist at this proxy, resolved against the playlist's own url. */
     internal fun rewritePlaylist(text: String, playlistUrl: String, session: String): String {
         val base = URI(playlistUrl)
-        fun resolve(ref: String): String = local(session, base.resolve(ref.trim()).toString())
+        val listed = mutableSetOf<String>()
+        fun resolve(ref: String): String = base.resolve(ref.trim()).toString().let { listed += it; local(session, it) }
 
-        // A media playlist: remember the segment order, for fetching ahead
+        // A media playlist: remember the segment order, for fetching ahead. A live playlist is read
+        // again every few seconds: segments it no longer lists are forgotten, or this grows forever
         if (text.contains("#EXTINF")) {
             val order = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
                 .mapNotNull { runCatching { base.resolve(it).toString() }.getOrNull() }.toList()
             val index = segmentOrder.getOrPut(session) { ConcurrentHashMap() }
+            val previous = playlistOrders.put("$session|$playlistUrl", order)
+            previous?.let { old -> (old.toSet() - order.toSet()).forEach { index.remove(it) } }
             order.forEachIndexed { i, url -> index[url] = order to i }
         }
 
-        return text.lineSequence().joinToString("\n") { line ->
+        val rewritten = text.lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
@@ -447,5 +495,8 @@ object StreamProxy {
                 else -> resolve(trimmed)
             }
         }
+        val lists = references.getOrPut(session) { ConcurrentHashMap() }
+        lists[playlistUrl] = listed to (lists[playlistUrl]?.first ?: emptySet())
+        return rewritten
     }
 }

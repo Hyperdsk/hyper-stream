@@ -15,7 +15,9 @@ import kotlin.test.assertTrue
 class VlcSubtitleTest {
     @Test
     fun subtitleIsDrawnIntoFrames() {
-        val video = System.getenv("CLOUDSTREAM_VLC_SUBTEST") ?: return println("Skipping")
+        val video = System.getenv("CLOUDSTREAM_VLC_SUBTEST")
+        org.junit.Assume.assumeTrue("CLOUDSTREAM_VLC_SUBTEST not set", video != null)
+        video!!
         val srt = File(System.getenv("CLOUDSTREAM_VLC_SRT"))
         val out = File("/tmp/cs-subtest.txt").apply { writeText("") }
         System.setProperty("cloudstream.dataDir", "/tmp/cs-subtest-data")

@@ -136,6 +136,7 @@ class MainActivity : AppCompatActivity() {
             // The player fills the screen: no system bars, and landscape on phones and tablets
             val inPlayer = nav.current is Route.Player
             DisposableEffect(inPlayer) {
+                playerOpen = inPlayer
                 immersive(inPlayer)
                 onDispose { }
             }
@@ -149,6 +150,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Whether the player is the current screen, for picture-in-picture. */
+    private var playerOpen = false
+
+    /**
+     * Leaving the app (Home, Recents) while a video plays on a phone or tablet: keep it playing in
+     * a small floating window. TVs have no such window; there the video pauses as before.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val engine = (application as CloudStreamApplication).engine
+        if (Platform.isTv || !playerOpen || !engine.state.value.playing) return
+        if (!packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        runCatching {
+            enterPictureInPictureMode(
+                android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build()
+            )
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        com.lagradost.cloudstream4.desktop.PictureInPicture.active.value = isInPictureInPictureMode
     }
 
     private fun immersive(on: Boolean) {

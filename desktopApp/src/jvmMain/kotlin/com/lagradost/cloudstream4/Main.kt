@@ -16,7 +16,13 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.lagradost.cloudstream4.compose.LocalFocusOutlineDefault
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.lagradost.cloudstream4.desktop.Platform
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.player.VlcPlayer
 import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import com.lagradost.cloudstream4.desktop.ui.CloudStreamApp
@@ -54,34 +60,44 @@ fun main() {
         }
         val nav = rememberNavigator()
         val store = remember { ModelStore() }
+        var confirmQuit by remember { mutableStateOf(false) }
+        fun quit() {
+            vlc?.release()
+            // Watch progress saved in the background a moment ago, not lost on the way out
+            com.lagradost.cloudstream4.desktop.data.JsonFile.flushAll()
+            exitApplication()
+        }
 
         Window(
             onCloseRequest = {
-                vlc?.release()
-                exitApplication()
+                // Closing stops downloads (they continue, paused, next time): say so first
+                if (DownloadManager.anyActive) confirmQuit = true else quit()
             },
             title = "Hyper Stream",
             icon = appIcon,
             state = windowState,
         ) {
             window.minimumSize = java.awt.Dimension(900, 600)
+            // Cmd on a Mac; Windows and Linux use Ctrl (their Meta key is the Windows/Super key, taken by the system)
+            fun shortcut(key: Key, shift: Boolean = false) =
+                if (Platform.isMac) KeyShortcut(key, meta = true, shift = shift) else KeyShortcut(key, ctrl = true, shift = shift)
             MenuBar {
                 Menu("Go") {
-                    Item("Home", shortcut = KeyShortcut(Key.One, meta = true)) { nav.open(Route.Home) }
+                    Item("Home", shortcut = shortcut(Key.One)) { nav.open(Route.Home) }
                     // Movies, TV Shows and Anime, when an installed extension has them
                     com.lagradost.cloudstream4.desktop.ui.rememberAvailableSections().forEachIndexed { i, section ->
                         val key = listOf(Key.One, Key.Two, Key.Three)[i]
-                        Item(section.label, shortcut = KeyShortcut(key, meta = true, shift = true)) {
+                        Item(section.label, shortcut = shortcut(key, shift = true)) {
                             nav.open(Route.Section(section))
                         }
                     }
-                    Item("Search", shortcut = KeyShortcut(Key.F, meta = true)) { nav.open(Route.Search) }
-                    Item("Library", shortcut = KeyShortcut(Key.Two, meta = true)) { nav.open(Route.Library) }
-                    Item("Downloads", shortcut = KeyShortcut(Key.Three, meta = true)) { nav.open(Route.Downloads) }
-                    Item("Extensions", shortcut = KeyShortcut(Key.Four, meta = true)) { nav.open(Route.Extensions) }
-                    Item("Settings", shortcut = KeyShortcut(Key.Comma, meta = true)) { nav.open(Route.Settings) }
+                    Item("Search", shortcut = shortcut(Key.F)) { nav.open(Route.Search) }
+                    Item("Library", shortcut = shortcut(Key.Two)) { nav.open(Route.Library) }
+                    Item("Downloads", shortcut = shortcut(Key.Three)) { nav.open(Route.Downloads) }
+                    Item("Extensions", shortcut = shortcut(Key.Four)) { nav.open(Route.Extensions) }
+                    Item("Settings", shortcut = shortcut(Key.Comma)) { nav.open(Route.Settings) }
                     Separator()
-                    Item("Back", shortcut = KeyShortcut(Key.LeftBracket, meta = true)) { nav.back() }
+                    Item("Back", shortcut = shortcut(Key.LeftBracket)) { nav.back() }
                 }
             }
 
@@ -93,6 +109,15 @@ fun main() {
                 ) {
                     Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
                         CloudStreamApp(nav, store, vlc)
+                        if (confirmQuit) {
+                            androidx.compose.material3.AlertDialog(
+                                onDismissRequest = { confirmQuit = false },
+                                title = { Text("Downloads are still running") },
+                                text = { Text("Quitting pauses them. They go on from where they stopped when you resume them.") },
+                                confirmButton = { TextButton(onClick = { DownloadManager.pauseEverything(); quit() }) { Text("Quit") } },
+                                dismissButton = { TextButton(onClick = { confirmQuit = false }) { Text("Keep downloading") } },
+                            )
+                        }
                     }
                 }
             }

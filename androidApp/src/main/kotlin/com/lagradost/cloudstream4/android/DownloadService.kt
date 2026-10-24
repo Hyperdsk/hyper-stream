@@ -37,10 +37,17 @@ class DownloadService : Service() {
         super.onCreate()
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW))
-        ServiceCompat.startForeground(
-            this, NOTIFICATION, notification(DownloadManager.entries.value.active()),
-            if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
-        )
+        try {
+            ServiceCompat.startForeground(
+                this, NOTIFICATION, notification(DownloadManager.entries.value.active()),
+                if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+            )
+        } catch (e: Exception) {
+            // Android refuses once today's background time is used up (see onTimeout): downloads
+            // then go on only while the app is open
+            stopSelf()
+            return
+        }
         scope.launch {
             DownloadManager.entries
                 .distinctUntilChangedBy { list -> list.active().map { it.id to ((it.progress ?: 0f) * 100).toInt() } }
@@ -56,7 +63,35 @@ class DownloadService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_NOT_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_PAUSE) DownloadManager.pauseEverything()
+        return START_NOT_STICKY
+    }
+
+    /**
+     * Android 15 and later give a data sync service 6 hours a day, then call this, and close the
+     * app if the service doesn't stop within seconds. Pause the downloads, say why, and stop.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        DownloadManager.pauseEverything()
+        getSystemService(NotificationManager::class.java).notify(
+            PAUSED_NOTIFICATION,
+            NotificationCompat.Builder(this, CHANNEL)
+                .setSmallIcon(R.drawable.ic_launcher_monochrome)
+                .setContentTitle("Downloads paused")
+                .setContentText("Android allows downloads in the background for 6 hours a day. Open Hyper Stream to go on.")
+                .setContentIntent(openApp())
+                .setAutoCancel(true)
+                .build(),
+        )
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun openApp() = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
 
     override fun onDestroy() {
         scope.cancel()
@@ -71,9 +106,8 @@ class DownloadService : Service() {
             else -> "Downloading ${active.size} videos"
         }
         val progress = first?.progress
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE,
+        val pause = PendingIntent.getService(
+            this, 1, Intent(this, DownloadService::class.java).setAction(ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
@@ -81,7 +115,8 @@ class DownloadService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setContentIntent(open)
+            .setContentIntent(openApp())
+            .addAction(0, if (active.size > 1) "Pause all" else "Pause", pause)
             .setProgress(100, ((progress ?: 0f) * 100).toInt(), progress == null)
             .build()
     }
@@ -89,6 +124,8 @@ class DownloadService : Service() {
     companion object {
         private const val CHANNEL = "downloads"
         private const val NOTIFICATION = 1001
+        private const val PAUSED_NOTIFICATION = 1002
+        private const val ACTION_PAUSE = "com.lagradost.cloudstream4.android.PAUSE_DOWNLOADS"
 
         private fun List<DownloadEntry>.active() =
             filter { it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued }

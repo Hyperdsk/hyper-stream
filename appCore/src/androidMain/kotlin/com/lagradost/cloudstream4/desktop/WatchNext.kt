@@ -30,12 +30,25 @@ object WatchNext {
     const val SCHEME = "hyperstream"
     private const val HOST = "resume"
 
+    /**
+     * A random value only this install knows, put in every card's link. Any web page or app can
+     * open hyperstream://resume links; without the key, one would start playing a title on its own.
+     */
+    private val linkKey: String by lazy {
+        val file = File(com.lagradost.cloudstream4.desktop.data.AppDirs.data, "resume-link-key")
+        file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.length >= 32 }
+            ?: (java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()).replace("-", "").also { file.writeText(it) }
+    }
+
     /** The link a card opens, and how the app reads it back. */
     fun linkFor(apiName: String, parentUrl: String): Uri =
-        Uri.Builder().scheme(SCHEME).authority(HOST).appendQueryParameter("api", apiName).appendQueryParameter("url", parentUrl).build()
+        Uri.Builder().scheme(SCHEME).authority(HOST).appendQueryParameter("api", apiName).appendQueryParameter("url", parentUrl)
+            .appendQueryParameter("k", linkKey).build()
 
     fun parse(uri: Uri?): Pair<String, String>? {
         if (uri == null || uri.scheme != SCHEME || uri.host != HOST) return null
+        // Not from one of this app's own cards
+        if (uri.getQueryParameter("k") != linkKey) return null
         val api = uri.getQueryParameter("api") ?: return null
         val url = uri.getQueryParameter("url") ?: return null
         return api to url

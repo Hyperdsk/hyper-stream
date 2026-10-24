@@ -61,6 +61,12 @@ data class SyncStore(
      */
     @JsonProperty("pendingEmail") val pendingEmail: String? = null,
     @JsonProperty("pendingAt") val pendingAt: Long? = null,
+    /** The account this device last synced with, kept after signing out, to notice a switch to another one. */
+    @JsonProperty("lastUserId") val lastUserId: String? = null,
+    /** Signed in to a different account than before: nothing syncs until the user says what to do with this device's library. */
+    @JsonProperty("awaitingChoice") val awaitingChoice: Boolean = false,
+    /** Repositories from other devices the user chose not to add here. */
+    @JsonProperty("declinedRepositories") val declinedRepositories: Set<String> = emptySet(),
 )
 
 data class SyncUiState(
@@ -80,6 +86,13 @@ data class SyncUiState(
     val resetSentTo: String? = null,
     /** Signed in to reset the password: ask for the new one. */
     val choosingPassword: Boolean = false,
+    /** Signed in to another account than before: ask whether to keep this device's library in it. */
+    val askMerge: Boolean = false,
+    /**
+     * Repositories the account's other devices use that aren't added here. They run code, so they're
+     * only added when the user says so, never just because the account lists them.
+     */
+    val suggestedRepositories: List<RepositoryData> = emptyList(),
 ) {
     val signedIn: Boolean get() = email != null
 }
@@ -114,16 +127,23 @@ object SyncManager {
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t -> System.err.println("Sync: $t") },
     )
     private val refreshLock = Mutex()
-    private val file = jsonFile<SyncStore>("sync.json") { SyncStore() }
+    // Holds the account's session: readable by this user only
+    private val file = jsonFile<SyncStore>("sync.json", private = true) { SyncStore() }
+    @Volatile
     private var store = file.read()
     private val lock = Mutex()
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var loop: Job? = null
 
-    private val _ui = MutableStateFlow(SyncUiState(email = store.session?.email, lastSyncedAt = store.lastSyncedAt))
+    private val _ui = MutableStateFlow(
+        SyncUiState(email = store.session?.email, lastSyncedAt = store.lastSyncedAt, askMerge = store.session != null && store.awaitingChoice)
+    )
     val ui: StateFlow<SyncUiState> = _ui.asStateFlow()
 
-    private fun save(update: (SyncStore) -> SyncStore) {
+    // Sign-in, sync passes and the settings screen all save from their own threads
+    private val saveLock = Any()
+
+    private fun save(update: (SyncStore) -> SyncStore) = synchronized(saveLock) {
         store = update(store)
         file.write(store)
     }
@@ -205,6 +225,7 @@ object SyncManager {
     }
 
     fun cancelReset() {
+        SignInRedirect.stop()
         save { it.copy(pendingEmail = null, pendingAt = null) }
         _ui.update { it.copy(resetSentTo = null, error = null) }
     }
@@ -351,14 +372,62 @@ object SyncManager {
     fun skipNewPassword() = _ui.update { it.copy(choosingPassword = false) }
 
     private fun signedIn(session: SyncSession, email: String?, choosingPassword: Boolean = false) {
-        // A new account starts from this device's data; known items from another account don't apply
-        val previous = store.session?.userId
-        save { if (previous == session.userId) it.copy(session = session) else SyncStore(session = session.copy(email = session.email ?: email)) }
-        _ui.update { SyncUiState(email = session.email ?: email, choosingPassword = choosingPassword) }
+        SignInRedirect.stop()
+        val current = store.session?.userId
+        // Another account than the one this device used before, with a library of its own: ask
+        // before sending it there, instead of merging two people's libraries without a word
+        val before = current ?: store.lastUserId
+        val library = LibraryStore.state.value
+        val switching = before != null && before != session.userId && (library.history.isNotEmpty() || library.bookmarks.isNotEmpty())
+        save {
+            // The link that signed in is used up: it can't sign this device in again
+            if (current == session.userId) it.copy(session = session, pendingEmail = null, pendingAt = null)
+            // A new account starts from this device's data; known items from another account don't apply
+            else SyncStore(
+                session = session.copy(email = session.email ?: email),
+                lastUserId = session.userId,
+                awaitingChoice = switching,
+                declinedRepositories = if (before == session.userId) it.declinedRepositories else emptySet(),
+            )
+        }
+        _ui.update { SyncUiState(email = session.email ?: email, choosingPassword = choosingPassword, askMerge = switching) }
         requestSync()
     }
 
+    /**
+     * After signing in to another account: [keepThisDevice] adds this device's library to it;
+     * otherwise this device's progress, library, searches and remembered sources are replaced by
+     * the account's.
+     */
+    fun chooseMerge(keepThisDevice: Boolean) = scope.launch {
+        lock.withLock {
+            if (!keepThisDevice) {
+                LibraryStore.clearAll()
+                SearchHistory.clear()
+                SourceMemory.clear()
+            }
+            save { it.copy(awaitingChoice = false) }
+        }
+        _ui.update { it.copy(askMerge = false) }
+        requestSync()
+    }
+
+    /** Adds the repositories the account's other devices use; their extensions then install here too. */
+    fun addSuggestedRepositories() = scope.launch {
+        _ui.value.suggestedRepositories.forEach { ExtensionManager.addRepositoryData(it) }
+        _ui.update { it.copy(suggestedRepositories = emptyList()) }
+        requestSync()
+    }
+
+    /** Leaves the other devices' repositories off this one, and stops suggesting them. */
+    fun declineSuggestedRepositories() {
+        val urls = _ui.value.suggestedRepositories.map { it.url }
+        save { it.copy(declinedRepositories = it.declinedRepositories + urls) }
+        _ui.update { it.copy(suggestedRepositories = emptyList()) }
+    }
+
     fun cancelCode() {
+        SignInRedirect.stop()
         save { it.copy(pendingEmail = null, pendingAt = null) }
         _ui.update { it.copy(codeSentTo = null, error = null) }
     }
@@ -366,7 +435,7 @@ object SyncManager {
     /** Stops syncing on this device. Its data stays as it is. */
     fun signOut() = scope.launch {
         val session = store.session
-        lock.withLock { save { SyncStore() } }
+        lock.withLock { save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) } }
         _ui.value = SyncUiState()
         if (session != null) SupabaseClient.signOut(session)
     }
@@ -398,8 +467,8 @@ object SyncManager {
             if (store.session?.refreshToken != current.refreshToken) return@withLock store.session
             fresh.also { save { it.copy(session = fresh) } }
         } catch (e: SyncAuthException) {
-        // The session was revoked or expired for good: sign in again
-        save { SyncStore() }
+            // The session was revoked or expired for good: sign in again
+            save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) }
             _ui.value = SyncUiState(error = "Signed out of sync. Sign in again to keep syncing.")
             null
         }
@@ -411,7 +480,8 @@ object SyncManager {
     // ---------- Syncing ----------
 
     suspend fun syncNow() = lock.withLock {
-        if (store.session == null) return@withLock
+        // Waiting for the user to say what happens to this device's library in a new account
+        if (store.session == null || store.awaitingChoice) return@withLock
         _ui.update { it.copy(syncing = true) }
         try {
             // Inside the try: refreshing needs the network, which may be down
@@ -440,6 +510,7 @@ object SyncManager {
         val local = localItems()
         val known = store.known.toMutableMap()
         val pending = store.pending.toMutableMap()
+        val settingNames = syncedSettings(SettingsStore.state.value).keys
         // Removals from elsewhere that finish in the background (repositories, extensions): not
         // to be mistaken for local items in this pass's push
         val removedNow = mutableSetOf<String>()
@@ -448,14 +519,18 @@ object SyncManager {
             val mine = local[id]
             if (item.deleted) {
                 pending.remove(id)
+                // Settings always have a value: a removal can only come from a version that didn't know the setting
+                if (item.kind == SETTING || item.kind == SETTINGS) continue
                 val myAt = mine?.at ?: known[id]?.at ?: 0
                 if (mine != null && item.at >= myAt) {
-                    removeLocal(item.kind, item.key)
+                    removeLocal(item.kind, mine.rawKey)
                     removedNow += id
                 }
                 if (mine == null || item.at >= myAt) known.remove(id)
                 continue
             }
+            // A setting this version doesn't have: leave it to the devices that do
+            if (item.kind == SETTING && item.key !in settingNames) continue
             val value = decode(item.kind, item.data) ?: continue
             val hash = hashOf(value)
             if (mine != null && hashOf(mine.data) == hash) {
@@ -467,8 +542,14 @@ object SyncManager {
             val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty()
             val myAt = mine?.at ?: known[id]?.at ?: 0
             if ((mine == null && !removedHere) || item.at > myAt) {
-                if (applyLocal(item.kind, item.key, value)) known[id] = KnownItem(hash, item.at)
-                else pending[id] = PendingItem(item.kind, item.key, item.data, item.at)
+                val raw = mine?.rawKey ?: rawKey(item.kind, item.key, value) ?: continue
+                when (applyLocal(item.kind, raw, value)) {
+                    Applied.YES -> known[id] = KnownItem(hash, item.at)
+                    Applied.LATER -> pending[id] = PendingItem(item.kind, raw, item.data, item.at)
+                    // This version can't hold that value (a newer device's choice): keep ours, but don't
+                    // send it back over theirs
+                    Applied.NO -> if (mine != null) known[id] = KnownItem(hashOf(mine.data), item.at)
+                }
             }
         }
         val cursor = remote.maxOfOrNull { it.serverTime } ?: store.cursor
@@ -476,6 +557,7 @@ object SyncManager {
 
         // Extensions waiting for their repository to load
         retryPending()
+        updateSuggestions()
 
         // Push what changed here since the last pass
         val now = System.currentTimeMillis()
@@ -484,7 +566,10 @@ object SyncManager {
         val next = store.known.toMutableMap()
         for ((id, item) in current) {
             if (id in store.pending || id in removedNow) continue
-            val hash = hashOf(item.data)
+            val json = canonical.writeValueAsString(item.data)
+            // Not worth a row, and too big for the server to take: this item stays on this device
+            if (json.length > MAX_ITEM_CHARS) continue
+            val hash = json.hashCode()
             val was = next[id]
             if (was == null || was.hash != hash) {
                 val at = item.at ?: now
@@ -493,10 +578,12 @@ object SyncManager {
             }
         }
         // Gone since the last pass: a deletion. Not while a data file is unreadable, or its whole
-        // contents would be deleted on every device
+        // contents would be deleted on every device. Never for settings, which are never removed:
+        // one missing here is one this version doesn't have
         val deletions = if (DataHealth.unreadable.isEmpty()) next.keys - current.keys - store.pending.keys else emptySet()
         for (id in deletions) {
             val (kind, key) = id.split('/', limit = 2)
+            if (kind == SETTING || kind == SETTINGS) continue
             changes += LocalChange(kind, key, null, deleted = true, at = now)
             next.remove(id)
         }
@@ -506,7 +593,13 @@ object SyncManager {
         }
     }
 
-    private data class LocalItem(val kind: String, val key: String, val data: Any, val at: Long?)
+    /**
+     * [key] is the item's key as sent; [rawKey] is the same key as this device's stores use. They
+     * differ only for very long keys, which are sent as a hash (see [syncKey]).
+     */
+    private data class LocalItem(val kind: String, val rawKey: String, val data: Any, val at: Long?) {
+        val key: String get() = syncKey(rawKey)
+    }
 
     /** Everything that syncs, as it is on this device now, keyed "kind/key". */
     private fun localItems(): Map<String, LocalItem> {
@@ -525,6 +618,24 @@ object SyncManager {
             items += LocalItem(EXTENSION, "$repo|${plugin.internalName}", mapOf("internalName" to plugin.internalName, "name" to plugin.name, "repositoryUrl" to repo), null)
         }
         return items.associateBy { "${it.kind}/${it.key}" }
+    }
+
+    /**
+     * The key this device's stores use for a hashed [key] from another device, taken from the item
+     * itself. Null when it can't be told (a remembered source for a title this device doesn't have).
+     */
+    private fun rawKey(kind: String, key: String, value: Any): String? {
+        if (!key.startsWith(HASHED_KEY)) return key
+        @Suppress("UNCHECKED_CAST")
+        val raw = when (kind) {
+            HISTORY -> LibraryStore.historyKey(value as HistoryEntry)
+            BOOKMARK -> LibraryStore.bookmarkKey(value as Bookmark)
+            SEARCH -> SearchHistory.key((value as SearchHistoryEntry).query)
+            REPOSITORY -> (value as RepositoryData).url
+            EXTENSION -> (value as Map<String, Any?>).let { "${it["repositoryUrl"]}|${it["internalName"]}" }
+            else -> null
+        }
+        return raw?.takeIf { syncKey(it) == key }
     }
 
     private fun syncedSettings(settings: AppSettings): Map<String, Any?> =
@@ -553,33 +664,44 @@ object SyncManager {
         }
     }.getOrNull()
 
-    /** Applies another device's version here. False when it can't be applied yet. */
+    private enum class Applied { YES, LATER, NO }
+
+    /** Applies another device's version here: done, not yet (try again on later passes), or not possible in this version. */
     @Suppress("UNCHECKED_CAST")
-    private suspend fun applyLocal(kind: String, key: String, value: Any): Boolean = when (kind) {
-        HISTORY -> { LibraryStore.applyRemoteHistory(key, value as HistoryEntry); true }
-        BOOKMARK -> { LibraryStore.applyRemoteBookmark(key, value as Bookmark); true }
-        SOURCE -> { SourceMemory.applyRemote(key, value as RememberedSource); true }
-        SETTINGS -> { mergeSettings(value as Map<String, Any?>); true }
-        SETTING -> {
-            if (key !in deviceSettings) mergeSettings(mapOf(key to (value as Map<String, Any?>)["value"]))
-            true
+    private suspend fun applyLocal(kind: String, key: String, value: Any): Applied = when (kind) {
+        HISTORY -> { LibraryStore.applyRemoteHistory(key, value as HistoryEntry); Applied.YES }
+        BOOKMARK -> { LibraryStore.applyRemoteBookmark(key, value as Bookmark); Applied.YES }
+        SOURCE -> { SourceMemory.applyRemote(key, value as RememberedSource); Applied.YES }
+        SETTINGS -> { mergeSettings(value as Map<String, Any?>); Applied.YES }
+        SETTING -> when {
+            key in deviceSettings -> Applied.YES
+            mergeSettings(mapOf(key to (value as Map<String, Any?>)["value"])) -> Applied.YES
+            else -> Applied.NO
         }
-        REPOSITORY -> {
-            val data = value as RepositoryData
-            ExtensionManager.repositories().any { it.url == data.url } || ExtensionManager.addRepositoryData(data)
-        }
-        EXTENSION -> installExtension(value as Map<String, Any?>)
-        SEARCH -> { SearchHistory.applyRemote(key, value as SearchHistoryEntry); true }
-        else -> true
+        // Only repositories the user added on this device, or agreed to add (see suggestedRepositories)
+        REPOSITORY -> if (ExtensionManager.repositories().any { it.url == (value as RepositoryData).url }) Applied.YES else Applied.LATER
+        EXTENSION -> if (installExtension(value as Map<String, Any?>)) Applied.YES else Applied.LATER
+        SEARCH -> { SearchHistory.applyRemote(key, value as SearchHistoryEntry); Applied.YES }
+        else -> Applied.YES
     }
 
-    /** Puts [remote] settings over this device's, leaving the rest as they are. */
-    private fun mergeSettings(remote: Map<String, Any?>) {
+    /**
+     * Puts [remote] settings over this device's, leaving the rest as they are. False when one of
+     * them isn't a setting this version has, or has a value it can't hold.
+     */
+    private fun mergeSettings(remote: Map<String, Any?>): Boolean {
+        var all = true
         SettingsStore.update { current ->
-            val merged = jsonMapper.convertValue(current, object : TypeReference<MutableMap<String, Any?>>() {})
-            merged.putAll(remote)
-            runCatching { jsonMapper.convertValue(merged, AppSettings::class.java) }.getOrDefault(current)
+            var next = current
+            for ((name, value) in remote) {
+                val merged = jsonMapper.convertValue(next, object : TypeReference<MutableMap<String, Any?>>() {})
+                if (name !in merged) { all = false; continue }
+                merged[name] = value
+                next = runCatching { jsonMapper.convertValue(merged, AppSettings::class.java) }.getOrElse { all = false; next }
+            }
+            next
         }
+        return all
     }
 
     /** Installs an extension another device has, once its repository's list is loaded. */
@@ -604,12 +726,32 @@ object SyncManager {
                 pending.remove(id)
                 continue
             }
-            if (applyLocal(item.kind, item.key, value)) {
-                pending.remove(id)
-                known[id] = KnownItem(hashOf(value), item.at)
+            when (applyLocal(item.kind, item.key, value)) {
+                Applied.YES -> {
+                    pending.remove(id)
+                    known[id] = KnownItem(hashOf(value), item.at)
+                }
+                Applied.NO -> pending.remove(id)
+                Applied.LATER -> Unit
             }
         }
         save { it.copy(pending = pending, known = known) }
+    }
+
+    /** Repositories other devices added that wait for the user here, shown in Settings, Sync. */
+    private fun updateSuggestions() {
+        val added = ExtensionManager.repositories().map { it.url }.toSet()
+        val suggested = store.pending.values.filter { it.kind == REPOSITORY }
+            .mapNotNull { decode(it.kind, it.data) as? RepositoryData }
+            .filter { it.url !in added && it.url !in store.declinedRepositories }
+            .distinctBy { it.url }
+        val before = _ui.value.suggestedRepositories.map { it.url }.toSet()
+        _ui.update { it.copy(suggestedRepositories = suggested) }
+        if (suggested.any { it.url !in before }) {
+            com.lagradost.cloudstream4.desktop.DesktopToasts.show(
+                "Your other devices use ${suggested.size} ${if (suggested.size == 1) "repository" else "repositories"} not added here. Open Settings, Sync to add them."
+            )
+        }
     }
 
     private fun removeLocal(kind: String, key: String) {
@@ -625,4 +767,20 @@ object SyncManager {
             }
         }
     }
+
+    /** Items larger than this (as JSON) stay on their device; the server refuses rows much larger. */
+    private const val MAX_ITEM_CHARS = 64 * 1024
+}
+
+/** Marks a key sent as its hash. */
+private const val HASHED_KEY = "sha256:"
+
+/**
+ * The key an item is stored under on the server. Keys are mostly short, but an episode's data
+ * can be long, and the server's index can't hold keys of a few KB: those go as their hash.
+ */
+internal fun syncKey(raw: String): String {
+    if (raw.length <= 512) return raw
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
+    return HASHED_KEY + digest.joinToString("") { "%02x".format(it) }
 }

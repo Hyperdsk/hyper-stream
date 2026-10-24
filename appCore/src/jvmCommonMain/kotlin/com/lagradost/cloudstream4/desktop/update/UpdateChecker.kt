@@ -24,6 +24,8 @@ data class UpdateAsset(
     val url: String,
     val size: Long,
     val digest: String?,
+    /** The release's "<name>.sig" file, when it has one (see [UpdateSignature]). */
+    val signatureUrl: String? = null,
 )
 
 data class UpdateRelease(
@@ -164,19 +166,26 @@ object UpdateChecker {
                 Regex("""-windows-x64\.msi$""", RegexOption.IGNORE_CASE),
                 Regex("""-windows-x64-portable\.zip$""", RegexOption.IGNORE_CASE),
             )
+            // A copy unpacked by hand updates with the same kind of file: an installer would put a second copy elsewhere
+            UpdateTarget.WindowsPortable -> listOf(Regex("""-windows-x64-portable\.zip$""", RegexOption.IGNORE_CASE))
             UpdateTarget.Linux -> listOf(
                 Regex("""-linux-x64\.deb$""", RegexOption.IGNORE_CASE),
                 Regex("""-linux-x64\.tar\.gz$""", RegexOption.IGNORE_CASE),
             )
+            // Unpacked by hand, or a system without Debian packages (Fedora, Arch...)
+            UpdateTarget.LinuxPortable -> listOf(Regex("""-linux-x64\.tar\.gz$""", RegexOption.IGNORE_CASE))
         }
         for (pattern in patterns) {
             val match = assets.firstOrNull { pattern.containsMatchIn(it.path("name").asText("")) }
                 ?: continue
+            val name = match.path("name").asText("")
             return UpdateAsset(
-                name = match.path("name").asText(""),
+                name = name,
                 url = match.path("browser_download_url").asText(""),
                 size = match.path("size").asLong(0),
                 digest = match.path("digest").asText("").takeIf { it.isNotBlank() },
+                signatureUrl = assets.firstOrNull { it.path("name").asText("") == "$name.sig" }
+                    ?.path("browser_download_url")?.asText("")?.takeIf { it.isNotBlank() },
             )
         }
         return null
@@ -265,6 +274,9 @@ object UpdateChecker {
                     throw IOException("The update file didn't match its checksum.")
                 }
             }
+            if (Platform.updateTarget != UpdateTarget.Android && UpdateSignature.required) {
+                requireSignature(release.asset, target)
+            }
             onProgress(1f)
         } catch (t: kotlinx.coroutines.CancellationException) {
             target.delete()
@@ -289,6 +301,21 @@ object UpdateChecker {
             )
         }
         Result.success(Unit)
+    }
+
+    /** Refuses a desktop update that isn't signed with the project's key (see [UpdateSignature]). */
+    private fun requireSignature(asset: UpdateAsset, file: File) {
+        val url = asset.signatureUrl?.takeIf { it.startsWith(DOWNLOAD_PREFIX) }
+            ?: throw IOException("This update isn't signed, so it wasn't installed. Download it from the release page instead.")
+        val request = Request.Builder().url(url).header("User-Agent", "HyperStream/${currentVersion}").build()
+        val signature = app.baseClient.newBuilder().callTimeout(30, TimeUnit.SECONDS).build()
+            .newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("The update's signature answered with HTTP ${response.code}.")
+                response.body.string()
+            }
+        if (!UpdateSignature.verify(asset.name, sha256(file), signature)) {
+            throw IOException("The update's signature doesn't match, so it wasn't installed.")
+        }
     }
 
     private fun matchesDigest(file: File, digest: String?): Boolean {

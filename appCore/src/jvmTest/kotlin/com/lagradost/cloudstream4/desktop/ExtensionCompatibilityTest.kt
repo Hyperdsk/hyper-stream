@@ -15,10 +15,9 @@ class ExtensionCompatibilityTest {
     @Test
     fun loadsInstalledExtensions() {
         val dir = System.getenv("CS_COMPAT_DIR")?.let(::File)
-        if (dir == null || !dir.isDirectory) {
-            println("Skipping, CS_COMPAT_DIR not set")
-            return
-        }
+        // Reported as skipped, not passed, when there's nothing to check
+        org.junit.Assume.assumeTrue("CS_COMPAT_DIR not set", dir != null && dir.isDirectory)
+        dir!!
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-compat").toString())
         val files = dir.walkTopDown().filter { it.isFile && it.extension == "cs3" }.toList()
         val failed = mutableListOf<String>()

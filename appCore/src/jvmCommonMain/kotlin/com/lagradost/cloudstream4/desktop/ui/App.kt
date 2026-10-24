@@ -21,6 +21,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.map
 import com.lagradost.cloudstream4.desktop.download.DownloadManager
 import com.lagradost.cloudstream4.desktop.download.DownloadStatus
 import androidx.compose.foundation.layout.Row
@@ -103,7 +104,10 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
     }
 
     // Check GitHub for a new release while the app is open, and mention each new version once.
-    LaunchedEffect(Unit) {
+    // Restarted when automatic checks are turned on, rather than waiting out the old six hours
+    val checkForUpdates by SettingsStore.state.map { it.checkForUpdates }.collectAsState(SettingsStore.state.value.checkForUpdates)
+    LaunchedEffect(checkForUpdates) {
+        if (!checkForUpdates) return@LaunchedEffect
         while (true) {
             val result = UpdateChecker.check(automatic = true)
             if (result is UpdateState.Available && SettingsStore.state.value.checkForUpdates) {

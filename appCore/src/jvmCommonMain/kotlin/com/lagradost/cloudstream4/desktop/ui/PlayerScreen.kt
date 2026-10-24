@@ -170,6 +170,14 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     var controlsVisible by remember { mutableStateOf(true) }
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var openMenu by remember { mutableStateOf<String?>(null) }
+    // The floating window is too small for controls, and can't be touched like the full player
+    val pictureInPicture by com.lagradost.cloudstream4.desktop.PictureInPicture.active.collectAsState()
+    LaunchedEffect(pictureInPicture) {
+        if (pictureInPicture) {
+            controlsVisible = false
+            openMenu = null
+        }
+    }
 
     // The intro, recap or credits the playhead is in, from the skip databases. Its Skip button shows
     // for the whole section, unless auto-skip is about to jump over it
@@ -594,7 +602,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             }
         }
 
-        AnimatedVisibility(controlsVisible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(controlsVisible && !pictureInPicture, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
                 // Top bar
                 Row(

@@ -18,7 +18,7 @@ class ImdbOnlineTest {
 
     @Test
     fun matchesTitlesAndReadsDetails() = runBlocking {
-        if (!online()) return@runBlocking
+        org.junit.Assume.assumeTrue("IMDb not reachable (or on CI)", online())
         // Same name, different years: the year decides
         assertEquals("tt27419420", Imdb.findId("Street Fighter", 2026, TvType.Movie))
         assertEquals("tt0111301", Imdb.findId("Street Fighter", 1994, TvType.Movie))
