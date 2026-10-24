@@ -1,8 +1,12 @@
 name: Release all platforms
 
 # A full version tag such as v1.2.3 builds the Android/Android TV APK and the macOS, Linux and
-# Windows apps, then publishes them together. The Mac release script remains the normal path; when
-# it has already published the release, this workflow finds it and does nothing.
+# Windows apps, then publishes them together, after the tests pass.
+#
+# scripts/release.sh pushes its tag with a "Built locally:" line listing the files it uploads
+# itself. Then this workflow waits for those, builds only the platforms that are missing, adds
+# them, and leaves the release as the script made it (a draft stays a draft). Files already in a
+# release are never replaced.
 
 on:
   push:
@@ -22,10 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.pick.outputs.skip }}
+      local: ${{ steps.pick.outputs.local }}
       version: ${{ steps.pick.outputs.version }}
       code: ${{ steps.pick.outputs.code }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -44,21 +49,40 @@ jobs:
           minor="${BASH_REMATCH[2]}"
           patch="${BASH_REMATCH[3]}"
           version="$major.$minor.$patch"
-          code=$((major * 10000 + minor * 100 + patch))
+          # Must match scripts/release.sh (and stay above every earlier release's code)
+          code=$((major * 1000000 + minor * 1000 + patch))
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-          # The Mac script can create and fill the whole release before pushing its tag, including
-          # as a draft for checking. Don't rebuild or publish that release; a partial release is
-          # completed below.
+          # Made by scripts/release.sh: wait until the files it uploads itself are all there
+          git fetch -q --force origin "refs/tags/$tag:refs/tags/$tag"
+          local_files=$(git for-each-ref "refs/tags/$tag" --format='%(contents)' | sed -n 's/^Built locally: //p' | tr ',' ' ')
+          if [ -n "$local_files" ]; then
+            echo "local=true" >> "$GITHUB_OUTPUT"
+            for attempt in $(seq 1 80); do
+              have=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)
+              missing=""
+              for f in $local_files; do grep -qxF "$f" <<<"$have" || missing="$missing $f"; done
+              [ -z "$missing" ] && break
+              sleep 30
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::release.sh's files never all reached the release:$missing"
+              exit 1
+            fi
+          fi
+
+          # Every platform already there: nothing to do
           if gh release view "$tag" >/dev/null 2>&1; then
-            count=$(gh release view "$tag" --json assets --jq '[.assets[] | select(.name | startswith("HyperStream-"))] | length')
+            count=$(gh release view "$tag" --json assets --jq '[.assets[] | select((.name | startswith("HyperStream-")) and (.name | endswith(".sig") | not))] | length')
             if [ "$count" -ge 9 ]; then
               echo "::notice::$tag already has all platform builds; leaving it alone."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
+          # The script wrote the release and its notes itself
+          [ -n "$local_files" ] && exit 0
 
           previous=$(gh release list --limit 50 --json tagName --jq '.[].tagName' | grep -vx "$tag" | head -1 || true)
           notes=$(mktemp)
@@ -81,9 +105,43 @@ jobs:
           fi
           rm -f "$notes"
 
+  test:
+    name: Tests
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: [ "5432:5432" ]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+
+      - name: Desktop tests
+        run: ./gradlew :appCore:jvmTest
+
+      - name: Sync database tests
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: backend/supabase/tests/run.sh
+
   desktop:
     name: Desktop (${{ matrix.name }})
-    needs: prepare
+    needs: [prepare, test]
     if: needs.prepare.outputs.skip != 'true'
     strategy:
       fail-fast: false
@@ -110,21 +168,35 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+
+      # Already uploaded (by release.sh from its Mac, or an earlier run): not built again
+      - name: Check the release
+        id: have
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="HyperStream-${{ needs.prepare.outputs.version }}-${{ matrix.name }}.${{ matrix.output }}"
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$name"; then
+            echo "::notice::$name is already in the release; skipping this platform."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build installer and portable app
+        if: steps.have.outputs.skip != 'true'
         run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ needs.prepare.outputs.version }}
 
       - name: Collect files
+        if: steps.have.outputs.skip != 'true'
         run: |
           mkdir -p dist
           out=desktopApp/build/compose/binaries/main
@@ -138,29 +210,48 @@ jobs:
           esac
           ls -lh dist
 
-      - name: Add to the draft release
+      - name: Sign for the in-app updater
+        if: steps.have.outputs.skip != 'true'
+        env:
+          HS_UPDATE_SIGNING_KEY: ${{ secrets.HS_UPDATE_SIGNING_KEY }}
+        run: scripts/sign-desktop.sh dist/*
+
+      - name: Add to the release
+        if: steps.have.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber -R "$GITHUB_REPOSITORY"
+        run: scripts/upload-missing.sh "$GITHUB_REF_NAME" dist/*
 
   android:
     name: Android and Android TV
-    needs: prepare
+    needs: [prepare, test]
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+
+      - name: Check the release
+        id: have
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="HyperStream-${{ needs.prepare.outputs.version }}-android-and-tv.apk"
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$name"; then
+            echo "::notice::$name is already in the release; skipping Android."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up signing key
+        if: steps.have.outputs.skip != 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.HS_KEYSTORE_BASE64 }}
         run: |
@@ -172,6 +263,7 @@ jobs:
           echo "HS_KEYSTORE=$RUNNER_TEMP/hyperstream.jks" >> "$GITHUB_ENV"
 
       - name: Build APK
+        if: steps.have.outputs.skip != 'true'
         env:
           HS_KEYSTORE_PASSWORD: ${{ secrets.HS_KEYSTORE_PASSWORD }}
         run: |
@@ -180,6 +272,7 @@ jobs:
             -PappVersionCode=${{ needs.prepare.outputs.code }}
 
       - name: Check the APK's signature
+        if: steps.have.outputs.skip != 'true'
         env:
           EXPECTED_SHA256: 9bce46dbbffe5c62cc818473c28a6025c353a47847ea3a195d75394e943a36dd
         run: |
@@ -192,21 +285,24 @@ jobs:
           fi
 
       - name: Collect files
+        if: steps.have.outputs.skip != 'true'
         run: |
           mkdir -p dist
           cp androidApp/build/outputs/apk/release/androidApp-release.apk \
             "dist/HyperStream-${{ needs.prepare.outputs.version }}-android-and-tv.apk"
           ls -lh dist
 
-      - name: Add to the draft release
+      - name: Add to the release
+        if: steps.have.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber -R "$GITHUB_REPOSITORY"
+        run: scripts/upload-missing.sh "$GITHUB_REF_NAME" dist/*
 
   publish:
     name: Publish release
-    needs: [prepare, desktop, android]
-    if: needs.prepare.outputs.skip != 'true'
+    needs: [prepare, test, desktop, android]
+    # A release from release.sh is published (or kept as a draft) by the script, not here
+    if: needs.prepare.outputs.skip != 'true' && needs.prepare.outputs.local != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Publish

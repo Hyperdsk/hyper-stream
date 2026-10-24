@@ -1,11 +1,11 @@
 name: Desktop and Android builds
 
 # Builds the desktop app for macOS (Apple silicon and Intel), Linux and Windows, plus the Android
-# app, which also runs on Android TV, and uploads them as artifacts. Releases are built and
-# published from a Mac with scripts/release.sh instead, which skips this workflow.
+# app, which also runs on Android TV, and uploads them as artifacts. Releases are made by
+# scripts/release.sh and release-all.yml instead.
 #
-# Run by hand with a release tag (scripts/release.sh --all-platforms does this), it builds that
-# release's Windows, Linux and Intel Mac apps, which a Mac can't make, and adds them to it.
+# Run by hand with a release tag (scripts/release.sh --add-platforms does this), it builds that
+# release's missing desktop apps and adds them to it, never replacing files already there.
 
 on:
   push:
@@ -30,32 +30,52 @@ concurrency:
 jobs:
   test:
     name: Desktop tests
-    # A release was tested when it was made
-    if: inputs.release_tag == ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
       - name: Test
         run: ./gradlew :appCore:jvmTest
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure()
         with:
           name: test-reports
           path: appCore/build/reports/tests/
 
+  database:
+    name: Sync database tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: [ "5432:5432" ]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Test schema.sql
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: backend/supabase/tests/run.sh
+
   desktop:
     name: Desktop (${{ matrix.name }})
+    # Adding to a release: only once the tests pass
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -79,25 +99,22 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-    env:
-      # For a release, the Apple silicon app is already there from the Mac that made it
-      SKIP: ${{ inputs.release_tag != '' && matrix.name == 'macos-apple-silicon' }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
       - name: Pick version
         id: version
@@ -110,6 +127,18 @@ jobs:
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # For a release: a platform it already has (such as the Mac that made it) isn't built again
+      - name: Check the release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          name="HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.${{ matrix.output }}"
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$name"; then
+            echo "SKIP=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build installer and portable app
@@ -132,19 +161,25 @@ jobs:
           esac
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: env.SKIP != 'true'
         with:
           name: HyperStream-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
+      - name: Sign for the in-app updater
+        if: inputs.release_tag != '' && env.SKIP != 'true'
+        env:
+          HS_UPDATE_SIGNING_KEY: ${{ secrets.HS_UPDATE_SIGNING_KEY }}
+        run: scripts/sign-desktop.sh dist/*
+
       - name: Add to the release
         if: inputs.release_tag != '' && env.SKIP != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: gh release upload "$RELEASE_TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+        run: scripts/upload-missing.sh "$RELEASE_TAG" dist/*
 
   android:
     name: Android and Android TV
@@ -152,16 +187,16 @@ jobs:
     if: inputs.release_tag == ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
       - name: Pick version
         id: version
@@ -196,7 +231,7 @@ jobs:
           mkdir -p dist
           cp androidApp/build/outputs/apk/release/*.apk dist/HyperStream-${{ steps.version.outputs.value }}-android-and-tv.apk
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: HyperStream-android
           path: dist/*
