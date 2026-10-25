@@ -48,7 +48,7 @@ compose.desktop {
             // The debugger agent, only in debug builds (-PdebugApp)
             if (project.hasProperty("debugApp")) modules("jdk.jdwp.agent")
             // CI passes the release tag, e.g. -PappVersion=1.2.0; installers need MAJOR.MINOR.PATCH with MAJOR > 0
-            packageVersion = (findProperty("appVersion") as String?) ?: "1.2.3"
+            packageVersion = (findProperty("appVersion") as String?) ?: "1.2.4"
 
             val iconsRoot = project.file("src/desktop-icons")
             macOS {
