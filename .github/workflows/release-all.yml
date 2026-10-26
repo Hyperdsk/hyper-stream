@@ -19,13 +19,13 @@ concurrency:
 jobs:
   prepare:
     name: Prepare release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       skip: ${{ steps.pick.outputs.skip }}
       version: ${{ steps.pick.outputs.version }}
       code: ${{ steps.pick.outputs.code }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 0
 
@@ -90,19 +90,19 @@ jobs:
       matrix:
         include:
           - name: macos-apple-silicon
-            os: macos-15
+            os: blacksmith-6vcpu-macos-15
             package: packageDmg
             output: dmg
           - name: macos-intel
-            os: macos-15-intel
+            os: blacksmith-6vcpu-macos-15
             package: packageDmg
             output: dmg
           - name: linux-x64
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
             package: packageDeb
             output: deb
           - name: windows-x64
-            os: windows-latest
+            os: blacksmith-4vcpu-windows-2025
             package: packageMsi
             output: msi
     runs-on: ${{ matrix.os }}
@@ -147,9 +147,9 @@ jobs:
     name: Android and Android TV
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6
+      - uses: useblacksmith/checkout@v1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -207,7 +207,7 @@ jobs:
     name: Publish release
     needs: [prepare, desktop, android]
     if: needs.prepare.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Publish
         env:

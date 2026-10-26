@@ -18,7 +18,7 @@ jobs:
   create:
     # Upstream CloudStream's workflow; it needs recloudstream's secrets, so forks skip it
     if: github.repository == 'recloudstream/cloudstream'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
     - name: Generate access token
       id: generate_token
