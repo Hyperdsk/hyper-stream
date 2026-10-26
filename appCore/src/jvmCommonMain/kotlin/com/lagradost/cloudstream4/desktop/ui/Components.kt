@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import coil3.size.Precision
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -170,6 +171,10 @@ fun WideImage(
                     httpHeaders(NetworkHeaders.Builder().apply { headers.forEach { (k, v) -> set(k, v) } }.build())
                 }
             }
+            // Without a size this painter decodes the original: a 4K backdrop is about 33 MB, and
+            // Home keeps several. No larger than the screen it fills (TVs are 1920 wide)
+            .size(if (com.lagradost.cloudstream4.desktop.Platform.isTv) 1920 else 2560, if (com.lagradost.cloudstream4.desktop.Platform.isTv) 1080 else 1440)
+            .precision(Precision.INEXACT)
             .build()
     }
     val painter = rememberAsyncImagePainter(request)

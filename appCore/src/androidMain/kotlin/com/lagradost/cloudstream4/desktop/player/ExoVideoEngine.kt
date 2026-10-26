@@ -85,7 +85,17 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
         .setLoadControl(
             DefaultLoadControl.Builder()
-                .setBufferDurationsMs(30_000, 120_000, START_BUFFER_MS.toInt(), 5_000)
+                .apply {
+                    if (com.lagradost.cloudstream4.desktop.Platform.isTv) {
+                        // TVs have little memory (1.4 GB here): a minute ahead, at most 48 MB, which
+                        // is still minutes of 1080p. The default allows 128 MB of video
+                        setBufferDurationsMs(30_000, 60_000, START_BUFFER_MS.toInt(), 5_000)
+                        setTargetBufferBytes(48 * 1024 * 1024)
+                        setPrioritizeTimeOverSizeThresholds(false)
+                    } else {
+                        setBufferDurationsMs(30_000, 120_000, START_BUFFER_MS.toInt(), 5_000)
+                    }
+                }
                 .build()
         )
         .setAudioAttributes(
@@ -305,6 +315,26 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         val width = minOf(view.width, 640)
         val height = (width.toLong() * view.height / view.width).toInt().coerceAtLeast(1)
         return runCatching { view.getBitmap(width, height)?.asImageBitmap() }.getOrNull()
+    }
+
+    private var parked = false
+
+    /**
+     * In the background: let go of the buffered video (tens of MB) but keep the video and its
+     * position, so coming back loads from there. Android may close a backgrounded app that holds
+     * a lot of memory, losing your place in the app.
+     */
+    fun park() {
+        if (currentUrl == null || player.playbackState == Player.STATE_IDLE || player.playWhenReady) return
+        parked = true
+        player.stop()
+    }
+
+    /** Back on screen: load the parked video again, paused where it was. */
+    fun unpark() {
+        if (!parked) return
+        parked = false
+        player.prepare()
     }
 
     /** The video's shape for the picture-in-picture window, within the range Android allows. */

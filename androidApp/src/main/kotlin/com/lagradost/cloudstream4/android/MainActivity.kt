@@ -197,6 +197,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         (application as CloudStreamApplication).engine.inForeground = true
+        (application as CloudStreamApplication).engine.unpark()
         com.lagradost.cloudstream4.desktop.sync.SyncManager.foreground = true
     }
 
@@ -213,5 +214,6 @@ class MainActivity : AppCompatActivity() {
         engine.inForeground = false
         com.lagradost.cloudstream4.desktop.sync.SyncManager.foreground = false
         if (engine.state.value.playing) engine.togglePause()
+        engine.park()
     }
 }
