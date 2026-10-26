@@ -61,6 +61,12 @@ data class SyncStore(
      */
     @JsonProperty("pendingEmail") val pendingEmail: String? = null,
     @JsonProperty("pendingAt") val pendingAt: Long? = null,
+    /**
+     * Kinds whose data file couldn't be read, so this device lost them: the next pass pulls
+     * everything and takes the server's copy. Saved, so a pass that fails (offline) still restores
+     * them on a later run, when the file reads fine again but holds only what was saved since.
+     */
+    @JsonProperty("restoring") val restoring: Set<String> = emptySet(),
 )
 
 data class SyncUiState(
@@ -108,6 +114,19 @@ object SyncManager {
         "downloadFolder", "downloadConnections", "streamConnections", "parallelDownloads", "volume", "demoProvider",
         "videoFit", "swipeControls", "lastUpdateCheckAt", "lastUpdateNotice",
     )
+
+    /** The data file each kind is kept in, to tell which kinds a damaged file lost. */
+    private val fileKinds = mapOf(
+        "history.json" to setOf(HISTORY), "bookmarks.json" to setOf(BOOKMARK), "settings.json" to setOf(SETTING, SETTINGS),
+        "last-sources.json" to setOf(SOURCE), "search-history.json" to setOf(SEARCH),
+        "repositories.json" to setOf(REPOSITORY), "installed-extensions.json" to setOf(EXTENSION),
+    )
+
+    /** Settings have no removal: a setting is only ever changed. */
+    private val undeletable = setOf(SETTING, SETTINGS)
+
+    /** Kinds this run has already restored after their damaged files were found. */
+    @Volatile private var restoredThisRun = emptySet<String>()
 
     // Sync is optional: whatever goes wrong in it (no network, a revoked sign-in) must never close the app
     private val scope = CoroutineScope(
@@ -436,7 +455,15 @@ object SyncManager {
         // A few seconds back from where the last pass ended: a save that started earlier but
         // finished later carries an earlier time, and would otherwise never be pulled. Rows seen
         // twice change nothing
-        val remote = SupabaseClient.pull(session, store.cursor?.let(::overlap))
+        val lost = DataHealth.unreadable.flatMap { fileKinds[it].orEmpty() }.toSet()
+        // A file found damaged again later (read again after it was fixed) is restored again
+        restoredThisRun = restoredThisRun intersect lost
+        val newlyLost = lost - restoredThisRun - store.restoring
+        if (newlyLost.isNotEmpty()) save { it.copy(restoring = it.restoring + newlyLost) }
+        val restoring = store.restoring
+        // Restoring lost data: everything, not just what changed since the last pass
+        val remote = SupabaseClient.pull(session, if (restoring.isEmpty()) store.cursor?.let(::overlap) else null)
+        val settingNames = syncedSettings(SettingsStore.state.value).keys
         val local = localItems()
         val known = store.known.toMutableMap()
         val pending = store.pending.toMutableMap()
@@ -448,6 +475,8 @@ object SyncManager {
             val mine = local[id]
             if (item.deleted) {
                 pending.remove(id)
+                // An older version removes settings it doesn't know; they stay here, and aren't sent again
+                if (item.kind in undeletable) continue
                 val myAt = mine?.at ?: known[id]?.at ?: 0
                 if (mine != null && item.at >= myAt) {
                     removeLocal(item.kind, item.key)
@@ -457,6 +486,18 @@ object SyncManager {
                 continue
             }
             val value = decode(item.kind, item.data) ?: continue
+            // A setting this version doesn't have: nothing to apply, and not to be counted as
+            // synced, or it would be sent as removed
+            if (item.kind == SETTING && item.key !in settingNames) continue
+            if (item.kind == SETTINGS) {
+                // All settings in one item, from a version before 1.2.1: only the settings it changed
+                // after this device last synced them, so it can't undo newer changes made here
+                @Suppress("UNCHECKED_CAST")
+                val newer = (value as Map<String, Any?>).filterKeys { (known["$SETTING/$it"]?.at ?: 0) < item.at && it in settingNames }
+                if (newer.isNotEmpty()) mergeSettings(newer)
+                newer.keys.forEach { name -> known["$SETTING/$name"] = KnownItem(hashOf(mapOf("value" to newer[name])), item.at) }
+                continue
+            }
             val hash = hashOf(value)
             if (mine != null && hashOf(mine.data) == hash) {
                 known[id] = KnownItem(hash, maxOf(item.at, known[id]?.at ?: 0))
@@ -464,15 +505,18 @@ object SyncManager {
             }
             // Removed here but not sent yet: only a later change elsewhere brings it back. Unless a data
             // file couldn't be read: then it's missing, not removed, and the server's copy restores it
-            val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty()
+            val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty() && item.kind !in restoring
             val myAt = mine?.at ?: known[id]?.at ?: 0
-            if ((mine == null && !removedHere) || item.at > myAt) {
+            // Lost here with no change time to compare (settings): what's here is only the defaults
+            val lostHere = item.kind in restoring && mine?.at == null
+            if (lostHere || (mine == null && !removedHere) || item.at > myAt) {
                 if (applyLocal(item.kind, item.key, value)) known[id] = KnownItem(hash, item.at)
                 else pending[id] = PendingItem(item.kind, item.key, item.data, item.at)
             }
         }
         val cursor = remote.maxOfOrNull { it.serverTime } ?: store.cursor
-        save { it.copy(cursor = cursor, known = known, pending = pending) }
+        save { it.copy(cursor = cursor, known = known, pending = pending, restoring = it.restoring - restoring) }
+        restoredThisRun = restoredThisRun + restoring
 
         // Extensions waiting for their repository to load
         retryPending()
@@ -494,7 +538,9 @@ object SyncManager {
         }
         // Gone since the last pass: a deletion. Not while a data file is unreadable, or its whole
         // contents would be deleted on every device
-        val deletions = if (DataHealth.unreadable.isEmpty()) next.keys - current.keys - store.pending.keys else emptySet()
+        val deletions = if (DataHealth.unreadable.isEmpty() && store.restoring.isEmpty()) {
+            (next.keys - current.keys - store.pending.keys).filter { it.substringBefore('/') !in undeletable }
+        } else emptyList()
         for (id in deletions) {
             val (kind, key) = id.split('/', limit = 2)
             changes += LocalChange(kind, key, null, deleted = true, at = now)

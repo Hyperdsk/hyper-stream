@@ -207,6 +207,48 @@ class SyncManagerTest {
             assertNotNull(LibraryStore.state.value.bookmark("Prov", "kept"), "and the server's copy came back")
             com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable.clear()
 
+            // A damaged file on one run, then a later run that reads it fine but holds only what
+            // was saved since: what it lost comes back from the server, and nothing is deleted
+            val health = com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable
+            LibraryStore.setBookmark(Bookmark("old", "Prov", "Old", null, null, null, WatchType.WATCHING), "Prov", "old")
+            SyncManager.syncNow()
+            // Much later, so incremental pulls no longer return it
+            clock += 600_000
+            remote("search", "later", com.lagradost.cloudstream4.desktop.data.SearchHistoryEntry("Later", at = System.currentTimeMillis()), at = System.currentTimeMillis())
+            SyncManager.syncNow()
+            health += "bookmarks.json"
+            LibraryStore.setBookmark(null, "Prov", "old")
+            SyncManager.syncNow()
+            health.clear()
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["bookmark" to "Prov|old"] }?.deleted == false, "the lost bookmark wasn't deleted on the server")
+            assertNotNull(LibraryStore.state.value.bookmark("Prov", "old"), "and came back here")
+
+            // A damaged settings file: the defaults it falls back to don't replace the synced settings
+            health += "settings.json"
+            com.lagradost.cloudstream4.desktop.data.SettingsStore.update { com.lagradost.cloudstream4.desktop.data.AppSettings() }
+            SyncManager.syncNow()
+            health.clear()
+            SyncManager.syncNow()
+            assertEquals(30, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.seekSeconds, "the synced setting came back")
+            assertEquals(30, synchronized(rows) { rows["setting" to "seekSeconds"] }!!.data!!["value"].asInt(), "and the server kept it")
+
+            // Settings from a newer version, and an older version removing them: no endless back and forth
+            remote("setting", "fromANewerVersion", mapOf("value" to 1), at = System.currentTimeMillis())
+            SyncManager.syncNow()
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["setting" to "fromANewerVersion"] }?.deleted == false, "an unknown setting isn't removed")
+            remote("setting", "seekSeconds", null, at = System.currentTimeMillis(), deleted = true)
+            SyncManager.syncNow()
+            assertEquals(30, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.seekSeconds, "a removed setting stays as it is")
+
+            // All settings in one item, from a version before 1.2.1: older than a change made here, it doesn't undo it
+            remote("settings", "app", mapOf("seekSeconds" to 5, "autoPlayNext" to true), at = 1_000)
+            SyncManager.syncNow()
+            assertEquals(30, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.seekSeconds, "the old item didn't undo a newer change")
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["settings" to "app"] }?.deleted == false, "and isn't removed, so the old device doesn't send it again")
+
             SyncManager.signOut().join()
             assertTrue(!SyncManager.ui.value.signedIn)
 

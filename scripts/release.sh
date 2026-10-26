@@ -25,7 +25,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-REPO="KamranAllahYar/hyper-stream"
+REPO="Hyperdsk/hyper-stream"
 # The Hyper Stream signing key's certificate; an APK signed with any other key can't update installs
 SIGNING_SHA256="9bce46dbbffe5c62cc818473c28a6025c353a47847ea3a195d75394e943a36dd"
 

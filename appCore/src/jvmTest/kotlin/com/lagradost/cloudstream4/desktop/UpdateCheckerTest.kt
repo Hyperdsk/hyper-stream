@@ -16,14 +16,14 @@ class UpdateCheckerTest {
             "tag_name": "v1.2.1-android",
             "name": "Hyper Stream 1.2.1 (Android)",
             "body": "Android only",
-            "html_url": "https://github.com/KamranAllahYar/hyper-stream/releases/tag/v1.2.1-android",
+            "html_url": "https://github.com/Hyperdsk/hyper-stream/releases/tag/v1.2.1-android",
             "draft": false,
             "prerelease": false,
             "assets": [
               {
                 "name": "HyperStream-1.2.1-android-and-tv.apk",
                 "size": 100,
-                "browser_download_url": "https://github.com/KamranAllahYar/hyper-stream/releases/download/v1.2.1-android/HyperStream-1.2.1-android-and-tv.apk",
+                "browser_download_url": "https://github.com/Hyperdsk/hyper-stream/releases/download/v1.2.1-android/HyperStream-1.2.1-android-and-tv.apk",
                 "digest": "sha256:abcd"
               }
             ]
@@ -32,7 +32,7 @@ class UpdateCheckerTest {
             "tag_name": "v1.2.0",
             "name": "Hyper Stream 1.2.0",
             "body": "All platforms",
-            "html_url": "https://github.com/KamranAllahYar/hyper-stream/releases/tag/v1.2.0",
+            "html_url": "https://github.com/Hyperdsk/hyper-stream/releases/tag/v1.2.0",
             "draft": false,
             "prerelease": false,
             "assets": [
@@ -68,6 +68,13 @@ class UpdateCheckerTest {
         ]
         """.trimIndent()
     )
+
+    @Test
+    fun acceptsDownloadsFromThisRepositoryOnly() {
+        assertTrue(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))
+        assertFalse(UpdateChecker.isOwnDownload("https://github.com/someone/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))
+        assertFalse(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream.evil.com/releases/download/x.apk"))
+    }
 
     @Test
     fun picksTheNewestReleaseForEachPlatform() {

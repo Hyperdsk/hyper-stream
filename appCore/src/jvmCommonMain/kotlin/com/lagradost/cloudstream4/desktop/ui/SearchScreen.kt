@@ -443,7 +443,7 @@ fun SearchScreen(model: SearchModel) {
 
 /** Searches made before, newest first, to run again with one click. */
 @Composable
-private fun RecentSearches(queries: List<String>, onSearch: (String) -> Unit, onRemove: (String) -> Unit, onClear: () -> Unit) {
+internal fun RecentSearches(queries: List<String>, onSearch: (String) -> Unit, onRemove: (String) -> Unit, onClear: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item(key = "title") {
             Row(
@@ -454,7 +454,9 @@ private fun RecentSearches(queries: List<String>, onSearch: (String) -> Unit, on
                 TextButton(onClick = onClear) { Text("Clear") }
             }
         }
-        items(queries, key = { SearchHistory.key(it) }) { query ->
+        // Prefixed, so a search for "title" can't clash with the header's key; and one row per
+        // search, as entries merged from other devices may differ only in case or spaces
+        items(queries.distinctBy { SearchHistory.key(it) }, key = { "q:" + SearchHistory.key(it) }) { query ->
             // The search and its remove button sit side by side, so a remote can reach both
             Row(Modifier.widthIn(max = 720.dp).padding(horizontal = appLayout.gutter - 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 ListItem(

@@ -12,7 +12,7 @@ TV remotes.
 
 ## Download
 
-Get the latest builds from [Releases](https://github.com/KamranAllahYar/hyper-stream/releases/latest):
+Get the latest builds from [Releases](https://github.com/Hyperdsk/hyper-stream/releases/latest):
 
 | Platform | File | Notes |
 | --- | --- | --- |

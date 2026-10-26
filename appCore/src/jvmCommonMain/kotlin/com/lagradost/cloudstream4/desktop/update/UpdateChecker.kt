@@ -49,7 +49,7 @@ sealed interface UpdateState {
  * app, even though all of them share the same repository.
  */
 object UpdateChecker {
-    private const val REPO = "KamranAllahYar/hyper-stream"
+    private const val REPO = "Hyperdsk/hyper-stream"
     private const val RELEASES_URL = "https://api.github.com/repos/$REPO/releases?per_page=30"
     private const val DOWNLOAD_PREFIX = "https://github.com/$REPO/releases/download/"
     private const val CHECK_INTERVAL_MS = 6L * 60 * 60 * 1000
@@ -58,6 +58,9 @@ object UpdateChecker {
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
     private val checkLock = Mutex()
+
+    /** A download from this project's own GitHub releases, the only place updates come from. */
+    fun isOwnDownload(url: String): Boolean = url.startsWith(DOWNLOAD_PREFIX)
 
     /** The installed version, read from the APK on Android and from the app jar's manifest on desktop. */
     val currentVersion: String get() = Platform.appVersion
@@ -210,7 +213,7 @@ object UpdateChecker {
         release: UpdateRelease,
         onProgress: (Float?) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        if (!release.asset.url.startsWith(DOWNLOAD_PREFIX)) {
+        if (!isOwnDownload(release.asset.url)) {
             return@withContext Result.failure(IOException("The update link doesn't point at this project's GitHub release."))
         }
         val safeName = release.asset.name.substringAfterLast('/')
