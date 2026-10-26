@@ -110,11 +110,22 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     private var subtitleCheck: Job? = null
     /** Whether this source already shows the remembered subtitle language. */
     private var autoSubtitled = false
+    /** Whether this video's audio track was already chosen (by the user or from the remembered language). */
+    private var audioChosen = false
 
     init {
         loadEpisode(request.index, request.startMs)
         loadEpisodeList()
         player?.let { p ->
+            // A video with several audio tracks: the language picked last time, when it has it
+            scope.launch {
+                p.state.distinctUntilChangedBy { it.audioTracks }.collect { s ->
+                    if (audioChosen || s.audioTracks.size < 2) return@collect
+                    val wanted = SettingsStore.state.value.audioLanguage ?: return@collect
+                    audioChosen = true
+                    s.audioTracks.firstOrNull { wanted in it.name.lowercase() }?.takeIf { it.id != s.audioTrack }?.let { p.setAudioTrack(it.id) }
+                }
+            }
             // Once the video's length is known, look up its skip times
             scope.launch {
                 p.state.distinctUntilChangedBy { it.lengthMs > 0 }.collect { s ->
@@ -410,6 +421,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         val start = resumePosition()
         playToken++
         autoSubtitled = false
+        audioChosen = false
         update { copy(current = index, error = null) }
         // Single video files stream over several connections, playlists stream segment by segment
         val source = StreamGateway.prepare(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO).copy(
@@ -434,6 +446,18 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         autoSubtitled = true
         if (SettingsStore.state.value.subtitleLanguage != key) SettingsStore.update { it.copy(subtitleLanguage = key) }
     }
+
+    /** Plays [track] and remembers its language for the next videos. */
+    fun pickAudio(track: com.lagradost.cloudstream4.desktop.player.Track) {
+        player?.setAudioTrack(track.id)
+        audioChosen = true
+        val key = audioLanguageKey(track.name) ?: return
+        if (SettingsStore.state.value.audioLanguage != key) SettingsStore.update { it.copy(audioLanguage = key) }
+    }
+
+    /** The language word in a track name ("Track 2 - [Hindi]", "Hindi AAC 5.1" -> "hindi"). */
+    private fun audioLanguageKey(name: String): String? =
+        Regex("\\p{L}{3,}").findAll(name.lowercase()).map { it.value }.filter { it !in AUDIO_NOISE }.maxByOrNull { it.length }
 
     /** "Off": hides subtitles and stops picking a language by itself. */
     fun subtitlesOff() {
@@ -625,3 +649,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         super.dispose()
     }
 }
+
+/** Words in audio track names that aren't the language. */
+private val AUDIO_NOISE = setOf(
+    "track", "audio", "stereo", "mono", "surround", "aac", "eac", "dolby", "digital", "atmos", "channels",
+    "kbps", "default", "original", "main", "commentary", "und", "unknown", "dts", "opus", "mp", "flac",
+)

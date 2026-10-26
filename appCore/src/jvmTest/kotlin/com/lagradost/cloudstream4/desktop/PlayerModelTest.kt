@@ -50,7 +50,8 @@ class PlayerModelTest {
         override fun setVolume(volume: Int) = Unit
         override fun toggleMute() = Unit
         override fun setRate(rate: Float) = Unit
-        override fun setAudioTrack(id: Int) = Unit
+        val audioPicks = mutableListOf<Int>()
+        override fun setAudioTrack(id: Int) { audioPicks += id; state.update { it.copy(audioTrack = id) } }
         override fun addSubtitle(uri: String) = Unit
         override fun setSubtitleTrack(id: Int) = Unit
         override fun stop() { state.value = PlaybackState() }
@@ -150,5 +151,32 @@ class PlayerModelTest {
         assertEquals(2, model.state.value.links.size, "the sources found before are kept")
         assertTrue(!model.state.value.refreshing)
         model.dispose()
+    }
+
+    @Test
+    fun theAudioLanguagePickedOnceIsChosenNextTime() = runBlocking {
+        setUp()
+        APIHolder.allProviders.add(FakeApi("Dubbed") { _, callback -> callback(link("dubbed", 1080)) })
+        val engine = FakeEngine()
+        val model = PlayerModel(request("Dubbed"), engine)
+        delay(800)
+        // The user picks Hindi on this video
+        model.pickAudio(com.lagradost.cloudstream4.desktop.player.Track(2, "Track 2 - [Hindi]"))
+        assertEquals("hindi", com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.audioLanguage)
+        model.dispose()
+
+        // The next video has English first and Hindi second: Hindi is chosen by itself
+        val next = FakeEngine()
+        val again = PlayerModel(request("Dubbed"), next)
+        delay(800)
+        next.state.update {
+            it.copy(audioTracks = kotlinx.collections.immutable.persistentListOf(
+                com.lagradost.cloudstream4.desktop.player.Track(1, "English AAC 5.1"),
+                com.lagradost.cloudstream4.desktop.player.Track(7, "Hindi AAC 5.1"),
+            ), audioTrack = 1)
+        }
+        delay(500)
+        assertEquals(listOf(7), next.audioPicks)
+        again.dispose()
     }
 }

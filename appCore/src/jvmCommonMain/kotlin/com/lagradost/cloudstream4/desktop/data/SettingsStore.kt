@@ -32,6 +32,8 @@ data class AppSettings(
     @JsonProperty("autoSkipIntros") val autoSkipIntros: Boolean = false,
     /** The subtitle language picked last ("english"), shown by itself on the next video; null is off. */
     @JsonProperty("subtitleLanguage") val subtitleLanguage: String? = null,
+    /** The audio language picked last ("hindi"), chosen by itself on videos that have it. */
+    @JsonProperty("audioLanguage") val audioLanguage: String? = null,
     /** Start with the first source found instead of waiting for all of them. The rest load in the background. */
     @JsonProperty("playFirstSource") val playFirstSource: Boolean = false,
     @JsonProperty("seekSeconds") val seekSeconds: Int = 10,

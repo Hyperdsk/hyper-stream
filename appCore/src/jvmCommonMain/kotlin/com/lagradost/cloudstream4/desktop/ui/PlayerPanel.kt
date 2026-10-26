@@ -457,7 +457,7 @@ private fun AudioTab(playback: PlaybackState, model: PlayerModel) {
             item { Text("This source has a single audio track.", color = dim, modifier = Modifier.padding(8.dp)) }
         }
         items(tracks, key = { "audio-${it.id}" }) { t ->
-            TrackRow(t.name, t.id == playback.audioTrack) { player.setAudioTrack(t.id) }
+            TrackRow(t.name, t.id == playback.audioTrack) { model.pickAudio(t) }
         }
     }
 }
