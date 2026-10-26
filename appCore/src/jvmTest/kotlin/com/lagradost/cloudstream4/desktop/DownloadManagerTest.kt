@@ -291,7 +291,8 @@ class DownloadManagerTest {
             val subtitle = File(done.subtitles.single())
             assertTrue(subtitle.exists())
 
-            val destination = Files.createTempDirectory("cs-moved").toFile()
+            // Canonical: on macOS the temp path is /var/..., which resolves to /private/var/...
+            val destination = Files.createTempDirectory("cs-moved").toFile().canonicalFile
             val result = DownloadManager.move(listOf(id), destination)
             assertEquals(1, result.moved, "failed: ${result.failed}")
 

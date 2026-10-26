@@ -118,7 +118,8 @@ class SplitAudioHlsTest {
             assertTrue(entry.subtitles.any { File(it).readText().contains("Hello") }, "subtitles: ${entry.subtitles}")
 
             // Moving the download carries the whole package, and it is still recognised as one
-            val destination = Files.createTempDirectory("cs-split-moved").toFile()
+            // Canonical: on macOS the temp path is /var/..., which resolves to /private/var/...
+            val destination = Files.createTempDirectory("cs-split-moved").toFile().canonicalFile
             assertEquals(1, DownloadManager.move(listOf(id), destination).moved)
             val moved = DownloadManager.entry("SplitTest", "movie")!!
             assertTrue(moved.isPackage, "saved as ${moved.filePath}")

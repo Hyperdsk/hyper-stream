@@ -136,7 +136,7 @@ class MainActivity : AppCompatActivity() {
             // The player fills the screen: no system bars, and landscape on phones and tablets
             val inPlayer = nav.current is Route.Player
             DisposableEffect(inPlayer) {
-                playerOpen = inPlayer
+                playerShown = inPlayer
                 immersive(inPlayer)
                 onDispose { }
             }
@@ -150,30 +150,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-    }
-
-    /** Whether the player is the current screen, for picture-in-picture. */
-    private var playerOpen = false
-
-    /**
-     * Leaving the app (Home, Recents) while a video plays on a phone or tablet: keep it playing in
-     * a small floating window. TVs have no such window; there the video pauses as before.
-     */
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        val engine = (application as CloudStreamApplication).engine
-        if (Platform.isTv || !playerOpen || !engine.state.value.playing) return
-        if (!packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
-        runCatching {
-            enterPictureInPictureMode(
-                android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build()
-            )
-        }
-    }
-
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        com.lagradost.cloudstream4.desktop.PictureInPicture.active.value = isInPictureInPictureMode
     }
 
     private fun immersive(on: Boolean) {
@@ -192,6 +168,30 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Access to Downloads may have been granted in system settings while the app was away
         AndroidHost.storageChanged()
+    }
+
+    /** Whether the player is on screen, for picture-in-picture when the user leaves. */
+    private var playerShown = false
+
+    /**
+     * Leaving the app (Home, Recents) while a video plays: it goes on in a small window, like other
+     * video apps. Not on TVs, where leaving pauses as before.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val engine = (application as CloudStreamApplication).engine
+        if (Platform.isTv || !playerShown || !engine.state.value.playing) return
+        if (!packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        runCatching {
+            enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(engine.aspectRatio()).build())
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        com.lagradost.cloudstream4.desktop.player.PictureInPicture.active.value = isInPictureInPictureMode
+        // Extensions read this from the app's activity, as in CloudStream
+        com.lagradost.cloudstream3.CommonActivity.isInPIPMode = isInPictureInPictureMode
     }
 
     override fun onStart() {
