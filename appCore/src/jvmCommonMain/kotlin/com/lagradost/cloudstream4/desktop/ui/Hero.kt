@@ -187,7 +187,7 @@ private fun HeroText(item: HeroItem, open: (Route) -> Unit) {
             )
         } else {
             Text(
-                details?.name ?: item.search.name,
+                plainText(details?.name ?: item.search.name),
                 style = if (appLayout.compact) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium,
                 color = Color.White,
                 maxLines = 2,
@@ -200,13 +200,14 @@ private fun HeroText(item: HeroItem, open: (Route) -> Unit) {
             (details?.type ?: item.search.type)?.label,
             details?.duration?.takeIf { it > 0 }?.let { if (it >= 60) "${it / 60}h ${it % 60}m" else "${it}m" },
             details?.score?.toStringNull(0.1, 10, 1)?.let { "★ $it" },
-            details?.tags?.filter { it.isNotBlank() }?.take(3)?.takeIf { it.isNotEmpty() }?.joinToString(", "),
+            details?.tags?.map(::plainText)?.filter { it.isNotBlank() }?.take(3)?.takeIf { it.isNotEmpty() }?.joinToString(", "),
         )
         if (meta.isNotEmpty()) {
             Text(meta.joinToString("  ·  "), style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f))
             Spacer(Modifier.height(10.dp))
         }
-        details?.plot?.let(::plainText)?.takeIf { it.isNotBlank() }?.let {
+        // A few lines only: the plot's line breaks become spaces so they don't use them up
+        details?.plot?.let(::plainText)?.replace(Regex("\\s*\\n+\\s*"), "  ")?.takeIf { it.isNotBlank() }?.let {
             Text(
                 it,
                 style = if (appLayout.compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,

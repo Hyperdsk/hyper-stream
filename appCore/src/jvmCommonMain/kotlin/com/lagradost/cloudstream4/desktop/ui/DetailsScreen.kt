@@ -186,9 +186,10 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
             .sortedWith(compareBy<Episode>({ it.season ?: 0 }, { it.episode ?: Int.MAX_VALUE }))
             .map {
                 EpisodeUi(
-                    PlayableEpisode(it.data, it.name, it.season, it.episode),
+                    // Extensions often copy these from the page with HTML in them
+                    PlayableEpisode(it.data, it.name?.let(::plainText), it.season, it.episode),
                     it.posterUrl,
-                    it.description,
+                    it.description?.let(::plainText)?.takeIf { it.isNotBlank() },
                     it.runTime,
                 )
             }
@@ -556,7 +557,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                 if (logo != null) {
                     RemoteImage(logo, response.posterHeaders, Modifier.heightIn(max = if (appLayout.compact) 96.dp else 150.dp).widthIn(max = 440.dp), contentScale = ContentScale.Fit, placeholder = false)
                 } else {
-                    Text(response.name, style = if (appLayout.compact) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text(plainText(response.name), style = if (appLayout.compact) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(14.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp), itemVerticalAlignment = Alignment.CenterVertically) {
@@ -579,7 +580,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         )
                     }
                 }
-                response.tags?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.let { tags ->
+                response.tags?.map(::plainText)?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.let { tags ->
                     Spacer(Modifier.height(6.dp))
                     Text(tags.take(5).joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.65f))
                 }

@@ -240,7 +240,7 @@ fun PosterCard(
             }
         }
         Text(
-            item.name,
+            plainText(item.name),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 2,
@@ -398,13 +398,30 @@ fun ConfirmDialog(title: String, body: String, action: String, onConfirm: () -> 
 }
 
 /**
- * Text from a site's page as plain text: some extensions pass descriptions with HTML in them
- * ("<br>", "&amp;"), which showed as written. Line breaks become new lines, other tags go.
+ * Text from a site's page as plain text. Extensions often pass titles, plots and episode text
+ * straight from the page, with HTML in them ("<br>", "<p>", "&amp;", "&#8217;"), which showed as
+ * written. Line breaks and paragraphs become new lines, other tags go, entities become characters.
  */
-fun plainText(html: String): String = html
-    .replace(Regex("(?i)<br\\s*/?>|</p>\\s*<p[^>]*>"), "\n")
-    .replace(Regex("<[^>]+>"), "")
-    .replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
-    .replace("&lt;", "<").replace("&gt;", ">")
-    .replace(Regex("[ \\t]+\\n"), "\n").replace(Regex("\\n{3,}"), "\n\n")
-    .trim()
+fun plainText(html: String): String {
+    if ('<' !in html && '&' !in html) return html.trim()
+    return html
+        .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), "")
+        .replace(Regex("(?i)<br\\s*/?>|</p\\s*>|</div\\s*>|</li\\s*>"), "\n")
+        .replace(Regex("<[^>]*>"), "")
+        .replace(Regex("&#(\\d+);")) { m -> m.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: m.value }
+        .replace(Regex("(?i)&#x([0-9a-f]+);")) { m -> m.groupValues[1].toIntOrNull(16)?.let { String(Character.toChars(it)) } ?: m.value }
+        .replace(Regex("&([a-zA-Z]+);")) { m -> namedEntities[m.groupValues[1]] ?: m.value }
+        .replace('\u00A0', ' ')
+        .replace(Regex("[ \\t]+\\n"), "\n")
+        .replace(Regex("\\n[ \\t]+"), "\n")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .replace(Regex("[ \\t]{2,}"), " ")
+        .trim()
+}
+
+private val namedEntities = mapOf(
+    "amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'", "nbsp" to " ",
+    "rsquo" to "\u2019", "lsquo" to "\u2018", "rdquo" to "\u201D", "ldquo" to "\u201C",
+    "ndash" to "\u2013", "mdash" to "\u2014", "hellip" to "\u2026", "middot" to "\u00B7",
+    "copy" to "\u00A9", "reg" to "\u00AE", "trade" to "\u2122", "deg" to "\u00B0", "bull" to "\u2022",
+)

@@ -150,7 +150,7 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    entry.name,
+                    plainText(entry.name),
                     color = MaterialTheme.colorScheme.onBackground,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,

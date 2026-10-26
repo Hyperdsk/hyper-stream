@@ -417,7 +417,7 @@ private fun PluginRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            plugin.description?.let {
+            plugin.description?.let(::plainText)?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (installed != null) StatusText(status)
