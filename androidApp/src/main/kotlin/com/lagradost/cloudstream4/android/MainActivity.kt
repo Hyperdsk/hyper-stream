@@ -114,18 +114,27 @@ class MainActivity : AppCompatActivity() {
 
             // Opened from the home screen's Continue watching: play from where it stopped, once
             // the title's extension has loaded
-            val resume by pendingResume.collectAsState()
-            LaunchedEffect(resume) {
-                val (api, url) = resume ?: return@LaunchedEffect
-                pendingResume.value = null
-                val history = LibraryStore.state.value.history
-                val entry = history.filter { it.apiName == api && it.parentUrl == url }.maxByOrNull { it.updatedAt } ?: return@LaunchedEffect
-                val loaded = withTimeoutOrNull(20_000) { while (providerByName(api) == null) delay(250); true } == true
-                nav.open(Route.Home)
-                // The extension isn't there (removed, or failed to load): say so rather than open a
-                // player that can only fail
-                if (loaded) nav.open(Route.Player(entry.resumeRequest()))
-                else com.lagradost.cloudstream4.desktop.DesktopToasts.show("The $api extension isn't loaded, so ${entry.name} can't play yet.")
+            // One collector for the whole activity. Keying an effect on the link and clearing it
+            // restarted the effect, cancelling the wait for the extension on a cold start
+            LaunchedEffect(Unit) {
+                pendingResume.collect { link ->
+                    val (api, url) = link ?: return@collect
+                    pendingResume.value = null
+                    val history = LibraryStore.state.value.history
+                    val entry = history.filter { it.apiName == api && it.parentUrl == url }.maxByOrNull { it.updatedAt } ?: return@collect
+                    // A TV starting cold loads all its extensions first, which can take longer than a
+                    // fixed wait: wait for this one, or until every extension has finished loading
+                    if (providerByName(api) == null) com.lagradost.cloudstream4.desktop.DesktopToasts.show("Opening ${entry.name}…")
+                    val loaded = withTimeoutOrNull(120_000) {
+                        while (providerByName(api) == null && !extensionsSettled()) delay(250)
+                        providerByName(api) != null
+                    } == true
+                    nav.open(Route.Home)
+                    // The extension isn't there (removed, or failed to load): say so rather than open a
+                    // player that can only fail
+                    if (loaded) nav.open(Route.Player(entry.resumeRequest()))
+                    else com.lagradost.cloudstream4.desktop.DesktopToasts.show("The $api extension isn't loaded, so ${entry.name} can't play yet.")
+                }
             }
 
             // Back leaves the current screen, then goes to Home, then closes the app
@@ -168,6 +177,16 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Access to Downloads may have been granted in system settings while the app was away
         AndroidHost.storageChanged()
+    }
+
+    /** Every installed extension has finished loading, or failed to. */
+    private fun extensionsSettled(): Boolean {
+        val state = com.lagradost.cloudstream4.desktop.plugins.ExtensionManager.state.value
+        return state.installed.isNotEmpty() && state.installed.all {
+            val status = state.status[it.filePath]
+            status is com.lagradost.cloudstream4.desktop.plugins.PluginStatus.Loaded ||
+                status is com.lagradost.cloudstream4.desktop.plugins.PluginStatus.Failed
+        }
     }
 
     /** Whether the player is on screen, for picture-in-picture when the user leaves. */

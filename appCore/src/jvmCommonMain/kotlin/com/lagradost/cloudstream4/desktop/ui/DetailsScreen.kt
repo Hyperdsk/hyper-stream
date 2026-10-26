@@ -602,7 +602,7 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(page) }
                     }
                 }
-                (response.plot?.takeIf { it.isNotBlank() } ?: state.imdb?.plot)?.let {
+                (response.plot?.let(::plainText)?.takeIf { it.isNotBlank() } ?: state.imdb?.plot)?.let {
                     Spacer(Modifier.height(18.dp))
                     Text(
                         it,

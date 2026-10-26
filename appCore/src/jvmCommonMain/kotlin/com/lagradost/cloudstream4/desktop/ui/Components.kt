@@ -396,3 +396,15 @@ fun ConfirmDialog(title: String, body: String, action: String, onConfirm: () -> 
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/**
+ * Text from a site's page as plain text: some extensions pass descriptions with HTML in them
+ * ("<br>", "&amp;"), which showed as written. Line breaks become new lines, other tags go.
+ */
+fun plainText(html: String): String = html
+    .replace(Regex("(?i)<br\\s*/?>|</p>\\s*<p[^>]*>"), "\n")
+    .replace(Regex("<[^>]+>"), "")
+    .replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
+    .replace("&lt;", "<").replace("&gt;", ">")
+    .replace(Regex("[ \\t]+\\n"), "\n").replace(Regex("\\n{3,}"), "\n\n")
+    .trim()

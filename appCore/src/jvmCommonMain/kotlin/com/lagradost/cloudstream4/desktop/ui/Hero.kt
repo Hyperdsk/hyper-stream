@@ -206,7 +206,7 @@ private fun HeroText(item: HeroItem, open: (Route) -> Unit) {
             Text(meta.joinToString("  ·  "), style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f))
             Spacer(Modifier.height(10.dp))
         }
-        details?.plot?.let {
+        details?.plot?.let(::plainText)?.takeIf { it.isNotBlank() }?.let {
             Text(
                 it,
                 style = if (appLayout.compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
