@@ -22,7 +22,8 @@ import kotlin.test.assertTrue
  * One Piece episode 1000 on AniSkip, and Breaking Bad S01E02 by IMDb id.
  */
 class SkipStampsOnlineTest {
-    private fun online() = runCatching {
+    // Not on CI: the results depend on what the online databases hold that day
+    private fun online() = System.getenv("CI") == null && runCatching {
         URI("https://api.aniskip.com/").toURL().openConnection().apply { connectTimeout = 3000 }.getInputStream().close()
     }.isSuccess || runCatching {
         URI("https://api.introdb.app/").toURL().openConnection().apply { connectTimeout = 3000 }.connect()
@@ -36,10 +37,7 @@ class SkipStampsOnlineTest {
     @Test
     fun findsAnimeOpeningAndSeriesIntro() = runBlocking {
         LibrarySetup.init()
-        if (!online()) {
-            println("Skipping, skip services not reachable")
-            return@runBlocking
-        }
+        org.junit.Assume.assumeTrue("skip services not reachable (or on CI)", online())
         val anime = api.newAnimeLoadResponse("One Piece", "https://example.com/op", TvType.Anime) {
             addMalId(21)
             addEpisodes(DubStatus.Subbed, listOf(api.newEpisode("ep1000") { episode = 1000 }))

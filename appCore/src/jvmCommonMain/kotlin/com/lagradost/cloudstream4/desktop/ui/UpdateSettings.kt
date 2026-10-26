@@ -59,6 +59,24 @@ internal fun UpdateSettings() {
         )
     }
 
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Update extensions automatically")
+            Text(
+                "Installs newer versions from their repositories shortly after the app opens.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = settings.autoUpdateExtensions,
+            onCheckedChange = { enabled -> SettingsStore.update { it.copy(autoUpdateExtensions = enabled) } },
+        )
+    }
+
     Text(
         "Installed version ${UpdateChecker.currentVersion}",
         style = MaterialTheme.typography.bodySmall,
@@ -129,6 +147,8 @@ internal fun UpdateSettings() {
                                 DesktopToasts.show(
                                     if (Platform.updateTarget == UpdateTarget.Android) {
                                         "Follow the Android prompt to finish updating."
+                                    } else if (Platform.updateTarget.portable) {
+                                        "Downloaded. Quit Hyper Stream, then unpack it over your current copy."
                                     } else {
                                         "Opening the downloaded update. Follow the system prompt to finish."
                                     }

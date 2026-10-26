@@ -40,4 +40,6 @@ installer. The first time, Android asks for permission to install unknown apps f
 - Seek bar thumbnails (the Mac app uses a second VLC player).
 - Parallel connections while streaming: ExoPlayer fetches over one connection.
 - Extensions that use CloudStream app classes this app doesn't provide fail to load, with the missing class named on the Extensions screen. Provided: `Plugin`, `CommonActivity`, `RepositoryManager`, `CloudStreamApp` (context and saved values), `DataStore`, `MainActivity` events, `CloudflareKiller` and signed-out account-sync classes, plus AppCompat and Material Components for extension settings screens.
-- Picture-in-picture, Chromecast, account sync.
+- Chromecast, account sync.
+
+Picture-in-picture works on phones and tablets: leaving the app while a video plays keeps it playing in a small window. TVs pause instead.

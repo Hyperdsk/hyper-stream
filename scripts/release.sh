@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Builds Hyper Stream on this Mac and publishes the builds as a GitHub release, without GitHub
-# Actions: the version commit says [skip ci] and tags don't start a workflow.
+# Builds Hyper Stream on this Mac and publishes the builds as a GitHub release. The version commit
+# says [skip ci]; the tag does start .github/workflows/release-all.yml, which waits for the files
+# this script uploads (listed in the tag's "Built locally:" line), then builds and adds only the
+# platforms that are missing (Windows, Linux, and Intel Mac when this Mac can't build it). It never
+# replaces these files and never publishes the release: a --draft stays a draft.
 #
 #   scripts/release.sh            next patch version (1.1.1 -> 1.1.2)
 #   scripts/release.sh 1.2.0      a given version
 #   scripts/release.sh --dry-run  build and collect the files only: no commit, tag or release
 #   --skip-tests                  don't run the desktop tests first
 #   --draft                       publish the release as a draft, to check before it goes out
-#   --all-platforms               then have GitHub Actions build the Windows, Linux and Intel Mac apps
-#                                 and add them to the release (about 15 minutes; uses Actions minutes)
-#   --add-platforms v1.2.0        only that, for a release that's already published
+#   --all-platforms               (no longer needed: the tag's workflow adds the other platforms)
+#   --add-platforms v1.2.0        have GitHub Actions add the missing platforms to an existing release
 #
 # Android-only releases are made by .github/workflows/android-release.yml from a tag such as
 # v1.2.1-android. This script still makes the combined desktop and Android releases.
@@ -21,7 +23,8 @@
 #   GitHub Actions, otherwise local releases leave them out.
 #
 # Needs: JDK 17, the Android SDK, gh signed in, and the Android signing key in ~/.gradle/gradle.properties
-# (see androidApp/ANDROID.md), so the APK updates earlier installs.
+# (see androidApp/ANDROID.md), so the APK updates earlier installs. HS_UPDATE_SIGNING_KEY in the
+# environment signs the Mac files for the desktop updater (see scripts/SignRelease.java).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -91,8 +94,10 @@ tag="v$version"
 IFS=. read -r major minor patch <<<"$version"
 (( major > 0 )) || fail "Installers need a version of 1.0.0 or later."
 # Each release's version code is higher than the last one's, so Android installs it as an update.
-# (GitHub's test builds use their run number, which stays far below.)
-code=$((major * 10000 + minor * 100 + patch))
+# Room for 1000 minor and patch versions (the old major*10000 + minor*100 scheme ran out at 100,
+# and every code from it is below these). GitHub's test builds use their run number, far below.
+(( minor < 1000 && patch < 1000 )) || fail "Minor and patch versions must be below 1000."
+code=$((major * 1000000 + minor * 1000 + patch))
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "$tag already exists."
 [ -z "$(git tag --list "$tag-*")" ] || fail "$version is already used by another tag (Android-only release)."
 echo "Releasing $tag (Android version code $code), last release ${last:-none}"
@@ -151,6 +156,9 @@ else
   echo "No Intel JDK 17 (or no Rosetta): skipping the Intel Mac build."
 fi
 
+step "Signing the Mac files for the desktop updater"
+scripts/sign-desktop.sh "$dist"/*.dmg "$dist"/*.zip
+
 step "Checking the APK's signature"
 apksigner=$(ls -d "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/build-tools/*/ | sort -V | tail -1)apksigner
 cert=$("$apksigner" verify --print-certs "$dist/HyperStream-$version-android-and-tv.apk" | sed -n 's/.*SHA-256 digest: //p' | head -1)
@@ -172,7 +180,9 @@ sed -i '' -E "s/(findProperty\(\"appVersion\"\) as String\?\) \?: )\"[0-9.]+\"/\
 git add desktopApp/build.gradle.kts androidApp/build.gradle.kts appCore/build.gradle.kts
 # [skip ci]: GitHub doesn't start workflows for this push; the builds are already made
 git commit -q -m "Hyper Stream $version [skip ci]"
-git tag -a "$tag" -m "Hyper Stream $version"
+# The tag's workflow reads this line: it waits for these files, and builds only the other platforms
+built=$(cd "$dist" && ls | paste -sd, -)
+git tag -a "$tag" -m "Hyper Stream $version" -m "Built locally: $built"
 git push -q origin master "$tag"
 
 step "Publishing the release"
@@ -182,11 +192,7 @@ notes=$(mktemp)
   echo
   echo "- **macOS:** \`-macos-apple-silicon.dmg\` for M-series Macs$( [ -f "$dist/HyperStream-$version-macos-intel.dmg" ] && echo ", \`-macos-intel.dmg\` for Intel Macs"). Needs [VLC](https://www.videolan.org/vlc/). The app isn't notarized: the first time, right-click it and choose Open. The \`.zip\` is the same app without an installer."
   echo "- **Android phones, tablets and TV:** \`-android-and-tv.apk\` (allow installs from unknown sources). It installs over earlier releases from 1.1.1 on."
-  if $all_platforms; then
-    echo "- **Windows:** the \`.msi\` installer, or the portable \`.zip\`. **Linux:** the \`.deb\` package, or the portable \`.tar.gz\`. Both need VLC. These are added a few minutes after the release."
-  else
-    echo "- **Windows and Linux:** not in this release."
-  fi
+  echo "- **Windows:** the \`.msi\` installer, or the portable \`.zip\`. **Linux:** the \`.deb\` package, or the portable \`.tar.gz\`. Both need VLC. These are added by GitHub Actions about 20 minutes after the release."
   echo
   echo "## Changes"
   echo
@@ -195,4 +201,4 @@ notes=$(mktemp)
 gh release create "$tag" "$dist"/* -R "$REPO" --title "Hyper Stream $version" --notes-file "$notes" $($draft && echo --draft)
 rm -f "$notes"
 gh release view "$tag" -R "$REPO" --json url --jq .url
-if $all_platforms; then other_platforms "$tag"; fi
+echo "GitHub Actions now adds the missing platforms (Windows, Linux$( [ -f "$dist/HyperStream-$version-macos-intel.dmg" ] || echo ", Intel Mac")): see the release-all workflow."

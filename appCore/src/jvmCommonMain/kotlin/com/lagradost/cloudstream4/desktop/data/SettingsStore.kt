@@ -56,6 +56,8 @@ data class AppSettings(
     @JsonProperty("swipeControls") val swipeControls: Boolean = true,
     /** Look for a new release on GitHub, and mention it when one is found. */
     @JsonProperty("checkForUpdates") val checkForUpdates: Boolean = true,
+    /** Install newer versions of extensions by themselves, a while after the app starts. */
+    @JsonProperty("autoUpdateExtensions") val autoUpdateExtensions: Boolean = true,
     /** When the last successful update check happened, so automatic checks don't run too often. */
     @JsonProperty("lastUpdateCheckAt") val lastUpdateCheckAt: Long = 0,
     /** The newest version already announced, so one release is mentioned only once. */

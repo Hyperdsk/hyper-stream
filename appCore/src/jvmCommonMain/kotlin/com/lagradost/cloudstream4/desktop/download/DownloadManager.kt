@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,6 +94,11 @@ data class DownloadEntry(
     @JsonProperty("doneChunks") val doneChunks: List<Int> = emptyList(),
     /** Connections currently downloading this file. */
     @JsonProperty("connections") val connections: Int = 0,
+    /**
+     * Where this download's files go, without their extension, picked once when it first starts.
+     * Two titles with the same name get different paths, so neither replaces the other's file.
+     */
+    @JsonProperty("basePath") val basePath: String? = null,
 ) {
     @get:JsonIgnore
     val playable: PlayableEpisode get() = PlayableEpisode(episodeData, episodeName, season, episode)
@@ -154,6 +160,23 @@ object DownloadManager {
     private val file = jsonFile<List<DownloadEntry>>("downloads.json") { emptyList() }
     private val jobs = ConcurrentHashMap<String, Job>()
 
+    /**
+     * Jobs told to stop that may still be writing: a network read can take a while to notice. A
+     * new job for the same download waits for them, so two never write the same file.
+     */
+    private val stopping = ConcurrentHashMap<String, Job>()
+
+    /** Downloads switched to another source while running: progress is cleared again once the old job has stopped. */
+    private val startFresh = ConcurrentHashMap.newKeySet<String>()
+
+    private fun stop(id: String) {
+        jobs.remove(id)?.let { job ->
+            job.cancel()
+            stopping[id] = job
+            job.invokeOnCompletion { stopping.remove(id, job) }
+        }
+    }
+
     /** Subtitles handed over with a picked source, used when its download starts. */
     private val pendingSubtitles = ConcurrentHashMap<String, List<SubtitleFile>>()
 
@@ -193,9 +216,14 @@ object DownloadManager {
             if (existing.status == DownloadStatus.Completed) return
             // A different source was picked: start over with it
             if (request.link != null && request.link.url != existing.link?.url) {
-                jobs.remove(id)?.cancel()
+                stop(id)
+                startFresh += id
                 set(id) {
-                    it.copy(link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList(), error = null)
+                    it.copy(
+                        // Queued again, so it starts: still "Downloading" with its job stopped, it never would
+                        status = DownloadStatus.Queued, speed = 0, connections = 0,
+                        link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList(), error = null,
+                    )
                 }
             }
             resume(id)
@@ -223,7 +251,7 @@ object DownloadManager {
     }
 
     fun pause(id: String) {
-        jobs.remove(id)?.cancel()
+        stop(id)
         set(id) { if (it.status == DownloadStatus.Completed) it else it.copy(status = DownloadStatus.Paused, speed = 0) }
         save()
         pump()
@@ -254,6 +282,15 @@ object DownloadManager {
             .forEach { pause(it.id) }
     }
 
+    /** Whether anything is downloading or waiting to. */
+    val anyActive: Boolean
+        get() = _entries.value.any { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }
+
+    /** Pauses everything that's downloading or waiting, such as when Android stops background work. */
+    fun pauseEverything() {
+        _entries.value.filter { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }.forEach { pause(it.id) }
+    }
+
     /** Resumes or retries every unfinished download of one title. */
     fun resumeAll(apiName: String, parentUrl: String) {
         _entries.value.filter { it.apiName == apiName && it.parentUrl == parentUrl }
@@ -263,16 +300,22 @@ object DownloadManager {
 
     /** Cancels and removes the download, deleting its files. */
     fun delete(id: String) {
-        jobs.remove(id)?.cancel()
+        stop(id)
         val entry = _entries.value.firstOrNull { it.id == id } ?: return
-        if (entry.isPackage) entry.file?.parentFile?.deleteRecursively() else entry.file?.delete()
-        entry.file?.let { File(it.path + ".part").delete() }
-        entry.subtitles.forEach { File(it).delete() }
-        // Remove the title's folder once it is empty
-        entry.file?.parentFile?.takeIf { it != folder && it.listFiles()?.isEmpty() == true }?.delete()
         _entries.update { list -> list.filterNot { it.id == id }.toPersistentList() }
         save()
         pump()
+        fun deleteFiles() {
+            if (entry.isPackage) entry.file?.parentFile?.deleteRecursively() else entry.file?.delete()
+            entry.file?.let { File(it.path + ".part").delete() }
+            entry.subtitles.forEach { File(it).delete() }
+            // Remove the title's folder once it is empty
+            entry.file?.parentFile?.takeIf { it != folder && it.listFiles()?.isEmpty() == true }?.delete()
+        }
+        // A stopped job still writing would make the files again: wait for it to let go first
+        val writing = stopping[id]
+        if (writing == null) deleteFiles()
+        else scope.launch { writing.join(); deleteFiles() }
     }
 
     /**
@@ -314,14 +357,14 @@ object DownloadManager {
             val newFile = File(targetFolder, file.name)
             val subtitles = moveSubtitles(entry.subtitles, titleDir)
             removeEmptyTitleFolder(sourceFolder.parentFile)
-            return entry.copy(filePath = newFile.path, subtitles = subtitles)
+            return entry.copy(filePath = newFile.path, subtitles = subtitles, basePath = null)
         }
 
         val target = uniqueTarget(file, titleDir)
         if (!movePath(file, target)) return null
         val subtitles = moveSubtitles(entry.subtitles, titleDir)
         removeEmptyTitleFolder(file.parentFile)
-        return entry.copy(filePath = target.path, subtitles = subtitles)
+        return entry.copy(filePath = target.path, subtitles = subtitles, basePath = null)
     }
 
     /** [target] itself when it is already the source, otherwise a free name in [dir]. */
@@ -391,7 +434,15 @@ object DownloadManager {
             .take(free)
             .forEach { entry ->
                 set(entry.id) { it.copy(status = DownloadStatus.Downloading, error = null) }
-                jobs[entry.id] = scope.launch { work(entry.id) }
+                val previous = stopping[entry.id]
+                jobs[entry.id] = scope.launch {
+                    previous?.join()
+                    // The old job's last progress report may have landed after the switch
+                    if (startFresh.remove(entry.id)) {
+                        set(entry.id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
+                    }
+                    work(entry.id)
+                }
             }
     }
 
@@ -413,9 +464,9 @@ object DownloadManager {
                 }
             } else {
                 val link = entry.link?.let { listOf(it) }?.takeIf { entry.bytesDone > 0 || entry.segmentsDone > 0 }
-                // Try the saved link first when resuming, then freshly loaded links
+                // Try the saved link first when resuming, then freshly loaded links. Progress is kept
+                // until a link with another url starts, so a retry after a failure goes on from there
                 link?.let { tryLinks(id, it) } == true || run {
-                    set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
                     val (links, subs) = findLinks(entry.apiName, entry.episodeData, maxQuality = entry.maxQuality)
                     if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
                     downloadSubtitles(id, subs)
@@ -430,7 +481,8 @@ object DownloadManager {
             set(id) { it.copy(status = DownloadStatus.Failed, speed = 0, error = t.message ?: t.javaClass.simpleName) }
         } finally {
             save()
-            jobs.remove(id)
+            // Only this job's own place: a new one may already have taken it
+            currentCoroutineContext()[Job]?.let { jobs.remove(id, it) }
             pump()
         }
     }
@@ -482,7 +534,12 @@ object DownloadManager {
         var lastError: Throwable? = null
         for (link in links) {
             coroutineScope { ensureActive() }
-            set(id) { it.copy(link = link, error = null) }
+            set(id) {
+                // Progress belongs to one url: a different one starts from nothing. The same one keeps
+                // it, so a failed download that's retried continues where it stopped
+                if (it.link?.url == link.url) it.copy(link = link, error = null)
+                else it.copy(link = link, error = null, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList())
+            }
             try {
                 if (link.type == ExtractorLinkType.M3U8) downloadHls(id, link) else downloadDirect(id, link)
                 return true
@@ -490,7 +547,6 @@ object DownloadManager {
                 throw e
             } catch (t: Throwable) {
                 lastError = t
-                set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
             }
         }
         lastError?.let { throw it }
@@ -503,7 +559,7 @@ object DownloadManager {
         var last: Throwable? = null
         for (attempt in 0 until 3) {
             try {
-                val body = app.get(url, headers = items.headers, verify = false).body
+                val body = app.get(url, headers = items.headers).body
                 return body.bytes().also { body.close() }
             } catch (e: CancellationException) {
                 throw e
@@ -531,20 +587,61 @@ object DownloadManager {
         }
     }
 
+    /**
+     * Where this download's files go, without their extension. Picked the first time and kept, so
+     * resuming finds its partial file, and never one another download uses: two titles with the
+     * same name, or two episodes with the same label, would otherwise replace each other's files.
+     */
+    @Synchronized
     private fun targetBase(entry: DownloadEntry): File {
+        current(entry.id)?.basePath?.let { return File(it).also { f -> f.parentFile?.mkdirs() } }
         val dir = File(folder, safeName(entry.title)).apply { mkdirs() }
-        val name = when {
-            entry.season != null && entry.episode != null ->
-                "S%02dE%02d".format(entry.season, entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
-            entry.episode != null -> "E%02d".format(entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
-            entry.episodeName != null -> entry.episodeName
-            else -> entry.title
-        }
-        return File(dir, safeName(name))
+        val name = safeName(
+            when {
+                entry.season != null && entry.episode != null ->
+                    "S%02dE%02d".format(entry.season, entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
+                entry.episode != null -> "E%02d".format(entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
+                entry.episodeName != null -> entry.episodeName
+                else -> entry.title
+            }
+        )
+        val others = _entries.value.filter { it.id != entry.id }
+        fun ours(base: File) = entry.filePath?.let { belongsTo(it, base) } == true
+        fun taken(base: File) = others.any { o -> o.basePath == base.path || o.filePath?.let { belongsTo(it, base) } == true } ||
+            (dir.listFiles()?.any { it.name.startsWith(base.name + ".") } == true)
+        var n = 1
+        var base = File(dir, name)
+        // A download from before paths were kept: its own partial file says which one is its
+        while (!ours(base) && taken(base)) base = File(dir, "$name (${++n})")
+        set(entry.id) { it.copy(basePath = base.path) }
+        save()
+        return base
     }
 
-    private fun safeName(name: String) =
-        name.replace(Regex("[/\\\\:*?\"<>|\\p{Cntrl}]"), " ").replace(Regex("\\s+"), " ").trim().take(120).ifBlank { "Untitled" }
+    /** Whether [path] is one of the files a download at [base] makes (its video, part file or package). */
+    private fun belongsTo(path: String, base: File): Boolean =
+        path.startsWith(base.path + ".") && !path.removePrefix(base.path + ".").contains(File.separatorChar) ||
+            File(path).parentFile?.path == HlsPackage.folderFor(base).path
+
+    private val windowsReserved = Regex("^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\\..*)?$", RegexOption.IGNORE_CASE)
+
+    /** A file or folder name that works on every system: Windows also refuses trailing dots and names like CON. */
+    internal fun safeName(name: String): String {
+        val cleaned = name.replace(Regex("[/\\\\:*?\"<>|\\p{Cntrl}]"), " ").replace(Regex("\\s+"), " ").trim().take(120)
+            .trimEnd('.', ' ').ifBlank { "Untitled" }
+        return if (windowsReserved.matches(cleaned)) "_$cleaned" else cleaned
+    }
+
+    /** Stops a download before the disk fills up, keeping what it has so it can go on later. */
+    private fun requireSpace(dir: File, bytes: Long) {
+        val free = dir.usableSpace
+        // 0 means the system couldn't tell
+        if (free in 1 until bytes + MIN_FREE_BYTES) {
+            throw IOException("Not enough free space in ${dir.path}. Make room, then resume.")
+        }
+    }
+
+    private const val MIN_FREE_BYTES = 200L shl 20
 
     /**
      * Separate HTTP/1.1 connections for downloads. Over HTTP/2 every range request would share a
@@ -575,13 +672,14 @@ object DownloadManager {
                 throw IOException("The host returned a web page instead of the video.")
             }
             val total = probe?.total
+            if (total != null) requireSpace(target.parentFile, total - if (part.exists()) part.length() else 0)
             if (probe != null && probe.acceptsRanges && total != null && total > 16L shl 20) {
                 val resume = entry.chunkSize != null && entry.bytesTotal == total && entry.link?.url == link.url &&
                     part.exists() && part.length() == total
                 val chunkSize = if (resume) entry.chunkSize!! else SegmentedDownload.chunkSizeFor(total)
                 // A partial file from a single-connection download is complete from its start,
                 // so the chunks it fully covers are already done
-                val singlePrefix = !resume && entry.chunkSize == null && entry.link?.url == link.url &&
+                val singlePrefix = !resume && entry.chunkSize == null && entry.link?.url == link.url && entry.bytesDone > 0 &&
                     part.exists() && part.length() in 1 until total
                 val alreadyDone = when {
                     resume -> entry.doneChunks
@@ -633,7 +731,7 @@ object DownloadManager {
     private suspend fun downloadSingle(id: String, link: SavedLink, target: File, part: File) {
         val entry = current(id) ?: return
         // A partial file from a multi-connection attempt has holes, so it can't be appended to
-        val offset = if (entry.link?.url == link.url && entry.chunkSize == null && part.exists()) part.length() else 0L
+        val offset = if (entry.link?.url == link.url && entry.chunkSize == null && entry.bytesDone > 0 && part.exists()) part.length() else 0L
         if (offset == 0L) part.delete()
 
         val request = Request.Builder().url(link.url).apply {
@@ -662,7 +760,11 @@ object DownloadManager {
                         if (read < 0) break
                         out.write(buffer, 0, read)
                         done += read
-                        meter.tick(done)?.let { speed -> set(id) { it.copy(bytesDone = done, speed = speed) }; save() }
+                        meter.tick(done)?.let { speed ->
+                            set(id) { it.copy(bytesDone = done, speed = speed) }
+                            save()
+                            requireSpace(part.parentFile, 0)
+                        }
                     }
                     set(id) { it.copy(bytesDone = done, bytesTotal = total ?: done, connections = 0) }
                 }
@@ -695,8 +797,16 @@ object DownloadManager {
             // Older partial downloads started with the first media segment. Keep those bytes and
             // put the init segment in front instead of downloading them again.
             if (part.length() > 0) {
-                val media = part.readBytes()
-                part.writeBytes(init + media)
+                // Streamed through a second file: the partial download can be gigabytes
+                val joined = File(part.path + ".init")
+                joined.outputStream().use { out ->
+                    out.write(init)
+                    part.inputStream().use { it.copyTo(out) }
+                }
+                if (!joined.renameTo(part)) {
+                    part.delete()
+                    if (!joined.renameTo(part)) throw IOException("Could not save ${part.name}.")
+                }
                 written += init.size
             } else {
                 part.writeBytes(init)
@@ -725,7 +835,10 @@ object DownloadManager {
                 val bytes = written
                 val speed = meter.tick(bytes)
                 set(id) { it.copy(segmentsDone = done, bytesDone = bytes, speed = speed ?: it.speed) }
-                if (speed != null) save()
+                if (speed != null) {
+                    save()
+                    requireSpace(part.parentFile, 0)
+                }
             }
         }
         // MPEG-TS packets start with the sync byte 0x47, anything else is fragmented mp4
@@ -742,7 +855,7 @@ object DownloadManager {
     private suspend fun downloadHlsSeparateAudio(id: String, link: SavedLink) {
         val entry = current(id) ?: return
         val headers = headersFor(link)
-        val text = app.get(link.url, headers = headers, verify = false).text
+        val text = app.get(link.url, headers = headers).text
         val master = HlsPlaylistParser.parse(link.url, text) ?: throw IOException("The stream's playlist couldn't be read.")
         val variant = master.variants.filter { !it.isTrickPlay() }
             .maxByOrNull { (it.format.width * it.format.height).toLong() * 1000L + it.format.averageBitrate.toLong() }
@@ -784,7 +897,10 @@ object DownloadManager {
                 val bytes = videoTrack.bytes + audioTrack.bytes
                 val speed = meter.tick(bytes)
                 set(id) { it.copy(segmentsDone = done, bytesDone = bytes, speed = speed ?: it.speed) }
-                if (speed != null) save()
+                if (speed != null) {
+                    save()
+                    requireSpace(dir, 0)
+                }
             }
         }
         fetch(video, videoTrack, "Video")
@@ -813,7 +929,7 @@ object DownloadManager {
         val saved = renditions.mapNotNull { r ->
             runCatching {
                 val playlistUrl = r.url.toString()
-                val playlist = app.get(playlistUrl, headers = headers, verify = false).text
+                val playlist = app.get(playlistUrl, headers = headers).text
                 val files = playlist.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
                 // Segmented subtitles would need joining; most sites list one file
                 val only = files.singleOrNull() ?: return@runCatching null
@@ -821,7 +937,7 @@ object DownloadManager {
                 val lang = safeName(r.name.ifBlank { r.format.language ?: "Subtitles" }).take(30)
                 val ext = extensionFrom(url)?.takeIf { it in setOf("srt", "vtt", "ass", "ssa") } ?: "vtt"
                 val file = File("${base.path}.$lang.$ext")
-                file.writeBytes(app.get(url, headers = headers, verify = false).body.bytes())
+                file.writeBytes(app.get(url, headers = headers).body.bytes())
                 file.path
             }.getOrNull()
         }
@@ -829,9 +945,16 @@ object DownloadManager {
     }
 
     private fun finish(id: String, part: File, target: File) {
-        target.delete()
-        if (!part.renameTo(target)) throw IOException("Could not save ${target.name}.")
-        set(id) { it.copy(filePath = target.path) }
+        // Only ever replaces this download's own earlier file, never another download's
+        var file = target
+        var n = 2
+        while (file.exists() && _entries.value.any { it.id != id && it.filePath == file.path }) {
+            file = File(target.parentFile, "${target.nameWithoutExtension} ($n).${target.extension}")
+            n++
+        }
+        file.delete()
+        if (!part.renameTo(file)) throw IOException("Could not save ${file.name}.")
+        set(id) { it.copy(filePath = file.path) }
     }
 
     private suspend fun downloadSubtitles(id: String, subs: List<SubtitleFile>) {

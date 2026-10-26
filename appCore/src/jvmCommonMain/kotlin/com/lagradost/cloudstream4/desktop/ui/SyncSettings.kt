@@ -50,6 +50,28 @@ fun SyncSettings() {
         when {
             ui.signedIn -> {
                 Text("Signed in as ${ui.email}", style = MaterialTheme.typography.bodyMedium)
+                if (ui.askMerge) {
+                    Text(
+                        "This device was signed in to another account before. Add this device's progress and library to this account, " +
+                            "or replace them with this account's? Nothing syncs until you choose.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { SyncManager.chooseMerge(keepThisDevice = true) }) { Text("Add this device's library") }
+                        OutlinedButton(onClick = { SyncManager.chooseMerge(keepThisDevice = false) }) { Text("Use only this account's") }
+                    }
+                }
+                if (ui.suggestedRepositories.isNotEmpty()) {
+                    Text(
+                        "Your other devices use these repositories: " + ui.suggestedRepositories.joinToString { it.name.ifBlank { it.url } } +
+                            ". Extensions run code on this device, so add them only if you added them yourself.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { SyncManager.addSuggestedRepositories() }) { Text("Add them") }
+                        TextButton(onClick = { SyncManager.declineSuggestedRepositories() }) { Text("Not on this device") }
+                    }
+                }
                 // Refreshes "2 min ago" and the TV code's time left while the screen is open
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
                 LaunchedEffect(Unit) { while (true) { delay(1_000); now = System.currentTimeMillis() } }

@@ -31,6 +31,7 @@ class SyncManagerTest {
     private data class Row(val kind: String, val key: String, val data: JsonNode?, val deleted: Boolean, val at: Long, var updatedAt: String)
 
     private val rows = mutableMapOf<Pair<String, String>, Row>()
+    private val pushes = java.util.concurrent.atomic.AtomicInteger()
     private var clock = 0L
     private fun serverTime() = Instant.ofEpochMilli(1_800_000_000_000 + clock++).toString()
 
@@ -60,6 +61,7 @@ class SyncManagerTest {
             ex.json(mapOf("access_token" to "token", "refresh_token" to "refresh", "expires_in" to 3600, "user" to mapOf("id" to "user-2", "email" to "new@example.com")))
         }
         createContext("/rest/v1/rpc/hs_push") { ex ->
+            pushes.incrementAndGet()
             val items = jsonMapper.readTree(ex.requestBody)["items"]
             synchronized(rows) {
                 items.forEach { i ->
@@ -257,5 +259,115 @@ class SyncManagerTest {
             server.stop(0)
             System.clearProperty("hyperstream.syncUrl")
         }
+    }
+
+    /** Signed out, then in again as me@example.com, with nothing known from an earlier test. */
+    private suspend fun signInFresh() {
+        SyncManager.signOut().join()
+        SyncManager.sendLink("me@example.com").join()
+        SyncManager.verify("123456").join()
+        withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
+        // An earlier test may have left this device on another account
+        if (SyncManager.ui.value.askMerge) SyncManager.chooseMerge(keepThisDevice = true).join()
+    }
+
+    private fun withSyncServer(block: suspend () -> Unit) = runBlocking {
+        val server = server()
+        System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${server.address.port}")
+        try {
+            signInFresh()
+            block()
+        } finally {
+            SyncManager.signOut().join()
+            server.stop(0)
+            System.clearProperty("hyperstream.syncUrl")
+        }
+    }
+
+    private fun row(kind: String, key: String) = synchronized(rows) { rows[kind to key] }
+
+    @Test
+    fun repositoriesFromAnotherDeviceWaitForTheUser() = withSyncServer {
+        val ExtensionManager = com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
+        val declined = com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData(null, "Someone else's", "http://127.0.0.1:9/declined.json")
+        val wanted = com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData(null, "My other one", "http://127.0.0.1:9/wanted.json")
+        remote("repository", declined.url, declined, at = 1)
+        remote("extension", "${declined.url}|Evil", mapOf("internalName" to "Evil", "name" to "Evil", "repositoryUrl" to declined.url), at = 1)
+        SyncManager.syncNow()
+        assertTrue(ExtensionManager.repositories().none { it.url == declined.url }, "a repository isn't added just because the account lists it")
+        assertEquals(listOf(declined.url), SyncManager.ui.value.suggestedRepositories.map { it.url }, "it's offered instead")
+
+        SyncManager.declineSuggestedRepositories()
+        SyncManager.syncNow()
+        assertTrue(SyncManager.ui.value.suggestedRepositories.isEmpty(), "declined ones aren't offered again")
+        assertTrue(ExtensionManager.repositories().none { it.url == declined.url })
+        assertEquals(false, row("repository", declined.url)?.deleted, "declining here doesn't remove it from the other devices")
+
+        remote("repository", wanted.url, wanted, at = 2)
+        SyncManager.syncNow()
+        assertEquals(listOf(wanted.url), SyncManager.ui.value.suggestedRepositories.map { it.url })
+        SyncManager.addSuggestedRepositories().join()
+        assertTrue(ExtensionManager.repositories().any { it.url == wanted.url }, "added once the user agreed")
+        ExtensionManager.removeRepository(wanted.url).join()
+    }
+
+    @Test
+    fun settingsFromANewerVersionAreLeftAlone() = withSyncServer {
+        val theme = com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.themeMode
+        val now = System.currentTimeMillis()
+        // A setting this version doesn't have, and a value it can't hold
+        remote("setting", "settingFromTheFuture", mapOf("value" to true), at = now)
+        remote("setting", "themeMode", mapOf("value" to "Sparkly"), at = now)
+        SyncManager.syncNow()
+        SyncManager.syncNow()
+        assertEquals(theme, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.themeMode, "kept this device's value")
+        assertEquals("Sparkly", row("setting", "themeMode")!!.data!!["value"].asText(), "and didn't send it back over the newer device's")
+        assertEquals(false, row("setting", "settingFromTheFuture")!!.deleted, "an unknown setting isn't deleted for everyone")
+    }
+
+    @Test
+    fun longKeysAreSentAsTheirHash() = withSyncServer {
+        val data = "{\"url\":\"" + "x".repeat(3000) + "\"}"
+        val entry = HistoryEntry("long-show", "Prov", "Long", null, null, data, null, null, null, 10_000, 100_000, updatedAt = 1_000)
+        LibraryStore.saveProgress(entry)
+        SyncManager.syncNow()
+        val sent = synchronized(rows) { rows.values.single { it.kind == "history" && it.data?.get("episodeData")?.asText() == data } }
+        assertTrue(sent.key.startsWith("sha256:") && sent.key.length < 100, "sent under a short key: ${sent.key.take(40)}")
+
+        remote("history", sent.key, entry.copy(positionMs = 50_000, updatedAt = 2_000), at = 2_000)
+        SyncManager.syncNow()
+        assertEquals(50_000, LibraryStore.state.value.progress("Prov", data)?.positionMs, "another device's change to it arrives")
+        assertEquals(1, LibraryStore.state.value.history.count { it.episodeData == data }, "as the same episode, not a copy")
+    }
+
+    @Test
+    fun removingFromContinueWatchingReachesOtherDevices() = withSyncServer {
+        val entry = HistoryEntry("cw-show", "Prov", "Continue", null, null, "cw-ep", null, 1, 1, 60_000, 1_200_000, updatedAt = 1_000)
+        LibraryStore.saveProgress(entry)
+        SyncManager.syncNow()
+        LibraryStore.removeFromContinueWatching("Prov", "cw-show")
+        SyncManager.syncNow()
+        assertEquals(1_200_000, row("history", "Prov|cw-ep")!!.data!!["positionMs"].asLong(), "the server took the removal")
+    }
+
+    @Test
+    fun signingInToAnotherAccountAsksFirst() = withSyncServer {
+        LibraryStore.saveProgress(HistoryEntry("mine", "Prov", "Mine", null, null, "mine-ep", null, null, null, 5_000, 100_000, updatedAt = 1_000))
+        SyncManager.syncNow()
+        SyncManager.signOut().join()
+
+        SyncManager.signInWithPassword("new@example.com", "secret1", create = true).join()
+        withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
+        assertTrue(SyncManager.ui.value.askMerge, "asks what to do with this device's library")
+        val before = pushes.get()
+        SyncManager.syncNow()
+        assertEquals(before, pushes.get(), "and sends nothing until answered")
+
+        SyncManager.chooseMerge(keepThisDevice = false).join()
+        assertTrue(!SyncManager.ui.value.askMerge)
+        assertTrue(LibraryStore.state.value.history.none { it.parentUrl == "mine" }, "replaced by the new account's library")
+
+        // Back on the usual account for the other tests
+        signInFresh()
     }
 }

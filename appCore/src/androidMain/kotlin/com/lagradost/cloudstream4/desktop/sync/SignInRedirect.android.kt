@@ -4,4 +4,5 @@ package com.lagradost.cloudstream4.desktop.sync
 actual object SignInRedirect {
     actual val url: String? = "hyperstream://auth"
     actual fun prepare() = Unit
+    actual fun stop() = Unit
 }

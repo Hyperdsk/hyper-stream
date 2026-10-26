@@ -26,10 +26,7 @@ class ExtensionManagerOnlineTest {
 
     @Test
     fun addRepositoryInstallAndLoad() = runBlocking {
-        if (!online()) {
-            println("Skipping, GitHub not reachable")
-            return@runBlocking
-        }
+        org.junit.Assume.assumeTrue("GitHub not reachable", online())
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-online").toString())
 
         // TestPlugins only publishes a plugin list, so serve a repo.json that points at it

@@ -94,19 +94,41 @@ object LibraryStore {
             // Keep the last picture when this save didn't take a new one
             val merged = if (entry.snapshotPath == null) entry.copy(snapshotPath = previous?.snapshotPath) else entry
             val rest = s.history.removingAll { it.apiName == entry.apiName && it.episodeData == entry.episodeData }
-            s.copy(history = rest.addingAt(0, merged))
+            s.copy(history = pruned(rest.addingAt(0, merged)))
         }
         // Every few seconds while playing: written in the background, not on the screen's thread
         historyFile.writeSoon { _state.value.history }
     }
 
     fun removeFromContinueWatching(apiName: String, parentUrl: String) {
+        // A new change time, so other devices take it: the same time as before would lose to their copy
+        val now = System.currentTimeMillis()
         _state.update { s ->
             s.copy(history = s.history.map {
-                if (it.apiName == apiName && it.parentUrl == parentUrl) it.copy(positionMs = it.durationMs) else it
+                if (it.apiName == apiName && it.parentUrl == parentUrl && !it.finished) it.copy(positionMs = it.durationMs, updatedAt = now) else it
             }.toPersistentList())
         }
         historyFile.writeLatest { _state.value.history }
+    }
+
+    /**
+     * Keeps history from growing forever (it's saved every few seconds while playing, and synced):
+     * past [MAX_HISTORY] entries, the oldest finished ones go first, then the oldest of the rest.
+     */
+    private fun pruned(history: PersistentList<HistoryEntry>): PersistentList<HistoryEntry> {
+        if (history.size <= MAX_HISTORY) return history
+        val drop = history.sortedWith(compareBy<HistoryEntry> { !it.finished }.thenBy { it.updatedAt })
+            .take(history.size - MAX_HISTORY).toSet()
+        return history.removingAll { it in drop }
+    }
+
+    private const val MAX_HISTORY = 3000
+
+    /** Forgets this device's progress and bookmarks, to take another account's instead. */
+    fun clearAll() {
+        _state.update { LibraryState() }
+        historyFile.write(emptyList())
+        bookmarksFile.write(emptyList())
     }
 
     fun clearHistory() {

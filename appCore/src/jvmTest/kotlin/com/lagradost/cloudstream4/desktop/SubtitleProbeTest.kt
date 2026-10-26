@@ -18,7 +18,9 @@ import kotlin.test.Test
 class SubtitleProbeTest {
     @Test
     fun probeSubtitles() {
-        val cs3 = System.getenv("CLOUDSTREAM_PROBE_CS3") ?: return println("Skipping")
+        val cs3 = System.getenv("CLOUDSTREAM_PROBE_CS3")
+        org.junit.Assume.assumeTrue("CLOUDSTREAM_PROBE_CS3 not set", cs3 != null)
+        cs3!!
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-probe").toString())
         LibrarySetup.init()
         PluginLoader.load(File(cs3))

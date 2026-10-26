@@ -23,7 +23,9 @@ import kotlin.test.assertTrue
 class VlcStreamingTest {
     @Test
     fun startsPlayingQuickly() {
-        val path = System.getenv("CLOUDSTREAM_VLC_TEST") ?: return println("Skipping, set CLOUDSTREAM_VLC_TEST to a video file")
+        val path = System.getenv("CLOUDSTREAM_VLC_TEST")
+        org.junit.Assume.assumeTrue("set CLOUDSTREAM_VLC_TEST to a video file", path != null)
+        path!!
         val video = File(path)
         val progress = File(System.getenv("CLOUDSTREAM_VLC_LOG") ?: "/tmp/cs-vlc-progress.txt").apply { writeText("") }
         fun say(line: String) { println(line); progress.appendText(line + "\n") }
@@ -89,7 +91,9 @@ class VlcStreamingTest {
             start()
         }
 
-        val player = VlcPlayer.create() ?: return println("Skipping, VLC not found")
+        val player = VlcPlayer.create()
+        org.junit.Assume.assumeTrue("VLC not found", player != null)
+        player!!
         val preview = player.createPreview()
         try {
             // CLOUDSTREAM_VLC_DIRECT=1 plays the file from disk, to tell codec problems from network ones

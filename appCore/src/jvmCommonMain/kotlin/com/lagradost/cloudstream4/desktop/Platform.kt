@@ -9,7 +9,13 @@ enum class UpdateTarget {
     MacAppleSilicon,
     MacIntel,
     Windows,
+    /** The portable .zip, unpacked by hand. */
+    WindowsPortable,
     Linux,
+    /** The portable .tar.gz, or a Linux without Debian packages. */
+    LinuxPortable;
+
+    val portable: Boolean get() = this == WindowsPortable || this == LinuxPortable
 }
 
 /** What differs between the Mac app and the Android phone and TV app, outside the player. */

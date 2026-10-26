@@ -98,7 +98,9 @@ object ExtensionManager {
             loadAllInstalled()
             // Checking repositories for updates can wait until the first screen has loaded
             delay(REFRESH_DELAY_MS)
-            _state.value.repositories.forEach { refreshRepository(it.data.url) }
+            _state.value.repositories.map { refreshRepository(it.data.url) }.forEach { it.join() }
+            // Like the Android app: extensions with a newer version in their repository update by themselves
+            if (SettingsStore.state.value.autoUpdateExtensions) updateAll(quiet = true)
         }
     }
 
@@ -199,6 +201,8 @@ object ExtensionManager {
         toRemove.forEach { uninstallNow(it) }
         lock.withLock { reposFile.write(reposFile.read().filterNot { it.url == url }) }
         _state.update { s -> s.copy(repositories = s.repositories.removingAll { it.data.url == url }) }
+        // Its extensions' sources are gone: screens listing sources must refresh
+        if (toRemove.isNotEmpty()) providersChanged()
     }
 
     fun refreshRepository(url: String) = scope.launch {
@@ -255,10 +259,20 @@ object ExtensionManager {
         busy(plugin.internalName, true)
         try {
             val folder = File(AppDirs.extensions, folderName(repositoryUrl))
-            val file = File(folder, "${plugin.internalName}.cs3")
-            // Unload any previous version before replacing the file
-            withContext(Dispatchers.IO) { PluginLoader.unload(file) }
-            RepositoryClient.download(plugin.url, file, plugin.fileHash)
+            // The name comes from the repository: never let it point outside this repository's folder
+            val file = File(folder, "${fileName(plugin.internalName)}.cs3")
+            // Downloaded (and checked) first: if that fails, the installed version keeps working.
+            // Loaded code comes from its converted copy, so the file can be replaced while it runs
+            val fresh = File(folder, "${file.name}.new")
+            RepositoryClient.download(plugin.url, fresh, plugin.fileHash)
+            withContext(Dispatchers.IO) {
+                PluginLoader.unload(file)
+                // The same extension installed under an older folder name: replaced, not kept beside it
+                _state.value.installed
+                    .filter { it.repositoryUrl == repositoryUrl && it.internalName == plugin.internalName && it.filePath != file.absolutePath }
+                    .forEach { uninstallNow(it) }
+                java.nio.file.Files.move(fresh.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
             PluginLoader.clearCache(file)
 
             val installed = InstalledPlugin(
@@ -308,8 +322,8 @@ object ExtensionManager {
         }
     }
 
-    /** Installs newer versions of every installed extension that its repository has updated. */
-    fun updateAll() = scope.launch {
+    /** Installs newer versions of every installed extension that its repository has updated. [quiet]: say nothing when none were. */
+    fun updateAll(quiet: Boolean = false) = scope.launch {
         var count = 0
         for (repo in _state.value.repositories) {
             for (installed in _state.value.installed.filter { it.repositoryUrl == repo.data.url }) {
@@ -320,7 +334,9 @@ object ExtensionManager {
                 }
             }
         }
-        _state.update { it.copy(message = if (count == 0) "All extensions are up to date." else "Updated $count extensions.") }
+        if (count > 0 || !quiet) {
+            _state.update { it.copy(message = if (count == 0) "All extensions are up to date." else "Updated $count ${if (count == 1) "extension" else "extensions"}.") }
+        }
     }
 
     // ---------- Loading ----------
@@ -365,6 +381,18 @@ object ExtensionManager {
         it.copy(busy = if (on) it.busy.adding(name) else it.busy.removing(name))
     }
 
-    private fun folderName(repositoryUrl: String): String =
-        repositoryUrl.removePrefix("https://").replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+    /**
+     * The folder for one repository's extensions: readable, plus part of the url's hash, so two
+     * repositories whose urls read the same once shortened never share one.
+     */
+    internal fun folderName(repositoryUrl: String): String {
+        val readable = repositoryUrl.substringAfter("://").replace(Regex("[^A-Za-z0-9._-]"), "_").take(60).trim('.')
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(repositoryUrl.toByteArray())
+            .take(4).joinToString("") { "%02x".format(it) }
+        return "${readable}_$hash"
+    }
+
+    /** An extension's name as a file name: no folders, no "..", nothing a file system refuses. */
+    internal fun fileName(internalName: String): String =
+        internalName.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.').take(100).ifBlank { "extension" }
 }
