@@ -102,31 +102,27 @@ fun DownloadsScreen() {
         .map { group -> group.sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 })) }
     val used = entries.filter { it.status == DownloadStatus.Completed }.sumOf { it.sizeOnDisk }
 
+    val downloading = entries.count { it.status == DownloadStatus.Downloading }
+    val waiting = entries.count { it.status == DownloadStatus.Queued }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Downloads", style = MaterialTheme.typography.headlineLarge)
-                val downloading = entries.count { it.status == DownloadStatus.Downloading }
-                val waiting = entries.count { it.status == DownloadStatus.Queued }
-                Text(
-                    listOfNotNull(
-                        downloading.takeIf { it > 0 }?.let { "$it downloading" },
-                        waiting.takeIf { it > 0 }?.let { "$it waiting" },
-                        "${formatBytes(used)} in ${folderLabel(folderPath)}",
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (Platform.downloadFolderNeedsAccess) OutlinedButton(onClick = { Platform.requestDownloadFolderAccess() }) {
-                Text("Allow access to Downloads")
-            }
-            if (Platform.canOpenFolders) OutlinedButton(onClick = { Platform.openFolder(DownloadManager.folder) }) {
-                Icon(Icons.Default.FolderOpen, null)
-                Spacer(Modifier.width(6.dp))
-                Text("Open folder")
-            }
-        }
+        LargeTitle(
+            "Downloads",
+            subtitle = listOfNotNull(
+                downloading.takeIf { it > 0 }?.let { "$it downloading" },
+                waiting.takeIf { it > 0 }?.let { "$it waiting" },
+                "${formatBytes(used)} in ${folderLabel(folderPath)}",
+            ).joinToString(" · "),
+            trailing = {
+                if (Platform.downloadFolderNeedsAccess) OutlinedButton(onClick = { Platform.requestDownloadFolderAccess() }) {
+                    Text("Allow access to Downloads")
+                }
+                if (Platform.canOpenFolders) OutlinedButton(onClick = { Platform.openFolder(DownloadManager.folder) }) {
+                    Icon(Icons.Default.FolderOpen, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Open folder")
+                }
+            },
+        )
 
         if (entries.isEmpty()) {
             MessageBox(
@@ -136,7 +132,7 @@ fun DownloadsScreen() {
             return
         }
 
-        LazyColumn(contentPadding = PaddingValues(horizontal = if (appLayout.compact) 12.dp else appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(contentPadding = PaddingValues(horizontal = appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             items(groups, key = { it.first().apiName + "|" + it.first().parentUrl }) { group ->
                 val first = group.first()
                 Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {

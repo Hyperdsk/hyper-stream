@@ -36,13 +36,9 @@ fun LibraryScreen() {
     val historyTab = types.size
 
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Library",
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 32.dp, top = 28.dp, bottom = 12.dp),
-        )
-        PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 16.dp) {
+        LargeTitle("Library")
+        // Tabs carry their own 16-point padding: start them so their text lines up with the title
+        PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = (appLayout.gutter - 16.dp).coerceAtLeast(0.dp)) {
             types.forEachIndexed { i, type ->
                 val count = library.bookmarks.count { it.watchType == type }
                 Tab(selected = tab == i, onClick = { tab = i }, text = { Text("${type.label} ($count)") })
@@ -64,7 +60,7 @@ fun LibraryScreen() {
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(if (appLayout.compact) 104.dp else 150.dp),
-                contentPadding = PaddingValues(horizontal = if (appLayout.compact) 12.dp else appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp),
+                contentPadding = PaddingValues(horizontal = appLayout.gutter, vertical = if (appLayout.compact) 12.dp else 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier.fillMaxSize(),

@@ -72,8 +72,8 @@ fun SettingsScreen(vlcAvailable: Boolean) {
         )
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = if (appLayout.compact) 16.dp else appLayout.gutter, vertical = if (appLayout.compact) 16.dp else 24.dp).widthIn(max = 760.dp)) {
-        Text("Settings", style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = appLayout.gutter, end = appLayout.gutter, bottom = 24.dp).widthIn(max = 760.dp)) {
+        LargeTitle("Settings", inset = false)
 
         run {
             // Phones and TVs have no Extensions tab, so they live here, as in the Android app (and
@@ -99,7 +99,7 @@ fun SettingsScreen(vlcAvailable: Boolean) {
                 FilterChip(
                     selected = settings.themeMode == mode,
                     onClick = { SettingsStore.update { it.copy(themeMode = mode) } },
-                    label = { Text(if (mode == CloudStreamThemeMode.FollowSystem) "System" else mode.name) },
+                    label = { Text(if (mode == CloudStreamThemeMode.FollowSystem) "System" else mode.name.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ")) },
                 )
             }
         }

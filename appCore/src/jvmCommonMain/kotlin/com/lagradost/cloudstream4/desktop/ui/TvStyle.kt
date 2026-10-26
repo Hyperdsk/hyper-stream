@@ -20,6 +20,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -203,9 +204,30 @@ fun GlassButton(icon: ImageVector, description: String, text: String? = null, mo
 
 /** The large title at the top of a screen, as in Apple's apps. */
 @Composable
-fun LargeTitle(text: String, modifier: Modifier = Modifier, trailing: @Composable (() -> Unit)? = null) {
-    Row(modifier.padding(start = appLayout.gutter, end = appLayout.gutter, top = if (appLayout.compact) 16.dp else 28.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+fun LargeTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+    /** A line under the title, such as how much the downloads take up. */
+    subtitle: String? = null,
+    /** False inside a page that already has the side margins (Settings, Extensions). */
+    inset: Boolean = true,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    // Every tab page starts with this, so titles share their size, left edge and spacing
+    Row(
+        modifier.padding(
+            start = if (inset) appLayout.gutter else 0.dp,
+            end = if (inset) appLayout.gutter else 0.dp,
+            top = if (appLayout.compact) 16.dp else 28.dp,
+            bottom = 12.dp,
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(text, style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
+            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         trailing?.invoke()
     }
 }

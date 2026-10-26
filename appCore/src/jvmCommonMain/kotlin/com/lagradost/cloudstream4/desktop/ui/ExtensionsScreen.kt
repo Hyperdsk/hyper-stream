@@ -89,10 +89,9 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     val q = query.trim()
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = if (appLayout.compact) 16.dp else appLayout.gutter, vertical = if (appLayout.compact) 16.dp else 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = appLayout.gutter, end = appLayout.gutter, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Extensions", style = if (appLayout.compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
+            LargeTitle("Extensions", inset = false, trailing = { Row(verticalAlignment = Alignment.CenterVertically) {
                 if (Platform.canOpenFolders) IconButton(onClick = { Platform.openFolder(AppDirs.extensions) }) {
                     Icon(Icons.Default.FolderOpen, "Open extensions folder")
                 }
@@ -106,7 +105,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
                         Text("Update all")
                     }
                 }
-            }
+            } })
             Text(
                 "Extensions are the same files the Android app uses. Add a repository by link or short code, " +
                     "paste a list of repositories to add them all" + if (Platform.canOpenFolders) ", or drop .cs3 files into the extensions folder." else ".",
