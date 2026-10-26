@@ -17,7 +17,7 @@ jobs:
   build:
     # Upstream CloudStream's workflow; it needs recloudstream's secrets, so forks skip it
     if: github.repository == 'recloudstream/cloudstream'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Generate access token
         id: generate_token
@@ -28,12 +28,12 @@ jobs:
           repository: "recloudstream/dokka"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: useblacksmith/checkout@v1
         with:
           path: "src"
 
       - name: Checkout dokka
-        uses: actions/checkout@v6
+        uses: useblacksmith/checkout@v1
         with:
           repository: "recloudstream/dokka"
           path: "dokka"
