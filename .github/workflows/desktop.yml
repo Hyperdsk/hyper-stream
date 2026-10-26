@@ -116,6 +116,17 @@ jobs:
         if: env.SKIP != 'true'
         run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ steps.version.outputs.value }}
 
+      - name: Check the Mac app's architecture
+        if: env.SKIP != 'true' && startsWith(matrix.name, 'macos-')
+        run: |
+          want=$([ "${{ matrix.name }}" = macos-intel ] && echo x86_64 || echo arm64)
+          bin=desktopApp/build/compose/binaries/main/app/HyperStream.app/Contents/MacOS/HyperStream
+          file "$bin"
+          if ! file "$bin" | grep -q "$want"; then
+            echo "::error::${{ matrix.name }} was built for another architecture (wanted $want)."
+            exit 1
+          fi
+
       - name: Collect files
         if: env.SKIP != 'true'
         run: |

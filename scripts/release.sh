@@ -11,6 +11,9 @@
 #                                 and add them to the release (about 15 minutes; uses Actions minutes)
 #   --add-platforms v1.2.0        only that, for a release that's already published
 #
+# A run that stopped after pushing its tag (say, the upload failed) is finished by running the
+# script again: it publishes the tagged version instead of starting the next one.
+#
 # Android-only releases are made by .github/workflows/android-release.yml from a tag such as
 # v1.2.1-android. This script still makes the combined desktop and Android releases.
 #
@@ -81,6 +84,16 @@ if ! $dry_run; then
 fi
 
 last=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+# A version that was committed and tagged here but never published: finish it
+resume=false
+if [ -z "$version" ] && [ -n "$last" ] && ! $dry_run \
+  && [ "$(git rev-parse "$last^{commit}")" = "$(git rev-parse HEAD)" ] \
+  && ! gh release view "$last" -R "$REPO" >/dev/null 2>&1; then
+  version="${last#v}"
+  resume=true
+  last=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | grep -vx "v$version" | head -1)
+  echo "v$version is tagged but was never published: publishing it now."
+fi
 if [ -z "$version" ]; then
   last_version="${last#v}"
   # An Android-only release tag is v1.2.1-android; use the same version for the next full release.
@@ -93,8 +106,10 @@ IFS=. read -r major minor patch <<<"$version"
 # Each release's version code is higher than the last one's, so Android installs it as an update.
 # (GitHub's test builds use their run number, which stays far below.)
 code=$((major * 10000 + minor * 100 + patch))
-git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "$tag already exists."
-[ -z "$(git tag --list "$tag-*")" ] || fail "$version is already used by another tag (Android-only release)."
+if ! $resume; then
+  git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "$tag already exists."
+  [ -z "$(git tag --list "$tag-*")" ] || fail "$version is already used by another tag (Android-only release)."
+fi
 echo "Releasing $tag (Android version code $code), last release ${last:-none}"
 
 grep -q '^hyperstream.keystorePassword=' "$HOME/.gradle/gradle.properties" 2>/dev/null \
@@ -166,6 +181,10 @@ fi
 
 # ---------- Publish ----------
 
+if $resume; then
+  step "Pushing $tag (committed and tagged by the earlier run)"
+  git push -q origin master "$tag"
+else
 step "Committing the version and tagging $tag"
 sed -i '' -E "s/(findProperty\(\"appVersion\"\) as String\?\) \?: )\"[0-9.]+\"/\1\"$version\"/" \
   desktopApp/build.gradle.kts androidApp/build.gradle.kts appCore/build.gradle.kts
@@ -174,6 +193,7 @@ git add desktopApp/build.gradle.kts androidApp/build.gradle.kts appCore/build.gr
 git commit -q -m "Hyper Stream $version [skip ci]"
 git tag -a "$tag" -m "Hyper Stream $version"
 git push -q origin master "$tag"
+fi
 
 step "Publishing the release"
 notes=$(mktemp)

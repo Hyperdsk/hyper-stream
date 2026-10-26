@@ -22,6 +22,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       skip: ${{ steps.pick.outputs.skip }}
+      keep_draft: ${{ steps.pick.outputs.keep_draft }}
       version: ${{ steps.pick.outputs.version }}
       code: ${{ steps.pick.outputs.code }}
     steps:
@@ -52,6 +53,10 @@ jobs:
           # as a draft for checking. Don't rebuild or publish that release; a partial release is
           # completed below.
           if gh release view "$tag" >/dev/null 2>&1; then
+            # A draft made on purpose (release.sh --draft) stays a draft once completed
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+              echo "keep_draft=true" >> "$GITHUB_OUTPUT"
+            fi
             count=$(gh release view "$tag" --json assets --jq '[.assets[] | select(.name | startswith("HyperStream-"))] | length')
             if [ "$count" -ge 9 ]; then
               echo "::notice::$tag already has all platform builds; leaving it alone."
@@ -93,8 +98,10 @@ jobs:
             os: blacksmith-6vcpu-macos-15
             package: packageDmg
             output: dmg
+          # GitHub's own Intel runner: Blacksmith's macOS runners are Apple silicon, and an app
+          # built there is arm64 whatever its name says
           - name: macos-intel
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15-intel
             package: packageDmg
             output: dmg
           - name: linux-x64
@@ -123,6 +130,17 @@ jobs:
 
       - name: Build installer and portable app
         run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ needs.prepare.outputs.version }}
+
+      - name: Check the Mac app's architecture
+        if: startsWith(matrix.name, 'macos-')
+        run: |
+          want=$([ "${{ matrix.name }}" = macos-intel ] && echo x86_64 || echo arm64)
+          bin=desktopApp/build/compose/binaries/main/app/HyperStream.app/Contents/MacOS/HyperStream
+          file "$bin"
+          if ! file "$bin" | grep -q "$want"; then
+            echo "::error::${{ matrix.name }} was built for another architecture (wanted $want)."
+            exit 1
+          fi
 
       - name: Collect files
         run: |
@@ -213,5 +231,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release edit "$GITHUB_REF_NAME" --draft=false -R "$GITHUB_REPOSITORY"
+          if [ "${{ needs.prepare.outputs.keep_draft }}" = "true" ]; then
+            echo "::notice::The release was a draft before this run; it stays a draft."
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false -R "$GITHUB_REPOSITORY"
+          fi
           gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json url --jq .url
