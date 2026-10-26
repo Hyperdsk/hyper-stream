@@ -30,7 +30,7 @@ concurrency:
 jobs:
   test:
     name: Desktop tests
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -54,7 +54,7 @@ jobs:
 
   database:
     name: Sync database tests
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     services:
       postgres:
         image: postgres:16
@@ -81,19 +81,23 @@ jobs:
       matrix:
         include:
           - name: macos-apple-silicon
-            os: macos-15
+            os: blacksmith-6vcpu-macos-15
+            java-arch: aarch64
             package: packageDmg
             output: dmg
           - name: macos-intel
-            os: macos-15-intel
+            os: blacksmith-6vcpu-macos-15
+            java-arch: x64
             package: packageDmg
             output: dmg
           - name: linux-x64
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
+            java-arch: x64
             package: packageDeb
             output: deb
           - name: windows-x64
-            os: windows-latest
+            os: blacksmith-4vcpu-windows-2025
+            java-arch: x64
             package: packageMsi
             output: msi
     runs-on: ${{ matrix.os }}
@@ -107,11 +111,18 @@ jobs:
         with:
           ref: ${{ inputs.release_tag || github.ref }}
 
+      # Blacksmith's Macs are Apple silicon only: the Intel app is made by an Intel JDK under
+      # Rosetta, as scripts/release.sh does on a Mac (jpackage builds for the JDK it runs on)
+      - name: Install Rosetta
+        if: runner.os == 'macOS' && matrix.java-arch == 'x64'
+        run: /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: 17
+          architecture: ${{ matrix.java-arch }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
@@ -145,6 +156,10 @@ jobs:
         if: env.SKIP != 'true'
         run: ./gradlew :desktopApp:${{ matrix.package }} :desktopApp:createDistributable -PappVersion=${{ steps.version.outputs.value }}
 
+      - name: Check the Intel build is for Intel
+        if: matrix.name == 'macos-intel' && env.SKIP != 'true'
+        run: file desktopApp/build/compose/binaries/main/app/HyperStream.app/Contents/MacOS/HyperStream | grep -q x86_64
+
       - name: Collect files
         if: env.SKIP != 'true'
         run: |
@@ -155,7 +170,7 @@ jobs:
           done
           # A portable copy that needs no installer
           case "${{ matrix.name }}" in
-            windows-*) (cd "$out/app" && 7z a -tzip "$GITHUB_WORKSPACE/dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" HyperStream >/dev/null) ;;
+            windows-*) (cd "$out/app" && if command -v 7z >/dev/null; then 7z a -tzip "$GITHUB_WORKSPACE/dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip" HyperStream >/dev/null; else powershell -NoProfile -Command "Compress-Archive -Path HyperStream -DestinationPath '$GITHUB_WORKSPACE/dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}-portable.zip'"; fi) ;;
             linux-*) tar -czf "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.tar.gz" -C "$out/app" HyperStream ;;
             macos-*) ditto -c -k --keepParent "$out/app/HyperStream.app" "dist/HyperStream-${{ steps.version.outputs.value }}-${{ matrix.name }}.zip" ;;
           esac
@@ -185,7 +200,7 @@ jobs:
     name: Android and Android TV
     # A release's APK comes from the Mac that made it, signed and numbered for updates
     if: inputs.release_tag == ''
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 

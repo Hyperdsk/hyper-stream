@@ -78,7 +78,9 @@ More detail:
 - [Android, tablets and TV](androidApp/ANDROID.md): what differs from the desktop app, and what isn't done yet.
 - [Sync backend](backend/supabase/README.md): setting up your own Supabase project.
 
-Pushes to `master` build every platform on GitHub Actions, as downloadable artifacts. Releases are
+Pushes to `master` build every platform on GitHub Actions, as downloadable artifacts. The jobs run on
+[Blacksmith](https://www.blacksmith.sh) runners, so the Blacksmith GitHub App must be installed on the repository; the Intel Mac
+app is built on an Apple silicon runner with an Intel JDK under Rosetta. Releases are
 built on a Mac and published with `scripts/release.sh` (see `scripts/release.sh --help`), without
 GitHub Actions: it makes the macOS apps and the Android APK, bumps the version, tags it and
 publishes the release. Windows and Linux builds come from GitHub Actions only: the tag's workflow
