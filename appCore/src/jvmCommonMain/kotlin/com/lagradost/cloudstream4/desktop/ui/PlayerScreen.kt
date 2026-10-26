@@ -266,6 +266,13 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
         }
     }
 
+    // Picture-in-picture (Android): only the picture, in a window too small for controls
+    val inPip by com.lagradost.cloudstream4.desktop.player.PictureInPicture.active.collectAsState()
+    if (inPip && player != null) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) { player.Video(Modifier.fillMaxSize(), fit, 1f, Offset.Zero) }
+        return
+    }
+
     val seekMs = settings.seekSeconds * 1000L
     Box(
         Modifier

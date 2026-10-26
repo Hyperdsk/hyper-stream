@@ -307,6 +307,14 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
         return runCatching { view.getBitmap(width, height)?.asImageBitmap() }.getOrNull()
     }
 
+    /** The video's shape for the picture-in-picture window, within the range Android allows. */
+    fun aspectRatio(): android.util.Rational {
+        val size = player.videoSize
+        if (size.width <= 0 || size.height <= 0) return android.util.Rational(16, 9)
+        val ratio = (size.width * size.pixelWidthHeightRatio / size.height).coerceIn(1f / 2.39f, 2.39f)
+        return android.util.Rational((ratio * 1000).toInt(), 1000)
+    }
+
     /** Seek bar thumbnails aren't available on Android yet. */
     override fun createPreview(): SeekPreview? = null
 
