@@ -119,7 +119,7 @@ class DownloadManagerTest {
         ): Boolean {
             subtitleCallback(newSubtitleFile("English", "$base/subs.vtt"))
             when (data) {
-                "direct" -> callback(newExtractorLink(name, "Direct", "$base/movie.mp4", ExtractorLinkType.VIDEO) { quality = 720 })
+                "direct", "direct2" -> callback(newExtractorLink(name, "Direct", "$base/movie.mp4", ExtractorLinkType.VIDEO) { quality = 720 })
                 "fmp4" -> callback(newExtractorLink(name, "HLS", "$base/fmp4/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
                 else -> callback(newExtractorLink(name, "HLS", "$base/hls/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
             }
@@ -364,6 +364,24 @@ class DownloadManagerTest {
             assertTrue(rangeRequests.get() > 0, "resume should use a Range request")
             assertEquals(1, direct.subtitles.size)
             println("Direct: ${direct.file} with ${direct.subtitles}")
+
+            // Paused part way, then the download folder changes: it carries on where it was, not from nothing
+            DownloadManager.enqueue(request("direct2", 3))
+            val id2 = DownloadManager.idFor("DownloadTest", "direct2")
+            withTimeout(20_000) { DownloadManager.entries.first { list -> list.any { it.id == id2 && it.bytesDone > 512 * 1024 } } }
+            DownloadManager.pause(id2)
+            val ranges = rangeRequests.get()
+            val elsewhere = Files.createTempDirectory("cs-downloads-new").toFile()
+            SettingsStore.update { it.copy(downloadFolder = elsewhere.path) }
+            DownloadManager.resume(id2)
+            val second = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == id2 && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+            }.first { it.id == id2 }
+            assertEquals(DownloadStatus.Completed, second.status, second.error)
+            assertContentEquals(movie, second.file!!.readBytes())
+            assertTrue(second.file!!.path.startsWith(folder.path), "finished in the folder it started in: ${second.file}")
+            assertTrue(rangeRequests.get() > ranges, "and resumed with a Range request")
+            SettingsStore.update { it.copy(downloadFolder = folder.path) }
 
             // HLS: decrypted segments joined in order, saved as .ts
             DownloadManager.enqueue(request("hls", 2))

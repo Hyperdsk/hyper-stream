@@ -223,7 +223,9 @@ object DownloadManager {
     }
 
     fun pause(id: String) {
-        jobs.remove(id)?.cancel()
+        // The job stays listed until it has really stopped (a blocking read can take a while), so
+        // a quick resume waits for it instead of starting a second worker on the same file
+        jobs[id]?.cancel()
         set(id) { if (it.status == DownloadStatus.Completed) it else it.copy(status = DownloadStatus.Paused, speed = 0) }
         save()
         pump()
@@ -263,16 +265,28 @@ object DownloadManager {
 
     /** Cancels and removes the download, deleting its files. */
     fun delete(id: String) {
-        jobs.remove(id)?.cancel()
+        val job = jobs[id]?.apply { cancel() }
         val entry = _entries.value.firstOrNull { it.id == id } ?: return
-        if (entry.isPackage) entry.file?.parentFile?.deleteRecursively() else entry.file?.delete()
-        entry.file?.let { File(it.path + ".part").delete() }
-        entry.subtitles.forEach { File(it).delete() }
-        // Remove the title's folder once it is empty
-        entry.file?.parentFile?.takeIf { it != folder && it.listFiles()?.isEmpty() == true }?.delete()
         _entries.update { list -> list.filterNot { it.id == id }.toPersistentList() }
         save()
-        pump()
+        fun removeFiles() {
+            if (entry.isPackage) entry.file?.parentFile?.deleteRecursively() else entry.file?.delete()
+            entry.file?.let { File(it.path + ".part").delete() }
+            entry.subtitles.forEach { File(it).delete() }
+            // Remove the title's folder once it is empty
+            entry.file?.parentFile?.takeIf { it != folder && it.listFiles()?.isEmpty() == true }?.delete()
+        }
+        // A running download's files go once it has stopped writing to them, or it could make them again
+        if (job == null || job.isCompleted) {
+            removeFiles()
+            pump()
+        } else {
+            scope.launch {
+                job.join()
+                removeFiles()
+                pump()
+            }
+        }
     }
 
     /**
@@ -289,17 +303,21 @@ object DownloadManager {
         }
         if (!destination.canWrite()) return@withContext MoveResult(0, skipped, finished.size)
 
-        val moved = mutableMapOf<String, DownloadEntry>()
+        var moved = 0
         var failed = 0
         for (entry in finished) {
             val updated = runCatching { moveEntry(entry, destination) }.getOrNull()
-            if (updated != null) moved[entry.id] = updated else failed++
-        }
-        if (moved.isNotEmpty()) {
-            _entries.update { list -> list.map { moved[it.id] ?: it }.toPersistentList() }
+            if (updated == null) {
+                failed++
+                continue
+            }
+            moved++
+            // Saved after each one: if the app is closed during a long move, those already moved
+            // aren't left pointing at their old place
+            _entries.update { list -> list.map { if (it.id == updated.id) updated else it }.toPersistentList() }
             save()
         }
-        MoveResult(moved.size, skipped, failed)
+        MoveResult(moved, skipped, failed)
     }
 
     private fun moveEntry(entry: DownloadEntry, destination: File): DownloadEntry? {
@@ -355,7 +373,11 @@ object DownloadManager {
         return try {
             if (source.isDirectory) source.copyRecursively(target, overwrite = false)
             else source.copyTo(target, overwrite = false)
-            if (target.exists()) source.deleteRecursively() else false
+            if (!target.exists()) return false
+            // The copy is complete, so the move is done: removing the original is a best effort. A
+            // delete that fails partway must not leave the download pointing at what's left of it
+            if (!source.deleteRecursively()) System.err.println("Moved, but couldn't remove all of ${source.path}")
+            true
         } catch (t: Throwable) {
             // Leave no half-copied file or folder behind
             target.deleteRecursively()
@@ -382,7 +404,8 @@ object DownloadManager {
     /** Starts queued downloads up to the parallel limit, oldest first. */
     @Synchronized
     private fun pump() {
-        jobs.entries.removeIf { !it.value.isActive }
+        // Completed, not just cancelled: a cancelled download may still be finishing a write
+        jobs.entries.removeIf { it.value.isCompleted }
         val free = maxParallel - jobs.size
         if (free <= 0) return
         _entries.value
@@ -398,6 +421,7 @@ object DownloadManager {
     // ---------- Worker ----------
 
     private suspend fun work(id: String) {
+        val me = kotlinx.coroutines.currentCoroutineContext()[Job]
         try {
             val entry = current(id) ?: return
             val chosen = entry.link?.takeIf { entry.chosen }
@@ -430,7 +454,8 @@ object DownloadManager {
             set(id) { it.copy(status = DownloadStatus.Failed, speed = 0, error = t.message ?: t.javaClass.simpleName) }
         } finally {
             save()
-            jobs.remove(id)
+            // Only this worker's own entry: a newer one for the same download may be listed by now
+            jobs.remove(id, me)
             pump()
         }
     }
@@ -532,7 +557,13 @@ object DownloadManager {
     }
 
     private fun targetBase(entry: DownloadEntry): File {
-        val dir = File(folder, safeName(entry.title)).apply { mkdirs() }
+        // A download already under way carries on in the folder it started in, even after the
+        // download folder changed, or it would start again from nothing
+        val started = entry.file
+            ?.takeIf { entry.status != DownloadStatus.Completed && (entry.bytesDone > 0 || entry.segmentsDone > 0) }
+            ?.let { if (it.name == HlsPackage.MASTER) it.parentFile?.parentFile else it.parentFile }
+            ?.takeIf { it.isDirectory }
+        val dir = started ?: File(folder, safeName(entry.title)).apply { mkdirs() }
         val name = when {
             entry.season != null && entry.episode != null ->
                 "S%02dE%02d".format(entry.season, entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
