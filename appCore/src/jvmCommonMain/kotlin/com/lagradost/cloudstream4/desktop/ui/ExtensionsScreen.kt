@@ -86,6 +86,21 @@ fun ExtensionsScreen() {
 private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     val state by ExtensionManager.state.collectAsState()
     var input by remember { mutableStateOf("") }
+    // A repository over plain http: anyone on the network (public Wi-Fi, the ISP) could swap its
+    // extensions for harmful code, which then runs inside the app. Ask before adding one
+    var insecure by remember { mutableStateOf<String?>(null) }
+    fun addChecked(text: String) {
+        if (Regex("(?i)\\bhttp://").containsMatchIn(text)) insecure = text else ExtensionManager.addRepository(text)
+    }
+    insecure?.let { text ->
+        ConfirmDialog(
+            "Add a repository that isn't secure?",
+            "It uses http, not https: someone on your network could change its extensions into harmful code that runs in Hyper Stream. Add it only if you trust the network.",
+            "Add anyway",
+            onConfirm = { ExtensionManager.addRepository(text) },
+            onDismiss = { insecure = null },
+        )
+    }
     var query by rememberSaveable { mutableStateOf("") }
     val q = query.trim()
 
@@ -122,12 +137,12 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
                         label = { Text("Repository link or code") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { ExtensionManager.addRepository(input); input = "" } }),
+                        keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { addChecked(input); input = "" } }),
                         modifier = fieldModifier,
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Button(enabled = input.isNotBlank(), onClick = { ExtensionManager.addRepository(input); input = "" }) { Text("Add") }
+                Button(enabled = input.isNotBlank(), onClick = { addChecked(input); input = "" }) { Text("Add") }
             }
         }
 
@@ -241,6 +256,7 @@ private fun RepoCard(repo: RepositoryState, onClick: () -> Unit) {
                         when {
                             repo.loading -> "Loading…"
                             repo.error != null -> repo.error
+                            repo.data.url.startsWith("http://", ignoreCase = true) -> "Not secure (http) · ${repo.plugins.size} extensions"
                             else -> "${repo.plugins.size} extensions" + (repo.repository?.description?.let { " · $it" } ?: "")
                         },
                         style = MaterialTheme.typography.bodySmall,
