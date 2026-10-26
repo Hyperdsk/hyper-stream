@@ -37,9 +37,10 @@ internal fun UpdateSettings() {
     val settings by SettingsStore.state.collectAsState()
     val state by UpdateChecker.state.collectAsState()
     val scope = rememberCoroutineScope()
-    var downloading by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf<Float?>(null) }
-    var installError by remember { mutableStateOf<String?>(null) }
+    val download by UpdateChecker.download.collectAsState()
+    val downloading = download?.running == true
+    val progress = download?.progress
+    val installError = download?.error
 
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -118,27 +119,7 @@ internal fun UpdateSettings() {
             ) {
                 Button(
                     enabled = !downloading,
-                    onClick = {
-                        scope.launch {
-                            downloading = true
-                            installError = null
-                            progress = 0f
-                            val result = UpdateChecker.downloadAndInstall(release) { value -> progress = value }
-                            downloading = false
-                            if (result.isSuccess) {
-                                DesktopToasts.show(
-                                    if (Platform.updateTarget == UpdateTarget.Android) {
-                                        "Follow the Android prompt to finish updating."
-                                    } else {
-                                        "Opening the downloaded update. Follow the system prompt to finish."
-                                    }
-                                )
-                            } else {
-                                progress = null
-                                installError = result.exceptionOrNull()?.message ?: "The update couldn't be downloaded."
-                            }
-                        }
-                    },
+                    onClick = { UpdateChecker.startDownload(release) },
                 ) {
                     Text(if (Platform.updateTarget == UpdateTarget.Android) "Download and install" else "Download update")
                 }

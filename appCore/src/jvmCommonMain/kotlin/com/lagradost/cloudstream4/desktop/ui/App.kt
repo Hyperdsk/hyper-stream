@@ -105,6 +105,7 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
 
     // Check GitHub for a new release while the app is open, and mention each new version once.
     LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { UpdateChecker.removeInstalledDownloads() } }
         while (true) {
             val result = UpdateChecker.check(automatic = true)
             if (result is UpdateState.Available && SettingsStore.state.value.checkForUpdates) {

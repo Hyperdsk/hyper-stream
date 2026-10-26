@@ -58,6 +58,16 @@ class DownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_NOT_STICKY
 
+    /**
+     * Android 15 and later allow a data sync service six hours a day, then call this, and close
+     * an app whose service is still running a few seconds later. Stop: downloads go on while the
+     * app stays open, and the service starts again the next time it's opened.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()

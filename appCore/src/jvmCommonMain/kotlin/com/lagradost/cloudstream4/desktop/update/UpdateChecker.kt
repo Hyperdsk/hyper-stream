@@ -6,7 +6,13 @@ import com.lagradost.cloudstream4.desktop.Platform
 import com.lagradost.cloudstream4.desktop.UpdateTarget
 import com.lagradost.cloudstream4.desktop.data.SettingsStore
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +64,48 @@ object UpdateChecker {
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
     private val checkLock = Mutex()
+
+    /** An update being downloaded, or how the last download ended; null when there's none. */
+    data class Download(val version: String, val progress: Float? = 0f, val running: Boolean = true, val error: String? = null)
+
+    private val _download = MutableStateFlow<Download?>(null)
+    val download: StateFlow<Download?> = _download.asStateFlow()
+
+    // The app's, not a screen's: leaving Settings mustn't stop a download halfway
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var downloadJob: Job? = null
+
+    /** Downloads and installs [release] in the background. A second tap while one runs does nothing. */
+    @Synchronized
+    fun startDownload(release: UpdateRelease) {
+        if (downloadJob?.isActive == true) return
+        _download.value = Download(release.version)
+        downloadJob = downloadScope.launch {
+            val result = downloadAndInstall(release) { value -> _download.update { it?.copy(progress = value) } }
+            if (result.isSuccess) {
+                _download.value = null
+                com.lagradost.cloudstream4.desktop.DesktopToasts.show(
+                    if (Platform.updateTarget == UpdateTarget.Android) "Follow the Android prompt to finish updating."
+                    else "Opening the downloaded update. Follow the system prompt to finish."
+                )
+            } else {
+                _download.value = Download(
+                    release.version, progress = null, running = false,
+                    error = result.exceptionOrNull()?.message ?: "The update couldn't be downloaded.",
+                )
+            }
+        }
+    }
+
+    /**
+     * Deletes installers for this version or older, once they're installed: an APK left in the
+     * app's files (27 MB) would also put the app over Android's 25 MB backup limit.
+     */
+    fun removeInstalledDownloads(updates: File = File(Platform.dataFolder(), "updates"), current: String = currentVersion) {
+        updates.listFiles()
+            ?.filter { !isNewer(it.name, current) }
+            ?.forEach { it.deleteRecursively() }
+    }
 
     /** A download from this project's own GitHub releases, the only place updates come from. */
     fun isOwnDownload(url: String): Boolean = url.startsWith(DOWNLOAD_PREFIX)
@@ -248,6 +296,7 @@ object UpdateChecker {
                         target.outputStream().use { output ->
                             val buffer = ByteArray(64 * 1024)
                             while (true) {
+                                ensureActive()
                                 val read = input.read(buffer)
                                 if (read < 0) break
                                 output.write(buffer, 0, read)

@@ -70,6 +70,15 @@ class UpdateCheckerTest {
     )
 
     @Test
+    fun removesInstallersOnceTheirVersionIsInstalled() {
+        val updates = java.nio.file.Files.createTempDirectory("hs-updates").toFile()
+        listOf("1.2.4", "1.2.5", "1.3.0").forEach { java.io.File(updates, "$it/HyperStream-$it.apk").apply { parentFile.mkdirs(); writeText("apk") } }
+        UpdateChecker.removeInstalledDownloads(updates, current = "1.2.5")
+        assertEquals(listOf("1.3.0"), updates.list()!!.toList(), "only the not yet installed update is kept")
+        updates.deleteRecursively()
+    }
+
+    @Test
     fun acceptsDownloadsFromThisRepositoryOnly() {
         assertTrue(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))
         assertFalse(UpdateChecker.isOwnDownload("https://github.com/someone/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))

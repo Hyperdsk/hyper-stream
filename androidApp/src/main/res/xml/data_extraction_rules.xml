@@ -2,16 +2,17 @@
 <data-extraction-rules>
     <cloud-backup>
         <!-- Kept out of backups and device transfer: the sync sign-in (a copied session would sign
-             another device in) and extension code (downloaded again from its repository) -->
+             another device in), extension code (downloaded again from its repository), and
+             downloaded updates (an APK alone is over Android's 25 MB backup limit) -->
         <exclude domain="file" path="data/sync.json" />
         <exclude domain="file" path="Extensions/" />
         <exclude domain="file" path="Extensions-jvm/" />
+        <exclude domain="file" path="updates/" />
     </cloud-backup>
     <device-transfer>
-        <!-- Kept out of backups and device transfer: the sync sign-in (a copied session would sign
-             another device in) and extension code (downloaded again from its repository) -->
         <exclude domain="file" path="data/sync.json" />
         <exclude domain="file" path="Extensions/" />
         <exclude domain="file" path="Extensions-jvm/" />
+        <exclude domain="file" path="updates/" />
     </device-transfer>
 </data-extraction-rules>
