@@ -82,6 +82,9 @@ class Navigator {
             stack.removeRange(1, stack.size)
             return
         }
+        // A video doesn't go on playing out of sight on the tab left behind (Mac menu shortcuts and
+        // links switch tabs from the player): it closes, and the rest of that tab's screens stay
+        stack.removeAll { it is Route.Player }
         tabHistory.remove(route)
         tabHistory.add(tab)
         tab = route

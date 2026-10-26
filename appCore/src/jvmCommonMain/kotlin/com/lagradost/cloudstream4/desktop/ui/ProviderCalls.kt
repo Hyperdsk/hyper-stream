@@ -10,7 +10,8 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
-fun providerByName(name: String): MainAPI? = APIHolder.allProviders.firstOrNull { it.name == name }
+// Under the list's lock: extensions add providers on another thread while screens look them up
+fun providerByName(name: String): MainAPI? = APIHolder.allProviders.withLock { APIHolder.allProviders.firstOrNull { it.name == name } }
 
 /** Runs extension code off the UI thread and turns any failure, including Errors, into a Result. */
 suspend fun <T> providerCall(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) {

@@ -74,6 +74,15 @@ object ExtensionManager {
     private val _state = MutableStateFlow(ExtensionsState())
     val state: StateFlow<ExtensionsState> = _state.asStateFlow()
 
+    /**
+     * Runs each provider's init, as APIHolder.initAll does, but outside the list's lock: an init
+     * can be slow, and the screens read the list (to find a title's provider) meanwhile.
+     */
+    private fun initProviders() {
+        val all = APIHolder.allProviders.withLock { APIHolder.allProviders.toList() }
+        all.forEach { api -> runCatching { api.init() }.onFailure { System.err.println("Could not start ${api.name}: $it") } }
+    }
+
     /** Providers that are usable right now, in a stable order. */
     fun providers(): List<MainAPI> =
         APIHolder.allProviders.filter { it.sourcePlugin != null }.sortedBy { it.name.lowercase() }
@@ -280,7 +289,7 @@ object ExtensionManager {
                 s.copy(installed = (s.installed.removingAll { it.filePath == installed.filePath } + installed).toPersistentList())
             }
             loadFile(file)
-            APIHolder.initAll()
+            initProviders()
             providersChanged()
         } catch (e: Throwable) {
             _state.update { it.copy(message = "Could not install ${plugin.name}: ${e.message}") }
@@ -328,7 +337,7 @@ object ExtensionManager {
     private fun loadAllInstalled() {
         val files = _state.value.installed.map { File(it.filePath) } + localFiles()
         files.filter { it.exists() }.forEach { loadFile(it) }
-        APIHolder.initAll()
+        initProviders()
         providersChanged()
     }
 
@@ -338,7 +347,7 @@ object ExtensionManager {
 
     fun reloadLocal() = scope.launch {
         localFiles().filterNot { PluginLoader.isLoaded(it) }.forEach { loadFile(it) }
-        APIHolder.initAll()
+        initProviders()
         providersChanged()
     }
 

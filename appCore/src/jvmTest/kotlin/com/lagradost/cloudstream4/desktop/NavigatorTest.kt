@@ -22,6 +22,18 @@ class NavigatorTest {
     }
 
     @Test
+    fun switchingTabClosesThePlayerButKeepsTheTitle() {
+        val nav = Navigator()
+        val player = Route.Player(com.lagradost.cloudstream4.desktop.ui.PlayRequest("Prov", title.url, "Title", null, null, emptyList(), 0))
+        nav.open(title)
+        nav.open(player)
+        nav.open(Route.Search)
+        assertFalse(nav.allRoutes.any { it is Route.Player }, "no player left playing on the Home tab")
+        nav.open(Route.Home)
+        assertEquals(title, nav.current, "back on Home, the title it played from is still there")
+    }
+
+    @Test
     fun choosingTheCurrentTabGoesToItsTop() {
         val nav = Navigator()
         nav.open(title)
