@@ -128,7 +128,13 @@ fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
             LocalAppLayout provides layout,
             // Android TV's default scrolls every focused item to a fixed spot a third of the way
             // down the screen, which pushed the home banner off the top; scroll only as needed instead
-            *(if (com.lagradost.cloudstream4.desktop.Platform.isTv) arrayOf(LocalBringIntoViewSpec provides ScrollOnlyAsNeeded) else emptyArray()),
+            *(if (com.lagradost.cloudstream4.desktop.Platform.isTv) arrayOf(
+                LocalBringIntoViewSpec provides ScrollOnlyAsNeeded,
+                // Material's buttons, chips, switches, tabs and list items only tint a little when
+                // focused, too faint to see from across the room: on TVs they get a ring instead
+                androidx.compose.material3.LocalRippleConfiguration provides TvRipple,
+                androidx.compose.material3.LocalRippleThemeConfiguration provides TvRippleShape,
+            ) else emptyArray()),
         ) {
             AppContent(nav, store, vlc)
         }
@@ -277,3 +283,26 @@ private object ScrollOnlyAsNeeded : BringIntoViewSpec {
         }
     }
 }
+
+/**
+ * The focus look for Material controls on TVs: a ring at the edge with a thin inner edge of the
+ * opposite colour, white on the dark theme and near-black on the light one, so it shows on any control.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+internal val TvRipple: androidx.compose.material3.RippleConfiguration
+    @Composable get() {
+        val light = isLightTheme
+        val ring = if (light) androidx.compose.ui.graphics.Color(0xFF111111) else androidx.compose.ui.graphics.Color.White
+        val edge = if (light) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f)
+        return remember(light) {
+            androidx.compose.material3.RippleConfiguration(
+                focus = androidx.compose.material3.RippleConfiguration.Focus.InsetRing(outerStrokeColor = ring, innerStrokeColor = edge),
+            )
+        }
+    }
+
+/** The ring's shape for [TvRipple]: a 3-point white ring at the edge, a thin dark one inside it. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+internal val TvRippleShape = androidx.compose.material3.RippleThemeConfiguration(
+    androidx.compose.material3.RippleThemeConfiguration.Focus.InsetRing(0.dp, 3.dp, 3.dp, 1.5.dp),
+)
