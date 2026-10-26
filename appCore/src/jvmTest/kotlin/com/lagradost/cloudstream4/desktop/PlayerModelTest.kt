@@ -64,10 +64,12 @@ class PlayerModelTest {
     private class FakeApi(
         override var name: String,
         override val instantLinkLoading: Boolean = false,
+        val subtitles: List<SubtitleFile> = emptyList(),
         val links: suspend (String, (ExtractorLink) -> Unit) -> Unit,
     ) : MainAPI() {
         override var mainUrl = "https://example.invalid"
         override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+            subtitles.forEach(subtitleCallback)
             links(data, callback)
             return true
         }
@@ -99,6 +101,41 @@ class PlayerModelTest {
         delay(1_500)
         assertEquals(listOf("https://example.invalid/ep2.mp4"), model.state.value.links.map { it.url })
         model.dispose()
+    }
+
+    @Test
+    fun switchingSourceDoesNotMarkSubtitlesBeingCheckedAsBroken() = runBlocking {
+        setUp()
+        // A slow subtitle host: the check is still waiting when the user switches source
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0).apply {
+            createContext("/en.vtt") { ex ->
+                Thread.sleep(800)
+                val body = "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n".toByteArray()
+                ex.sendResponseHeaders(200, body.size.toLong())
+                ex.responseBody.use { it.write(body) }
+            }
+            start()
+        }
+        try {
+            val url = "http://127.0.0.1:${server.address.port}/en.vtt"
+            APIHolder.allProviders.add(FakeApi("SubSwitch", subtitles = listOf(com.lagradost.cloudstream3.newSubtitleFile("English", url))) { _, callback ->
+                callback(link("one", 1080))
+                callback(link("two", 720))
+            })
+            val engine = FakeEngine()
+            val model = PlayerModel(request("SubSwitch"), engine)
+            delay(500)
+            // The first frame starts the subtitle check; then the other source is picked
+            engine.state.update { it.copy(timeMs = 1_000, buffering = false) }
+            delay(200)
+            model.playLink(1)
+            delay(1_500)
+            val load = model.state.value.loadedSubtitles[url]
+            assertTrue(load !is com.lagradost.cloudstream4.desktop.ui.SubtitleLoad.Failed, "a cancelled check isn't a broken subtitle: $load")
+            model.dispose()
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test

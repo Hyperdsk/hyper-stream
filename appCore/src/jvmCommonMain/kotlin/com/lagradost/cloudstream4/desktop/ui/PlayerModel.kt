@@ -36,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -517,6 +518,10 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                         limit.withPermit {
                             if (current.loadedSubtitles[sub.url] != null) return@withPermit
                             val result = runCatching { SubtitleFiles.fetch(sub) }
+                            // Stopped (another source was chosen), not failed: a check cancelled
+                            // halfway mustn't mark a working subtitle as broken
+                            if (result.exceptionOrNull() is kotlinx.coroutines.CancellationException) throw result.exceptionOrNull()!!
+                            ensureActive()
                             // The language picked last time: show it as soon as one works
                             if (result.isSuccess && !autoSubtitled && languageKey(sub.lang) == SettingsStore.state.value.subtitleLanguage) {
                                 autoSubtitled = true
