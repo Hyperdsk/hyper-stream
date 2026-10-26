@@ -94,7 +94,8 @@ class ModelStore {
 @Composable
 fun CloudStreamApp(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
     LaunchedEffect(nav) {
-        snapshotFlow { nav.stack.toList() }.collect { store.retain(it) }
+        // Models live while their screen is on any tab's stack
+        snapshotFlow { nav.allRoutes }.collect { store.retain(it) }
     }
 
     val snackbar = remember { SnackbarHostState() }
@@ -154,8 +155,8 @@ private fun AppContent(nav: Navigator, store: ModelStore, vlc: VideoEngine?) {
         // another screen (a title, the player) is open on top, so Back returns to where you were
         val saved = rememberSaveableStateHolder()
         val keys = remember { mutableSetOf<String>() }
-        LaunchedEffect(nav.stack.toList()) {
-            val live = nav.stack.map { it.toString() }.toSet()
+        LaunchedEffect(nav.allRoutes) {
+            val live = nav.allRoutes.map { it.toString() }.toSet()
             (keys - live).forEach { saved.removeState(it); keys -= it }
         }
         if (route is Route.Player) {
