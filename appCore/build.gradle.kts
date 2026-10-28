@@ -108,7 +108,7 @@ compose.resources {
 // builds pass -PappVersion, the same property desktopApp uses for its installers.
 tasks.named<org.gradle.jvm.tasks.Jar>("jvmJar") {
     manifest {
-        attributes["Implementation-Version"] = (findProperty("appVersion") as String?) ?: "1.2.7"
+        attributes["Implementation-Version"] = (findProperty("appVersion") as String?) ?: "1.2.8"
     }
 }
 
