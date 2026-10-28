@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
@@ -50,6 +53,11 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
         private set
 
     private val _state = MutableStateFlow(PlaybackState())
+
+    // While a video plays, no screensaver or display sleep. After _state, which it reads
+    private val keepAwake = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+        _state.map { it.playing && !it.ended && it.error == null }.distinctUntilChanged().collect { ScreenAwake.set(it) }
+    }
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
     // Two bitmaps so the one being drawn is never the one being written
@@ -279,6 +287,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
     }
 
     override fun release() {
+        keepAwake.cancel()
+        ScreenAwake.set(false)
         runCatching { player.controls().stop() }
         runCatching { player.release() }
         runCatching { factory.release() }

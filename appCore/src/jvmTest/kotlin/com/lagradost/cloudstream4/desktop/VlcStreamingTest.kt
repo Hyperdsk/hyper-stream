@@ -119,6 +119,14 @@ class VlcStreamingTest {
             log.forEach { say(it) }
             say("Playing after ${playingAt ?: "never (90 s)"} ms")
             assertTrue(playingAt != null && playingAt < 20_000, "took ${playingAt ?: "over 90000"} ms to start playing")
+            // A playing video keeps the screen awake; paused, it may sleep
+            com.lagradost.cloudstream4.desktop.player.ScreenAwake.settle()
+            assertTrue(com.lagradost.cloudstream4.desktop.player.ScreenAwake.active, "the screen is kept awake while playing")
+            player.togglePause()
+            val pausedBy = System.currentTimeMillis() + 5_000
+            while (com.lagradost.cloudstream4.desktop.player.ScreenAwake.active && System.currentTimeMillis() < pausedBy) Thread.sleep(100)
+            assertTrue(!com.lagradost.cloudstream4.desktop.player.ScreenAwake.active, "and may sleep once paused")
+            player.togglePause()
 
             // Like the app: the seek-bar preview opens once playing, at low priority. Playback must go on.
             if (!previewOpened) preview.open("${player.currentUrl ?: url}?preview")
