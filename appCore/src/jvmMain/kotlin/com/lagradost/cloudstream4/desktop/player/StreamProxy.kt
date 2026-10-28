@@ -266,17 +266,64 @@ object StreamProxy {
             }
             // 0 means chunked when the length is unknown
             exchange.sendResponseHeaders(response.code, length ?: 0)
+            // Where this response starts in the file, to pick up from after a drop
+            val first = response.header("Content-Range")?.removePrefix("bytes ")?.substringBefore('-')?.toLongOrNull() ?: 0L
             exchange.responseBody.use { out ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        meter.add(n)
-                        out.write(buffer, 0, n)
-                    }
-                }
+                val sent = copy(body.byteStream(), out)
+                if (length != null && response.isSuccessful && sent < length) resume(request, first + sent, first + length - 1, out)
             }
+        }
+    }
+
+    /** Copies [input] to [out] until it ends or the host's connection fails. Returns the bytes copied. */
+    private fun copy(input: java.io.InputStream, out: java.io.OutputStream): Long {
+        var sent = 0L
+        val buffer = ByteArray(64 * 1024)
+        input.use {
+            while (true) {
+                // A failed read is the host's connection: stop and say how far it got. A failed write
+                // is the player hanging up, and goes to the caller
+                val n = try { it.read(buffer) } catch (e: IOException) { break }
+                if (n < 0) break
+                meter.add(n)
+                out.write(buffer, 0, n)
+                sent += n
+            }
+        }
+        return sent
+    }
+
+    /**
+     * The host's connection ended before the whole video was sent, as hosts often do on a long,
+     * slowly read file. The player would take that as the end of the video and stop there, so
+     * ask again for the rest, from where it stopped, and go on in the same response.
+     */
+    private fun resume(original: Request, from: Long, to: Long, out: java.io.OutputStream) {
+        var position = from
+        var failures = 0
+        while (position <= to) {
+            val request = original.newBuilder().header("Range", "bytes=$position-$to").build()
+            val progressed = runCatching {
+                meter.open()
+                try {
+                    app.baseClient.newCall(request).execute().use { r ->
+                        val start = r.header("Content-Range")?.removePrefix("bytes ")?.substringBefore('-')?.toLongOrNull()
+                        // Only the part asked for will do: the whole file again would scramble the video
+                        if (r.code != 206 || start != position) throw IOException("The host answered HTTP ${r.code} from ${start ?: "the start"}")
+                        copy(r.body.byteStream(), out)
+                    }
+                } finally {
+                    meter.close()
+                }
+            }.getOrElse { e ->
+                StreamLog.log("resume at $position failed: $e")
+                0L
+            }
+            position += progressed
+            StreamLog.log("host connection ended early; resumed at ${position - progressed}, got $progressed bytes")
+            if (progressed > 0) failures = 0
+            else if (++failures >= 5) throw IOException("The host stopped sending at byte $position")
+            else Thread.sleep(500L * failures)
         }
     }
 
