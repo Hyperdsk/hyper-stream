@@ -10,6 +10,8 @@
 #   --all-platforms               then have GitHub Actions build the Windows, Linux and Intel Mac apps
 #                                 and add them to the release (about 15 minutes; uses Actions minutes)
 #   --add-platforms v1.2.0        only that, for a release that's already published
+#   --only macos-intel            with --add-platforms: just these (comma separated: macos-intel,
+#                                 linux-x64, windows-x64)
 #
 # A run that stopped after pushing its tag (say, the upload failed) is finished by running the
 # script again: it publishes the tagged version instead of starting the next one.
@@ -37,6 +39,7 @@ skip_tests=false
 draft=false
 all_platforms=false
 add_to=""
+only=""
 version=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
@@ -44,6 +47,7 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   case "$arg" in
     --all-platforms) all_platforms=true ;;
     --add-platforms) i=$((i + 1)); add_to="${args[$i]:-}"; [ -n "$add_to" ] || { echo "--add-platforms needs a tag, like v1.2.0" >&2; exit 2; } ;;
+    --only) i=$((i + 1)); only="${args[$i]:-}"; [ -n "$only" ] || { echo "--only needs platforms, like macos-intel" >&2; exit 2; } ;;
     --dry-run) dry_run=true ;;
     --skip-tests) skip_tests=true ;;
     --draft) draft=true ;;
@@ -60,8 +64,8 @@ fail() { printf '\033[1;31mError: %s\033[0m\n' "$*" >&2; exit 1; }
 other_platforms() {
   local tag="$1"
   gh release view "$tag" -R "$REPO" >/dev/null 2>&1 || fail "There's no release $tag on GitHub."
-  step "Asking GitHub Actions for the Windows, Linux and Intel Mac builds of $tag"
-  gh workflow run desktop.yml -R "$REPO" --ref master -f release_tag="$tag"
+  step "Asking GitHub Actions for the ${only:-Windows, Linux and Intel Mac} builds of $tag"
+  gh workflow run desktop.yml -R "$REPO" --ref master -f release_tag="$tag" -f platforms="$only"
   sleep 5
   gh run list -R "$REPO" --workflow desktop.yml --limit 1 --json url --jq '.[0].url'
   echo "They're added to the release as each finishes, in about 15 minutes."
