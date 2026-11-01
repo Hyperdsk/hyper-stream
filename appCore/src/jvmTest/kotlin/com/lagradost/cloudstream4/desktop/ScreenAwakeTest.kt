@@ -7,8 +7,9 @@ import kotlin.test.assertTrue
 
 /** While a video plays the Mac's display stays awake, and it may sleep again once it stops. */
 class ScreenAwakeTest {
+    /** This process's power assertions: a Hyper Stream app playing meanwhile has its own, with the same name. */
     private fun assertions() = ProcessBuilder("pmset", "-g", "assertions").redirectErrorStream(true).start()
-        .inputStream.bufferedReader().readText()
+        .inputStream.bufferedReader().readLines().filter { "pid ${ProcessHandle.current().pid()}(" in it }.joinToString("\n")
 
     @Test
     fun holdsADisplayAssertionWhilePlaying() {

@@ -226,19 +226,7 @@ private fun DownloadRow(
         when (entry.status) {
             DownloadStatus.Completed -> {
                 IconButton(onClick = {
-                    // Play this item, with the title's other downloaded items as next and previous
-                    val done = playable.filter { it.status == DownloadStatus.Completed }
-                    onPlay(
-                        PlayRequest(
-                            apiName = entry.apiName,
-                            parentUrl = entry.parentUrl,
-                            title = entry.title,
-                            posterUrl = entry.posterUrl,
-                            posterHeaders = entry.posterHeaders,
-                            episodes = done.map { it.playable },
-                            index = done.indexOfFirst { it.id == entry.id }.coerceAtLeast(0),
-                        )
-                    )
+                    onPlay(downloadPlayRequest(entry, playable.filter { it.status == DownloadStatus.Completed }))
                 }) { Icon(Icons.Default.PlayArrow, "Play") }
                 IconButton(onClick = onMove) { Icon(Icons.AutoMirrored.Filled.DriveFileMove, "Move") }
                 if (Platform.canOpenFolders) IconButton(onClick = { entry.file?.let(::reveal) }) { Icon(Icons.Default.FolderOpen, "Show in Finder") }
@@ -292,4 +280,22 @@ private fun folderLabel(path: String): String {
 private fun ordinal(n: Int): String {
     val suffix = if (n % 100 in 11..13) "th" else when (n % 10) { 1 -> "st"; 2 -> "nd"; 3 -> "rd"; else -> "th" }
     return "$n$suffix"
+}
+
+/**
+ * Plays a downloaded item from where it was left (unless it was watched to the end), with the
+ * title's other downloaded items [done] as next and previous.
+ */
+internal fun downloadPlayRequest(entry: DownloadEntry, done: List<DownloadEntry>): PlayRequest {
+    val progress = com.lagradost.cloudstream4.desktop.data.LibraryStore.state.value.progress(entry.apiName, entry.episodeData)
+    return PlayRequest(
+        apiName = entry.apiName,
+        parentUrl = entry.parentUrl,
+        title = entry.title,
+        posterUrl = entry.posterUrl,
+        posterHeaders = entry.posterHeaders,
+        episodes = done.map { it.playable },
+        index = done.indexOfFirst { it.id == entry.id }.coerceAtLeast(0),
+        startMs = progress?.takeIf { !it.finished }?.positionMs ?: 0,
+    )
 }

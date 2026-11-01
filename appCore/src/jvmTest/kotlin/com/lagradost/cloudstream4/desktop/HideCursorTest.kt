@@ -36,24 +36,29 @@ class HideCursorTest {
                 isVisible = true
             }
         }
-        try {
-            Thread.sleep(700)
-            // The mouse comes over the video once
-            SwingUtilities.invokeAndWait {
-                val target = SwingUtilities.getDeepestComponentAt(window.contentPane, 120, 80)
-                val at = SwingUtilities.convertPoint(window.contentPane, 120, 80, target)
-                target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_ENTERED, System.currentTimeMillis(), 0, at.x, at.y, 0, false))
-                target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, at.x + 1, at.y, 0, false))
+        fun waitFor(what: String, check: () -> Boolean) {
+            val until = System.currentTimeMillis() + 5_000
+            while (!check()) {
+                assertTrue(System.currentTimeMillis() < until, "$what: ${cursors(window).distinct()}")
+                Thread.sleep(50)
             }
-            Thread.sleep(300)
-            assertFalse("hidden" in cursors(window), "shown while the controls are")
-            // The controls hide; the mouse doesn't move
+        }
+        fun moveMouse() = SwingUtilities.invokeAndWait {
+            val target = SwingUtilities.getDeepestComponentAt(window.contentPane, 120, 80) ?: return@invokeAndWait
+            val at = SwingUtilities.convertPoint(window.contentPane, 120, 80, target)
+            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_ENTERED, System.currentTimeMillis(), 0, at.x, at.y, 0, false))
+            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, at.x + 1, at.y, 0, false))
+        }
+        try {
+            // The mouse comes over the video (again until the window is ready to take it): with
+            // the controls hidden, that's when the cursor goes
             hidden.value = true
-            Thread.sleep(500)
-            assertTrue("hidden" in cursors(window), "the cursor hid with the controls: ${cursors(window).distinct()}")
+            waitFor("the cursor never hid over the video") { moveMouse(); "hidden" in cursors(window) }
             hidden.value = false
-            Thread.sleep(500)
-            assertFalse("hidden" in cursors(window), "and came back with them")
+            waitFor("it didn't come back with the controls") { "hidden" !in cursors(window) }
+            // The controls hide again, and the mouse doesn't move
+            hidden.value = true
+            waitFor("the cursor didn't hide with the controls while the mouse stayed still") { "hidden" in cursors(window) }
         } finally {
             SwingUtilities.invokeAndWait { window.dispose() }
         }

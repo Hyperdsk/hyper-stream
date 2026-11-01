@@ -397,7 +397,8 @@ class DownloadManagerTest {
 
             assertTrue(DownloadManager.completedFile("DownloadTest", "hls") != null)
             DownloadManager.delete(hlsId)
-            assertTrue(!hls.file!!.exists())
+            // Its worker may still be finishing up: the files go once it has stopped
+            withTimeout(5_000) { while (hls.file!!.exists()) delay(50) }
         } finally {
             APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test" } }
             server.stop(0)
