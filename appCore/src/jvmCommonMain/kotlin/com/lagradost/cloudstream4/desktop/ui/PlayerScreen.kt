@@ -283,6 +283,8 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
             // leave the keyboard dead until the next click. Menus and the panel keep theirs
             .reclaimFocus(focus, paused = openMenu != null)
             .onPointerEvents { if (it.type == PointerEventType.Move) poke() }
+            // The mouse cursor goes with the controls, and comes back with them when it moves
+            .hideCursor(player != null && !controlsVisible)
             .onPreviewKeyEvent { e ->
                 if (player == null) return@onPreviewKeyEvent false
                 // With the side panel open, keys go to it (its filter box), except Escape

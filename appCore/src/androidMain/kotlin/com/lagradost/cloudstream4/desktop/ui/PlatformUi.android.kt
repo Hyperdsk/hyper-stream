@@ -12,3 +12,6 @@ actual val SystemFontFamily: FontFamily = FontFamily.Default
 @Composable
 actual fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit) =
     androidx.activity.compose.BackHandler(enabled, onBack)
+
+/** Touch screens and remotes have no cursor to hide. */
+actual fun androidx.compose.ui.Modifier.hideCursor(hidden: Boolean): androidx.compose.ui.Modifier = this

@@ -48,6 +48,12 @@ fun androidx.compose.ui.Modifier.onPointerEvents(
     }
 )
 
+/**
+ * No mouse cursor over this while [hidden], as video players hide it with their controls. Only
+ * desktop has one; elsewhere this does nothing.
+ */
+expect fun androidx.compose.ui.Modifier.hideCursor(hidden: Boolean): androidx.compose.ui.Modifier
+
 /** Android's back button and gesture while [enabled]. Desktop has none, so it does nothing there. */
 @Composable
 expect fun PlatformBackHandler(enabled: Boolean = true, onBack: () -> Unit)
