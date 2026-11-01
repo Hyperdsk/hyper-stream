@@ -137,6 +137,7 @@ object StreamProxy {
                 try {
                     handle(exchange)
                 } catch (t: Throwable) {
+                    if (t !is PlayerGone) StreamLog.log("couldn't serve ${exchange.requestURI.path.take(80)}: $t")
                     runCatching { exchange.sendResponseHeaders(502, -1) }
                 } finally {
                     exchange.close()
@@ -286,7 +287,7 @@ object StreamProxy {
                 val n = try { it.read(buffer) } catch (e: IOException) { break }
                 if (n < 0) break
                 meter.add(n)
-                out.write(buffer, 0, n)
+                try { out.write(buffer, 0, n) } catch (e: IOException) { throw PlayerGone(e) }
                 sent += n
             }
         }
@@ -316,6 +317,8 @@ object StreamProxy {
                     meter.close()
                 }
             }.getOrElse { e ->
+                // The player closed the connection, so there is no one left to send the rest to
+                if (e is PlayerGone) throw e
                 StreamLog.log("resume at $position failed: $e")
                 0L
             }
@@ -465,17 +468,24 @@ object StreamProxy {
         }
     }
 
+    /** Writing to the player failed: it closed the connection, by seeking or stopping. */
+    private class PlayerGone(cause: IOException) : IOException(cause)
+
     private val uriAttribute = Regex("URI=\"([^\"]+)\"")
 
     /** Points every uri in the playlist at this proxy, resolved against the playlist's own url. */
     internal fun rewritePlaylist(text: String, playlistUrl: String, session: String): String {
-        val base = URI(playlistUrl)
-        fun resolve(ref: String): String = local(session, base.resolve(ref.trim()).toString())
+        val base = playlistUrl.toHttpUrlOrNull()
+        // OkHttp's parser, as java.net.URI rejects characters hosts do use, like the brackets in
+        // "hi-in.[CC].m3u8", and a single bad line would fail the whole playlist
+        fun absolute(ref: String): String? = base?.resolve(ref.trim())?.toString()
+            ?: runCatching { URI(playlistUrl).resolve(ref.trim()).toString() }.getOrNull()
+        fun resolve(ref: String): String = absolute(ref)?.let { local(session, it) } ?: ref
 
         // A media playlist: remember the segment order, for fetching ahead
         if (text.contains("#EXTINF")) {
             val order = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
-                .mapNotNull { runCatching { base.resolve(it).toString() }.getOrNull() }.toList()
+                .mapNotNull { absolute(it) }.toList()
             val index = segmentOrder.getOrPut(session) { ConcurrentHashMap() }
             order.forEachIndexed { i, url -> index[url] = order to i }
         }

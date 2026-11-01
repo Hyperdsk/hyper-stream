@@ -54,4 +54,20 @@ class PluginLoaderTest {
         assertTrue(lines[4].startsWith("http://127.0.0.1:"), lines[4])
         assertEquals("#EXTINF:10,", lines[2])
     }
+    @Test
+    fun rewritesPlaylistUrlsJavaCantParse() {
+        // A real Prime Video playlist: java.net.URI rejects the brackets, which made the whole source unplayable
+        val playlist = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Hindi",URI="https://pv.subscdn.top/subs/0L/hi-in.[CC].m3u8"
+            #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1920x800,SUBTITLES="subs"
+            https://s0022.freecdn4.top/files/1080p/1080p.m3u8?in=unknown::kp::t
+        """.trimIndent()
+        val lines = StreamProxy.rewritePlaylist(playlist, "https://tv.imgcdn.kim/hls/pv/0L.m3u8?in=1", "session").lines()
+        val subtitle = Regex("URI=\"([^\"]+)\"").find(lines[1])!!.groupValues[1]
+        assertTrue(subtitle.startsWith("http://127.0.0.1:"), subtitle)
+        val encoded = subtitle.substringAfter("/s/session/").substringBefore('/')
+        assertEquals("https://pv.subscdn.top/subs/0L/hi-in.[CC].m3u8", String(java.util.Base64.getUrlDecoder().decode(encoded)))
+        assertTrue(lines[3].startsWith("http://127.0.0.1:"), lines[3])
+    }
 }
