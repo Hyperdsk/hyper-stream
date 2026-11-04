@@ -7,6 +7,8 @@
 #   scripts/release.sh --dry-run  build and collect the files only: no commit, tag or release
 #   --skip-tests                  don't run the desktop tests first
 #   --draft                       publish the release as a draft, to check before it goes out
+#   --mac-only                    build only the Apple silicon Mac app: no Android or Intel Mac build.
+#                                 Android's updater skips a release with no APK, so it's safe to publish
 #   --all-platforms               then have GitHub Actions build the Windows, Linux and Intel Mac apps
 #                                 and add them to the release (about 15 minutes; uses Actions minutes)
 #   --add-platforms v1.2.0        only that, for a release that's already published
@@ -37,6 +39,7 @@ SIGNING_SHA256="9bce46dbbffe5c62cc818473c28a6025c353a47847ea3a195d75394e943a36dd
 dry_run=false
 skip_tests=false
 draft=false
+mac_only=false
 all_platforms=false
 add_to=""
 only=""
@@ -51,6 +54,7 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     --dry-run) dry_run=true ;;
     --skip-tests) skip_tests=true ;;
     --draft) draft=true ;;
+    --mac-only) mac_only=true ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     [0-9]*.[0-9]*.[0-9]*) version="$arg" ;;
     *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
@@ -116,7 +120,7 @@ if ! $resume; then
 fi
 echo "Releasing $tag (Android version code $code), last release ${last:-none}"
 
-grep -q '^hyperstream.keystorePassword=' "$HOME/.gradle/gradle.properties" 2>/dev/null \
+$mac_only || grep -q '^hyperstream.keystorePassword=' "$HOME/.gradle/gradle.properties" 2>/dev/null \
   || fail "The Android signing key isn't set up in ~/.gradle/gradle.properties (see androidApp/ANDROID.md)."
 
 # ---------- Build ----------
@@ -127,8 +131,10 @@ if ! $skip_tests; then
   ./gradlew :appCore:jvmTest -q
 fi
 
-step "Building the Android app"
-./gradlew :androidApp:assembleRelease "${props[@]}" -q
+if ! $mac_only; then
+  step "Building the Android app"
+  ./gradlew :androidApp:assembleRelease "${props[@]}" -q
+fi
 
 step "Building the macOS app (Apple silicon)"
 ./gradlew :desktopApp:packageDmg :desktopApp:createDistributable "${props[@]}" -q
@@ -145,7 +151,7 @@ collect_mac() {
   ditto -c -k --keepParent "$out/app/HyperStream.app" "$dist/HyperStream-$version-macos-$arch.zip"
 }
 collect_mac apple-silicon
-cp androidApp/build/outputs/apk/release/androidApp-release.apk "$dist/HyperStream-$version-android-and-tv.apk"
+$mac_only || cp androidApp/build/outputs/apk/release/androidApp-release.apk "$dist/HyperStream-$version-android-and-tv.apk"
 
 # An installed JDK 17 built for Intel. (java_home's -a flag is ignored here, so read each JDK's own release file.)
 intel_jdk=""
@@ -156,7 +162,9 @@ for home in /Library/Java/JavaVirtualMachines/*/Contents/Home "$HOME"/Library/Ja
     break
   fi
 done
-if [ -n "$intel_jdk" ] && /usr/bin/pgrep -q oahd; then
+if $mac_only; then
+  :
+elif [ -n "$intel_jdk" ] && /usr/bin/pgrep -q oahd; then
   step "Building the macOS app (Intel, under Rosetta)"
   # Its own Gradle daemon on the Intel JDK, so jpackage makes an Intel app. --rerun-tasks, or the
   # Apple silicon build's outputs would count as up to date
@@ -170,10 +178,12 @@ else
   echo "No Intel JDK 17 (or no Rosetta): skipping the Intel Mac build."
 fi
 
-step "Checking the APK's signature"
-apksigner=$(ls -d "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/build-tools/*/ | sort -V | tail -1)apksigner
-cert=$("$apksigner" verify --print-certs "$dist/HyperStream-$version-android-and-tv.apk" | sed -n 's/.*SHA-256 digest: //p' | head -1)
-[ "$cert" = "$SIGNING_SHA256" ] || fail "The APK is signed with another key ($cert); it wouldn't update existing installs."
+if ! $mac_only; then
+  step "Checking the APK's signature"
+  apksigner=$(ls -d "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/build-tools/*/ | sort -V | tail -1)apksigner
+  cert=$("$apksigner" verify --print-certs "$dist/HyperStream-$version-android-and-tv.apk" | sed -n 's/.*SHA-256 digest: //p' | head -1)
+  [ "$cert" = "$SIGNING_SHA256" ] || fail "The APK is signed with another key ($cert); it wouldn't update existing installs."
+fi
 
 echo
 ls -lh "$dist"
@@ -205,7 +215,11 @@ notes=$(mktemp)
   echo "## Download"
   echo
   echo "- **macOS:** \`-macos-apple-silicon.dmg\` for M-series Macs$( [ -f "$dist/HyperStream-$version-macos-intel.dmg" ] && echo ", \`-macos-intel.dmg\` for Intel Macs"). Needs [VLC](https://www.videolan.org/vlc/). The app isn't notarized: the first time, right-click it and choose Open. The \`.zip\` is the same app without an installer."
-  echo "- **Android phones, tablets and TV:** \`-android-and-tv.apk\` (allow installs from unknown sources). It installs over earlier releases from 1.1.1 on."
+  if [ -f "$dist/HyperStream-$version-android-and-tv.apk" ]; then
+    echo "- **Android phones, tablets and TV:** \`-android-and-tv.apk\` (allow installs from unknown sources). It installs over earlier releases from 1.1.1 on."
+  else
+    echo "- **Android phones, tablets and TV:** not in this release; the last Android build is still the newest."
+  fi
   if $all_platforms; then
     echo "- **Windows:** the \`.msi\` installer, or the portable \`.zip\`. **Linux:** the \`.deb\` package, or the portable \`.tar.gz\`. Both need VLC. These are added a few minutes after the release."
   else
