@@ -154,6 +154,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     val focus = remember { FocusRequester() }
     val holdScope = rememberCoroutineScope()
     val hold = remember { SpeedHold(holdScope) }
+    val clicks = remember { DoubleClick() }
 
     // Seek bar thumbnails, from a second silent player on the same video
     val preview = remember(player) { player?.createPreview() }
@@ -428,12 +429,24 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
                             },
                         )
                     } else {
-                        // A click plays or pauses, holding the mouse down plays at 2x until released
-                        detectTapGestures(onPress = {
+                        // A click plays or pauses, holding the mouse down plays at 2x until released.
+                        // A double click enters or leaves fullscreen; its second click undoes the
+                        // first one's pause, so playback carries on as it was
+                        detectTapGestures(onPress = { at ->
+                            val second = clicks.isSecond(at, System.currentTimeMillis(), viewConfiguration.doubleTapTimeoutMillis, viewConfiguration.touchSlop * 2)
                             poke()
                             hold.press(player)
                             tryAwaitRelease()
-                            if (!hold.release(player)) player.togglePause()
+                            if (hold.release(player)) {
+                                clicks.reset()
+                            } else {
+                                player.togglePause()
+                                if (second) {
+                                    // Read live: this handler outlives the composition it was made in
+                                    window?.let { it.setFullscreen(!it.isFullscreen) }
+                                    clicks.reset()
+                                } else clicks.clicked(at, System.currentTimeMillis())
+                            }
                         })
                     }
                 },
@@ -897,6 +910,26 @@ private fun NoVlc(ui: PlayerUiState, model: PlayerModel) {
  * Hold to watch at 2x, like YouTube. Pressing starts a short timer; if the press is still held
  * when it ends (and the video is playing), the speed goes to 2x until release, then back.
  */
+/** Tells a double click on the video from two single clicks: the second comes soon after the first, near it. */
+internal class DoubleClick {
+    private var lastAt: Long? = null
+    private var lastPosition = Offset.Zero
+
+    fun clicked(at: Offset, nowMs: Long) {
+        lastAt = nowMs
+        lastPosition = at
+    }
+
+    fun isSecond(at: Offset, nowMs: Long, timeoutMs: Long, slop: Float): Boolean {
+        val last = lastAt ?: return false
+        return nowMs - last <= timeoutMs && (at - lastPosition).getDistance() <= slop
+    }
+
+    fun reset() {
+        lastAt = null
+    }
+}
+
 internal class SpeedHold(private val scope: CoroutineScope) {
     var boosting by mutableStateOf(false)
         private set
