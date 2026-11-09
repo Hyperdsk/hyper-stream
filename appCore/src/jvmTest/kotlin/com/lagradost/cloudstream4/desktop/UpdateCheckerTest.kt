@@ -1,7 +1,10 @@
 package com.lagradost.cloudstream4.desktop
 
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
+import com.lagradost.cloudstream4.desktop.update.UpdateAsset
 import com.lagradost.cloudstream4.desktop.update.UpdateChecker
+import com.lagradost.cloudstream4.desktop.update.UpdateRelease
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -76,6 +79,21 @@ class UpdateCheckerTest {
         UpdateChecker.removeInstalledDownloads(updates, current = "1.2.5")
         assertEquals(listOf("1.3.0"), updates.list()!!.toList(), "only the not yet installed update is kept")
         updates.deleteRecursively()
+    }
+
+    @Test
+    fun refusesAnUpdateGitHubListsNoChecksumFor() = runBlocking {
+        val url = "https://github.com/Hyperdsk/hyper-stream/releases/download/v9.9.9/HyperStream-9.9.9-android-and-tv.apk"
+        listOf(null, "md5:abcd", "sha256:not-a-hash").forEach { digest ->
+            val release = UpdateRelease(
+                "9.9.9", "v9.9.9", "Hyper Stream 9.9.9", "", "https://github.com/Hyperdsk/hyper-stream/releases/tag/v9.9.9",
+                UpdateAsset("HyperStream-9.9.9-android-and-tv.apk", url, 100, digest),
+            )
+            // Refused before anything is downloaded
+            val result = UpdateChecker.downloadAndInstall(release) { }
+            assertTrue(result.isFailure, "installed without a checksum ($digest)")
+            assertTrue("checksum" in result.exceptionOrNull()?.message.orEmpty(), result.exceptionOrNull()?.message)
+        }
     }
 
     @Test
