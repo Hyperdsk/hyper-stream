@@ -7,6 +7,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 /** An extension's name comes from its repository's list, so it must not choose where the file goes. */
 class ExtensionInstallPathTest {
@@ -42,5 +43,18 @@ class ExtensionInstallPathTest {
         ).forEach { name ->
             assertFailsWith<IOException>("\"$name\" should be refused") { ExtensionManager.pluginFile(repo, name) }
         }
+    }
+
+    @Test
+    fun repositoriesWhoseUrlsStartTheSameGetTheirOwnFolders() {
+        if (System.getProperty("cloudstream.dataDir") == null) {
+            System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-ext-path").toString())
+        }
+        // A real pair: the stable and pre-release lists of one repository
+        val stable = "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/refs/heads/builds/repo.json"
+        val pre = "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/refs/heads/builds-pre/repo.json"
+        assertNotEquals(ExtensionManager.pluginFile(stable, "Foo").parentFile, ExtensionManager.pluginFile(pre, "Foo").parentFile)
+        // And the same url always gets the same folder
+        assertEquals(ExtensionManager.pluginFile(stable, "Foo"), ExtensionManager.pluginFile(stable, "Foo"))
     }
 }

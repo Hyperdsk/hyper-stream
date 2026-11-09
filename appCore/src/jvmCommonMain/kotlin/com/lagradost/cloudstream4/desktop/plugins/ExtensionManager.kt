@@ -149,9 +149,13 @@ object ExtensionManager {
 
         val list = RepositoryClient.repositoryList(json)
         if (list != null) {
-            val added = addRepositoryList(list)
+            // Repositories over plain http need the user's yes, one at a time, as when typed in
+            val insecure = list.filter { RepositoryClient.downgrades(url, it) }
+            val added = addRepositoryList(list - insecure.toSet())
+            val skipped = if (insecure.isEmpty()) "" else
+                " ${insecure.size} use plain http, which isn't safe, and were left out; add one by itself to choose."
             _state.update {
-                it.copy(message = "Added $added of ${list.size} repositories from this list. Open one to install extensions.")
+                it.copy(message = "Added $added of ${list.size} repositories from this list.$skipped Open one to install extensions.")
             }
             return@launch
         }
@@ -217,7 +221,7 @@ object ExtensionManager {
         updateRepo(url) { it.copy(loading = true, error = null) }
         runCatching {
             val repo = RepositoryClient.fetchRepository(url)
-            repo to RepositoryClient.fetchRepoPlugins(repo)
+            repo to RepositoryClient.fetchRepoPlugins(repo, url)
         }.onSuccess { (repo, plugins) ->
             updateRepo(url) {
                 it.copy(
@@ -276,6 +280,13 @@ object ExtensionManager {
         var unloaded: File? = null
         try {
             val file = pluginFile(repositoryUrl, plugin.internalName)
+            if (RepositoryClient.downgrades(repositoryUrl, plugin.url)) {
+                throw IOException("its download uses plain http, which isn't safe, though its repository uses https.")
+            }
+            // The same extension saved under an older folder name, replaced by this one once it's in place
+            val previous = _state.value.installed.firstOrNull {
+                it.repositoryUrl == repositoryUrl && it.internalName == plugin.internalName && it.filePath != file.absolutePath
+            }
             val fetched = RepositoryClient.fetch(plugin.url, file, plugin.fileHash)
             try {
                 withContext(Dispatchers.IO) {
@@ -289,6 +300,7 @@ object ExtensionManager {
             }
             unloaded = null
             PluginLoader.clearCache(file)
+            previous?.let { uninstallNow(it) }
 
             val installed = InstalledPlugin(
                 internalName = plugin.internalName,
@@ -425,6 +437,15 @@ object ExtensionManager {
         return file
     }
 
-    private fun folderName(repositoryUrl: String): String =
-        repositoryUrl.removePrefix("https://").replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+    /**
+     * The folder a repository's extensions are saved in: readable, plus a hash of the whole url,
+     * as the readable part is cut short and different urls could share it (a repository's
+     * "builds" and "builds-pre" lists), and then each other's files.
+     */
+    internal fun folderName(repositoryUrl: String): String {
+        val readable = repositoryUrl.removePrefix("https://").replace(Regex("[^A-Za-z0-9._-]"), "_").take(60)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(repositoryUrl.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(12)
+        return "${readable}_$hash"
+    }
 }
