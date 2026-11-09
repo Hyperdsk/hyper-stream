@@ -16,8 +16,10 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toPersistentList
 import kotlinx.collections.immutable.toPersistentMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -261,13 +263,31 @@ object ExtensionManager {
     fun installedFor(repositoryUrl: String, plugin: SitePlugin): InstalledPlugin? =
         _state.value.installed.firstOrNull { it.repositoryUrl == repositoryUrl && it.internalName == plugin.internalName }
 
-    fun install(repositoryUrl: String, plugin: SitePlugin) = scope.launch {
+    fun install(repositoryUrl: String, plugin: SitePlugin) = scope.launch { installNow(repositoryUrl, plugin) }
+
+    /**
+     * Installs [plugin], or updates it. The new version is downloaded and checked before the
+     * installed one is touched, so a failed download (no connection, a web page instead of the
+     * file, a wrong hash) leaves the installed version loaded and working. True once installed.
+     */
+    private suspend fun installNow(repositoryUrl: String, plugin: SitePlugin): Boolean {
         busy(plugin.internalName, true)
+        // The installed version while it is unloaded for the swap, to load again if the swap fails
+        var unloaded: File? = null
         try {
             val file = pluginFile(repositoryUrl, plugin.internalName)
-            // Unload any previous version before replacing the file
-            withContext(Dispatchers.IO) { PluginLoader.unload(file) }
-            RepositoryClient.download(plugin.url, file, plugin.fileHash)
+            val fetched = RepositoryClient.fetch(plugin.url, file, plugin.fileHash)
+            try {
+                withContext(Dispatchers.IO) {
+                    val wasLoaded = PluginLoader.isLoaded(file)
+                    PluginLoader.unload(file)
+                    if (wasLoaded) unloaded = file
+                    RepositoryClient.moveInto(fetched, file)
+                }
+            } finally {
+                fetched.delete()
+            }
+            unloaded = null
             PluginLoader.clearCache(file)
 
             val installed = InstalledPlugin(
@@ -291,8 +311,18 @@ object ExtensionManager {
             loadFile(file)
             initProviders()
             providersChanged()
+            return true
         } catch (e: Throwable) {
+            unloaded?.let { old ->
+                if (old.exists() && !PluginLoader.isLoaded(old)) {
+                    withContext(NonCancellable + Dispatchers.IO) { loadFile(old) }
+                    initProviders()
+                    providersChanged()
+                }
+            }
+            if (e is CancellationException) throw e
             _state.update { it.copy(message = "Could not install ${plugin.name}: ${e.message}") }
+            return false
         } finally {
             busy(plugin.internalName, false)
         }
@@ -320,16 +350,21 @@ object ExtensionManager {
     /** Installs newer versions of every installed extension that its repository has updated. */
     fun updateAll() = scope.launch {
         var count = 0
+        var failed = 0
         for (repo in _state.value.repositories) {
             for (installed in _state.value.installed.filter { it.repositoryUrl == repo.data.url }) {
                 val latest = repo.plugins.firstOrNull { it.internalName == installed.internalName } ?: continue
                 if (latest.version > installed.version) {
-                    install(repo.data.url, latest).join()
-                    count++
+                    if (installNow(repo.data.url, latest)) count++ else failed++
                 }
             }
         }
-        _state.update { it.copy(message = if (count == 0) "All extensions are up to date." else "Updated $count extensions.") }
+        val message = when {
+            failed > 0 -> "Updated $count extensions. $failed couldn't be updated and kept their current version; try again later."
+            count == 0 -> "All extensions are up to date."
+            else -> "Updated $count extensions."
+        }
+        _state.update { it.copy(message = message) }
     }
 
     // ---------- Loading ----------

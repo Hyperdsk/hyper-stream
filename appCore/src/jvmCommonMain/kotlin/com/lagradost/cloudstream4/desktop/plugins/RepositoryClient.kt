@@ -122,6 +122,21 @@ object RepositoryClient {
 
     /** Downloads to a temp file, checks the hash when the repository provides one, then moves into place. */
     suspend fun download(url: String, target: File, expectedHash: String?): File = withContext(Dispatchers.IO) {
+        val tmp = fetch(url, target, expectedHash)
+        try {
+            moveInto(tmp, target)
+            target
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
+     * Downloads an extension for [target] into a temp file beside it and checks it (a zip, and the
+     * hash when the repository provides one), without touching [target]. The caller moves it into
+     * place with [moveInto] and deletes it afterwards. Nothing is left behind when it fails.
+     */
+    suspend fun fetch(url: String, target: File, expectedHash: String?): File = withContext(Dispatchers.IO) {
         target.parentFile?.mkdirs()
         val tmp = File.createTempFile(target.name, ".tmp", target.parentFile)
         try {
@@ -150,14 +165,19 @@ object RepositoryClient {
                     "Extension hash mismatch for ${target.name}. Expected $expectedHash, got $actual."
                 }
             }
-            try {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-            target
-        } finally {
+            tmp
+        } catch (t: Throwable) {
             tmp.delete()
+            throw t
+        }
+    }
+
+    /** Replaces [target] with a file from [fetch], in one step where the file system allows it. */
+    fun moveInto(tmp: File, target: File) {
+        try {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
 
