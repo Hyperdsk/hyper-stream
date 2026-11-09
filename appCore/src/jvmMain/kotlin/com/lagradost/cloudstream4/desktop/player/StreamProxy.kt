@@ -127,6 +127,8 @@ object StreamProxy {
     }
 
     private val connections: Int get() = SettingsStore.state.value.streamConnections
+    /** How much of a body to look at to tell whether it's a playlist. */
+    private const val PEEK_BYTES = 256L
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
@@ -160,6 +162,9 @@ object StreamProxy {
                 keys.firstOrNull { it.equals(k, ignoreCase = true) }?.let { remove(it) }
                 put(k, v)
             }
+            // OkHttp only unzips responses when it picks the encoding itself; with the extension's
+            // Accept-Encoding the player would get compressed bytes
+            keys.filter { it.equals("Accept-Encoding", ignoreCase = true) }.forEach { remove(it) }
         }
         val session = UUID.randomUUID().toString().replace("-", "")
         sessions[session] = all
@@ -176,6 +181,27 @@ object StreamProxy {
         synchronized(segments) { segments.clear() }
         lastStream = null
         lastSegment = null
+    }
+
+    /**
+     * Forgets the session of [url], a local url from [proxiedUrl], and frees what it holds: its
+     * video streams with their cached chunks and its HLS segments. Other sessions keep playing.
+     */
+    fun release(url: String) {
+        if (!url.startsWith("http://127.0.0.1:")) return
+        val session = url.substringAfter("/s/", "").substringBefore('/').takeIf { it.isNotEmpty() } ?: return
+        sessions.remove(session)
+        parallelSessions -= session
+        streams.keys.filter { it.startsWith("$session|") }.forEach { key ->
+            val stream = streams.remove(key) as? ParallelStream ?: return@forEach
+            if (lastStream === stream) lastStream = null
+            stream.close()
+        }
+        segmentOrder.remove(session)?.let { index ->
+            val last = lastSegment
+            if (last != null && index.values.any { it.first === last.first }) lastSegment = null
+            synchronized(segments) { index.keys.forEach { segments.remove(it) } }
+        }
     }
 
     private fun local(session: String, url: String): String {
@@ -235,13 +261,19 @@ object StreamProxy {
             val body = response.body
             val contentType = response.header("Content-Type") ?: ""
             val finalUrl = response.request.url.toString()
+            val readable = exchange.requestMethod != "HEAD" && response.isSuccessful
 
+            // Hosts also serve playlists as text/plain or octet-stream from urls like "/master?token=..":
+            // unless it's clearly video or audio, look at how the body starts
+            val media = contentType.startsWith("video/", ignoreCase = true) || contentType.startsWith("audio/", ignoreCase = true)
             val looksLikePlaylist = contentType.contains("mpegurl", ignoreCase = true) ||
-                finalUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+                finalUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
+                (readable && !media && runCatching { isPlaylist(String(response.peekBody(PEEK_BYTES).bytes(), Charsets.UTF_8)) }.getOrDefault(false))
 
-            if (looksLikePlaylist && exchange.requestMethod != "HEAD" && response.isSuccessful) {
-                val text = body.string()
-                if (text.trimStart().startsWith("#EXTM3U")) {
+            if (looksLikePlaylist && readable) {
+                // A byte order mark would otherwise be taken for part of the first line
+                val text = body.string().removePrefix("\uFEFF")
+                if (isPlaylist(text)) {
                     val bytes = rewritePlaylist(text, finalUrl, session).toByteArray()
                     exchange.responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl")
                     exchange.sendResponseHeaders(response.code, bytes.size.toLong())
@@ -275,6 +307,10 @@ object StreamProxy {
             }
         }
     }
+
+    /** Whether [text] starts like an HLS playlist, after any byte order mark and blank space. */
+    private fun isPlaylist(text: String): Boolean =
+        text.trimStart { it == '\uFEFF' || it.isWhitespace() }.startsWith("#EXTM3U")
 
     /** Copies [input] to [out] until it ends or the host's connection fails. Returns the bytes copied. */
     private fun copy(input: java.io.InputStream, out: java.io.OutputStream): Long {

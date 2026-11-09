@@ -139,6 +139,9 @@ expect object StreamGateway {
     /** Forgets every prepared link, when the player closes or switches source. */
     fun clear()
 
+    /** Forgets one link from [prepare] once the player has moved on from it, freeing what it holds. */
+    fun release(source: StreamSource)
+
     /** The url a seek bar preview should open for the playing url, at low priority where supported. */
     fun previewUrl(url: String): String
 }

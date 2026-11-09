@@ -106,6 +106,8 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
      */
     private var loadToken = 0L
     private var playToken = 0L
+    /** The link the player has open, released when the next one starts so its cached video is freed. */
+    private var playingSource: StreamSource? = null
     private val memoryKey = SourceMemory.key(request.apiName, request.parentUrl)
     /** The background download of the provider's subtitles, see checkSubtitles. */
     private var subtitleCheck: Job? = null
@@ -200,6 +202,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         linksJob?.cancel()
         player?.stop()
         StreamGateway.clear()
+        playingSource = null
         pendingStartMs = startMs
         autoSkipped.clear()
         subtitleCheck?.cancel()
@@ -314,13 +317,18 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             return
         }
         update { copy(refreshing = true) }
+        // The episode load this search belongs to. Not the episode's position: loading the episode
+        // list moves that while the same episode plays
+        val token = loadToken
         scope.launch {
             val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
             val subs = java.util.Collections.synchronizedList(mutableListOf<SubtitleFile>())
             val result = providerCall {
                 api.loadLinks(data, false, { subs += it }, { if (it.type.name != "TORRENT" && it.type.name != "MAGNET") links += it })
             }
-            if (current.index != index) return@launch
+            // Another episode, or "Reload links", started meanwhile: its sources are newer than these,
+            // and it already reset refreshing (a search started since then owns the flag now)
+            if (token != loadToken) return@launch
             // Nothing came back (offline, or the site is down): keep the sources there are
             if (links.isEmpty()) {
                 update { copy(refreshing = false) }
@@ -432,9 +440,14 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                 else -> null
             },
         )
+        val previous = playingSource
+        playingSource = source
         // No provider subtitles here: VLC would fetch every one before starting the video.
         // They load one at a time when picked, see loadSubtitle.
         p.open(source, start)
+        // Only now that the player has left it: the previous link's proxy session and the video
+        // it cached would otherwise stay in memory until the episode changes
+        previous?.let { StreamGateway.release(it) }
         update { copy(loadedSubtitles = persistentMapOf()) }
         checkSubtitles()
     }
@@ -651,6 +664,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         linksJob?.cancel()
         player?.stop()
         StreamGateway.clear()
+        playingSource = null
         super.dispose()
     }
 }
