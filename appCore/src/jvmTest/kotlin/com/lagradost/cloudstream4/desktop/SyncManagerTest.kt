@@ -37,6 +37,9 @@ class SyncManagerTest {
     /** Downloads of an extension whose file is gone from its host. */
     private val brokenDownloads = java.util.concurrent.atomic.AtomicInteger()
 
+    /** Answers reads as for a session the server has ended. */
+    @Volatile private var rejectToken = false
+
     /** Runs once a page has been read, before it is sent: lets a test change rows mid-pull. */
     @Volatile private var afterPage: (() -> Unit)? = null
     private var clock = 0L
@@ -96,6 +99,7 @@ class SyncManagerTest {
             ex.json(1)
         }
         createContext("/rest/v1/hs_sync_items") { ex ->
+            if (rejectToken) return@createContext ex.json(mapOf("message" to "JWT expired"), code = 401)
             // As PostgREST: a start time, or the (time, kind, key) of the row to follow, and a page size
             val query = ex.requestURI.rawQuery.split('&').associate {
                 it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8")
@@ -152,6 +156,31 @@ class SyncManagerTest {
             afterPage = null
             synchronized(rows) { rows.clear() }
             client.pageSize = 500
+            server.stop(0)
+            System.clearProperty("hyperstream.syncUrl")
+        }
+    }
+
+    @Test
+    fun aSessionEndedDuringASyncSaysSo() = runBlocking {
+        val server = server()
+        System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${server.address.port}")
+        if (System.getProperty("cloudstream.dataDir") == null) {
+            System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-sync-ended").toString())
+        }
+        try {
+            SyncManager.sendLink("me@example.com").join()
+            SyncManager.verify("123456").join()
+            withTimeout(5_000) { SyncManager.ui.first { it.signedIn } }
+            // The server ends the session, and won't take its refresh token either
+            rejectToken = true
+            SyncManager.syncNow()
+            val ui = SyncManager.ui.value
+            assertTrue(!ui.signedIn, "signed out")
+            assertTrue(ui.error.orEmpty().contains("Sign in again"), "with the reason still shown: ${ui.error}")
+            assertNull(ui.lastSyncedAt, "and no sync noted that didn't happen")
+        } finally {
+            rejectToken = false
             server.stop(0)
             System.clearProperty("hyperstream.syncUrl")
         }
@@ -334,6 +363,15 @@ class SyncManagerTest {
             ExtensionManager.removeRepository(extRepo).join()
             SyncManager.syncNow()
             ExtensionManager.dismissMessage()
+
+            // A damaged cache file holds no synced data, so removals still go out
+            LibraryStore.setBookmark(Bookmark("cached", "Prov", "Cached", null, null, null, WatchType.WATCHING), "Prov", "cached")
+            SyncManager.syncNow()
+            com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable += "link-cache.json"
+            LibraryStore.setBookmark(null, "Prov", "cached")
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["bookmark" to "Prov|cached"] }?.deleted == true, "the removal was sent despite the damaged cache")
+            com.lagradost.cloudstream4.desktop.data.DataHealth.unreadable.clear()
 
             // A data file that couldn't be read: its items are missing, not deleted, so no deletions go out
             LibraryStore.setBookmark(Bookmark("kept", "Prov", "Kept", null, null, null, WatchType.WATCHING), "Prov", "kept")

@@ -459,8 +459,11 @@ object SyncManager {
             try {
                 pass(first)
             } catch (e: SyncAuthException) {
-                // An access token can stop working early; refresh once and try again
-                refreshed(first)?.let { pass(it) }
+                // An access token can stop working early; refresh once and try again. If the refresh
+                // is refused, the device was signed out, with the reason already shown: keep it, and
+                // don't note a sync that didn't happen
+                val again = refreshed(first) ?: return@withLock _ui.update { it.copy(syncing = false) }
+                pass(again)
             }
             save { it.copy(lastSyncedAt = System.currentTimeMillis()) }
             _ui.update { it.copy(syncing = false, lastSyncedAt = store.lastSyncedAt, error = null) }
@@ -477,6 +480,7 @@ object SyncManager {
         // finished later carries an earlier time, and would otherwise never be pulled. Rows seen
         // twice change nothing
         val lost = DataHealth.unreadable.flatMap { fileKinds[it].orEmpty() }.toSet()
+        val syncedDataLost = syncedDataLost()
         // A file found damaged again later (read again after it was fixed) is restored again
         restoredThisRun = restoredThisRun intersect lost
         val newlyLost = lost - restoredThisRun - store.restoring
@@ -531,7 +535,7 @@ object SyncManager {
             }
             // Removed here but not sent yet: only a later change elsewhere brings it back. Unless a data
             // file couldn't be read: then it's missing, not removed, and the server's copy restores it
-            val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty() && item.kind !in restoring
+            val removedHere = mine == null && known[id] != null && !syncedDataLost && item.kind !in restoring
             // A setting changed here since it last synced compares by when that change was made
             val changedHere = if (item.kind == SETTING && mine != null && known[id]?.hash != hashOf(mine.data)) {
                 settingChangedAt(item.key, known[id])
@@ -573,7 +577,7 @@ object SyncManager {
         }
         // Gone since the last pass: a deletion. Not while a data file is unreadable, or its whole
         // contents would be deleted on every device
-        val deletions = if (DataHealth.unreadable.isEmpty() && store.restoring.isEmpty()) {
+        val deletions = if (!syncedDataLost() && store.restoring.isEmpty()) {
             (next.keys - current.keys - store.pending.keys).filter { it.substringBefore('/') !in undeletable }
         } else emptyList()
         for (id in deletions) {
@@ -598,6 +602,13 @@ object SyncManager {
         val at = store.settingTimes[name] ?: if (known != null) System.currentTimeMillis() else return null
         return maxOf(at, (known?.at ?: 0) + 1)
     }
+
+    /**
+     * Whether a file holding synced data couldn't be read this run, so items missing here may be
+     * lost, not removed. Only those files: a damaged cache (links, IMDb, downloads) says nothing
+     * about the library, and used to stop removals syncing until the app restarted.
+     */
+    private fun syncedDataLost(): Boolean = DataHealth.unreadable.any { it in fileKinds }
 
     private data class LocalItem(val kind: String, val key: String, val data: Any, val at: Long?)
 
