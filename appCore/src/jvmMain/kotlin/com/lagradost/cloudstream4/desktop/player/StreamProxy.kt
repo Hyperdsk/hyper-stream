@@ -47,6 +47,8 @@ import java.util.concurrent.Executors
  */
 object StreamProxy {
     private val sessions = ConcurrentHashMap<String, Map<String, String>>()
+    /** Each session's own host, the site its cookies and credentials are for. */
+    private val sessionHosts = ConcurrentHashMap<String, String>()
 
     /** Counts bytes and open connections to the hosts, for [stats]. */
     internal object meter {
@@ -127,6 +129,8 @@ object StreamProxy {
     }
 
     private val connections: Int get() = SettingsStore.state.value.streamConnections
+    /** How much of a body to look at to tell whether it's a playlist. */
+    private const val PEEK_BYTES = 256L
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
@@ -137,7 +141,8 @@ object StreamProxy {
                 try {
                     handle(exchange)
                 } catch (t: Throwable) {
-                    if (t !is PlayerGone) StreamLog.log("couldn't serve ${exchange.requestURI.path.take(80)}: $t")
+                    // The host only: the path holds the session id and the address with any tokens in it
+                    if (t !is PlayerGone) StreamLog.log("couldn't serve a request to ${requestHost(exchange)}: $t")
                     runCatching { exchange.sendResponseHeaders(502, -1) }
                 } finally {
                     exchange.close()
@@ -160,15 +165,20 @@ object StreamProxy {
                 keys.firstOrNull { it.equals(k, ignoreCase = true) }?.let { remove(it) }
                 put(k, v)
             }
+            // OkHttp only unzips responses when it picks the encoding itself; with the extension's
+            // Accept-Encoding the player would get compressed bytes
+            keys.filter { it.equals("Accept-Encoding", ignoreCase = true) }.forEach { remove(it) }
         }
         val session = UUID.randomUUID().toString().replace("-", "")
         sessions[session] = all
+        url.toHttpUrlOrNull()?.host?.let { sessionHosts[session] = it }
         if (parallel) parallelSessions += session
         return local(session, url)
     }
 
     fun clear() {
         sessions.clear()
+        sessionHosts.clear()
         parallelSessions.clear()
         streams.values.forEach { (it as? ParallelStream)?.close() }
         streams.clear()
@@ -177,6 +187,53 @@ object StreamProxy {
         lastStream = null
         lastSegment = null
     }
+
+    /**
+     * Forgets the session of [url], a local url from [proxiedUrl], and frees what it holds: its
+     * video streams with their cached chunks and its HLS segments. Other sessions keep playing.
+     */
+    fun release(url: String) {
+        if (!url.startsWith("http://127.0.0.1:")) return
+        val session = url.substringAfter("/s/", "").substringBefore('/').takeIf { it.isNotEmpty() } ?: return
+        sessions.remove(session)
+        sessionHosts.remove(session)
+        parallelSessions -= session
+        streams.keys.filter { it.startsWith("$session|") }.forEach { key ->
+            val stream = streams.remove(key) as? ParallelStream ?: return@forEach
+            if (lastStream === stream) lastStream = null
+            stream.close()
+        }
+        segmentOrder.remove(session)?.let { index ->
+            val last = lastSegment
+            if (last != null && index.values.any { it.first === last.first }) lastSegment = null
+            synchronized(segments) { index.keys.forEach { segments.remove(it) } }
+        }
+    }
+
+    /**
+     * The session's headers for a request to [target]. A playlist can name segments, keys and ads
+     * on any host: they get the Referer, Origin and the rest, which CDNs check, but the cookies and
+     * credentials stay with the session's own site ([home]) and its subdomains.
+     */
+    internal fun headersFor(headers: Map<String, String>, home: String?, target: String): Map<String, String> {
+        val host = target.toHttpUrlOrNull()?.host ?: return headers
+        if (home == null || sameSite(home, host)) return headers
+        return headers.filterKeys { !it.equals("Cookie", ignoreCase = true) && !it.equals("Authorization", ignoreCase = true) }
+    }
+
+    /** One site: the same host, or the same last two labels (cdn.example.com and example.com). Addresses must match. */
+    internal fun sameSite(a: String, b: String): Boolean {
+        if (a.equals(b, ignoreCase = true)) return true
+        // IP addresses (with a ':' for IPv6, or ending in a digit) only match themselves
+        if (listOf(a, b).any { host -> ':' in host || host.lastOrNull()?.isDigit() != false }) return false
+        fun site(host: String) = host.lowercase().split('.').takeLast(2).joinToString(".")
+        return site(a) == site(b)
+    }
+
+    /** The host a proxied request is for, for logs. */
+    private fun requestHost(exchange: HttpExchange): String = runCatching {
+        StreamLog.host(String(decoder.decode(exchange.requestURI.rawPath.removePrefix("/s/").split('/')[1])))
+    }.getOrDefault("?")
 
     private fun local(session: String, url: String): String {
         // Keep the original file name at the end, so VLC can guess the format from it
@@ -194,7 +251,7 @@ object StreamProxy {
         // /s/{session}/{base64 url}/{name}
         val parts = exchange.requestURI.rawPath.removePrefix("/s/").split('/')
         val session = parts.getOrNull(0)
-        val headers = session?.let { sessions[it] }
+        val sessionHeaders = session?.let { sessions[it] }
         val original = parts.getOrNull(1)?.let { runCatching { String(decoder.decode(it)) }.getOrNull() }
         // A player resolving a relative path (DASH segments, unrewritten refs) against our url changes
         // the trailing name. Resolve that path against the original url instead.
@@ -203,10 +260,11 @@ object StreamProxy {
             val query = exchange.requestURI.rawQuery?.let { "?$it" } ?: ""
             runCatching { URI(original).resolve(rest + query).toString() }.getOrNull()
         } else original
-        if (headers == null || target == null || target.toHttpUrlOrNull() == null) {
+        if (sessionHeaders == null || target == null || target.toHttpUrlOrNull() == null) {
             exchange.sendResponseHeaders(404, -1)
             return
         }
+        val headers = headersFor(sessionHeaders, session?.let { sessionHosts[it] }, target)
 
         val range = exchange.requestHeaders.getFirst("Range")
         if (connections > 1 && exchange.requestMethod == "GET") {
@@ -235,13 +293,19 @@ object StreamProxy {
             val body = response.body
             val contentType = response.header("Content-Type") ?: ""
             val finalUrl = response.request.url.toString()
+            val readable = exchange.requestMethod != "HEAD" && response.isSuccessful
 
+            // Hosts also serve playlists as text/plain or octet-stream from urls like "/master?token=..":
+            // unless it's clearly video or audio, look at how the body starts
+            val media = contentType.startsWith("video/", ignoreCase = true) || contentType.startsWith("audio/", ignoreCase = true)
             val looksLikePlaylist = contentType.contains("mpegurl", ignoreCase = true) ||
-                finalUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+                finalUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
+                (readable && !media && runCatching { isPlaylist(String(response.peekBody(PEEK_BYTES).bytes(), Charsets.UTF_8)) }.getOrDefault(false))
 
-            if (looksLikePlaylist && exchange.requestMethod != "HEAD" && response.isSuccessful) {
-                val text = body.string()
-                if (text.trimStart().startsWith("#EXTM3U")) {
+            if (looksLikePlaylist && readable) {
+                // A byte order mark would otherwise be taken for part of the first line
+                val text = body.string().removePrefix("\uFEFF")
+                if (isPlaylist(text)) {
                     val bytes = rewritePlaylist(text, finalUrl, session).toByteArray()
                     exchange.responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl")
                     exchange.sendResponseHeaders(response.code, bytes.size.toLong())
@@ -275,6 +339,10 @@ object StreamProxy {
             }
         }
     }
+
+    /** Whether [text] starts like an HLS playlist, after any byte order mark and blank space. */
+    private fun isPlaylist(text: String): Boolean =
+        text.trimStart { it == '\uFEFF' || it.isWhitespace() }.startsWith("#EXTM3U")
 
     /** Copies [input] to [out] until it ends or the host's connection fails. Returns the bytes copied. */
     private fun copy(input: java.io.InputStream, out: java.io.OutputStream): Long {

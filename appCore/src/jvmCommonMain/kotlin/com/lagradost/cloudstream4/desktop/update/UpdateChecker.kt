@@ -253,8 +253,9 @@ object UpdateChecker {
     }
 
     /**
-     * Downloads [release]'s installer into the app's updates folder, verifies its size and SHA-256
-     * when GitHub provides one, then hands it to the platform installer. Android opens the package
+     * Downloads [release]'s installer into the app's updates folder, verifies its size and the
+     * SHA-256 GitHub lists for it, then hands it to the platform installer. A release GitHub lists
+     * no SHA-256 for isn't installed: nothing would show that the file is the one published. Android opens the package
      * installer; desktop opens the downloaded .dmg/.msi/.deb with the system.
      */
     suspend fun downloadAndInstall(
@@ -263,6 +264,11 @@ object UpdateChecker {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         if (!isOwnDownload(release.asset.url)) {
             return@withContext Result.failure(IOException("The update link doesn't point at this project's GitHub release."))
+        }
+        if (expectedSha256(release.asset.digest) == null) {
+            return@withContext Result.failure(
+                IOException("GitHub lists no checksum for this update, so it can't be checked. Download it from the release page instead.")
+            )
         }
         val safeName = release.asset.name.substringAfterLast('/')
             .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
@@ -343,11 +349,15 @@ object UpdateChecker {
         Result.success(Unit)
     }
 
+    /** The SHA-256 in GitHub's "sha256:<hex>" digest, or null when it lists none. */
+    private fun expectedSha256(digest: String?): String? = digest
+        ?.takeIf { it.startsWith("sha256:", ignoreCase = true) }
+        ?.substringAfter(':')
+        ?.takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) }
+
+    /** False without a checksum to compare: an unchecked file is never taken as the update. */
     private fun matchesDigest(file: File, digest: String?): Boolean {
-        val expected = digest
-            ?.takeIf { it.startsWith("sha256:", ignoreCase = true) }
-            ?.substringAfter(':')
-            ?: return true
+        val expected = expectedSha256(digest) ?: return false
         return sha256(file).equals(expected, ignoreCase = true)
     }
 

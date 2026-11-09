@@ -1,6 +1,7 @@
 package com.lagradost.cloudstream4.desktop
 
 import com.lagradost.cloudstream3.APIHolder
+import com.lagradost.cloudstream4.desktop.data.AppDirs
 import com.lagradost.cloudstream4.desktop.player.StreamProxy
 import com.lagradost.cloudstream4.desktop.plugins.PluginLoader
 import java.io.File
@@ -36,6 +37,41 @@ class PluginLoaderTest {
 
         PluginLoader.unload(file)
         assertFalse(APIHolder.allProviders.any { it.sourcePlugin == file.absolutePath })
+    }
+
+    @Test
+    fun aLoadCutShortIsConvertedAgain() {
+        val file = exampleCs3()
+        PluginLoader.load(file)
+        PluginLoader.unload(file)
+        val prefix = "${file.parentFile.name}_${file.nameWithoutExtension}_"
+        val cached = AppDirs.convertedExtensions.listFiles().orEmpty().filter { it.name.startsWith(prefix) }
+        val jar = cached.first { it.name.endsWith("classes.jar") }
+        val converted = jar.lastModified()
+        // As if the app closed after converting (and maybe patching) the jars but before the stub
+        // list was written: those jars mustn't be used as they are
+        cached.filter { it.name.endsWith(".txt") }.forEach { it.delete() }
+        Thread.sleep(20)
+
+        val plugin = PluginLoader.load(file)
+        assertTrue(plugin.providerNames.isNotEmpty(), "loads again")
+        assertTrue(jar.lastModified() > converted, "from a fresh conversion")
+        PluginLoader.unload(file)
+    }
+
+    @Test
+    fun clearingOnePluginsCacheLeavesOthersWithTheSameStart() {
+        val repo = Files.createTempDirectory("cs-cache-repo").toFile()
+        val folder = AppDirs.convertedExtensions
+        val foo = File(folder, "${repo.name}_Foo_100_200_v7_classes.jar").apply { writeText("foo") }
+        val fooBar = File(folder, "${repo.name}_Foo_Bar_100_200_v7_classes.jar").apply { writeText("foo bar") }
+        val foo2 = File(folder, "${repo.name}_Foo_2_100_200_v7_classes.jar").apply { writeText("foo 2") }
+
+        PluginLoader.clearCache(File(repo, "Foo.cs3"))
+        assertFalse(foo.exists(), "Foo's cache was cleared")
+        assertTrue(fooBar.exists() && foo2.exists(), "Foo_Bar's and Foo_2's were left alone")
+        fooBar.delete()
+        foo2.delete()
     }
 
     @Test

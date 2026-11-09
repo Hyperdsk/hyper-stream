@@ -36,10 +36,8 @@ class SkipStampsOnlineTest {
     @Test
     fun findsAnimeOpeningAndSeriesIntro() = runBlocking {
         LibrarySetup.init()
-        if (!online()) {
-            println("Skipping, skip services not reachable")
-            return@runBlocking
-        }
+        // Reported as skipped, not passed, when it can't run
+        org.junit.Assume.assumeTrue("skip services not reachable", online())
         val anime = api.newAnimeLoadResponse("One Piece", "https://example.com/op", TvType.Anime) {
             addMalId(21)
             addEpisodes(DubStatus.Subbed, listOf(api.newEpisode("ep1000") { episode = 1000 }))

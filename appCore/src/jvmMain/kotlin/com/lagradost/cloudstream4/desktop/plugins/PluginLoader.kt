@@ -55,8 +55,16 @@ actual object PluginLoader {
                 .toList()
             check(dexEntries.isNotEmpty()) { "${file.name} contains no code" }
 
-            val jars = dexEntries.map { entry ->
-                val jar = convertedJar(file, entry.name)
+            val cached = dexEntries.map { convertedJar(file, it.name) }
+            // The stub list is written last, after the jars were translated and patched for the
+            // stubs. Jars without it are from a load cut short, perhaps after patching, which
+            // patching again would break for good: translate them again
+            val stubList = stubListFor(cached.first())
+            if (!stubList.exists() || cached.any { !it.exists() }) {
+                cached.forEach { it.delete() }
+                stubList.delete()
+            }
+            val jars = dexEntries.zip(cached).map { (entry, jar) ->
                 if (!jar.exists()) {
                     val bytes = zip.getInputStream(entry).use { it.readBytes() }
                     translate(bytes, jar)
@@ -71,8 +79,8 @@ actual object PluginLoader {
 
         val parent = PluginLoader::class.java.classLoader
         // Placeholders for Android classes the extension mentions but desktop doesn't have
-        val stubJar = File(jars.first().path.removeSuffix(".jar") + "_android-stubs.jar")
-        val stubListFile = File(stubJar.path + ".txt")
+        val stubListFile = stubListFor(jars.first())
+        val stubJar = File(stubListFile.path.removeSuffix(".txt"))
         val stubbed = if (stubListFile.exists() && stubListFile.lastModified() >= jars.maxOf { it.lastModified() }) {
             stubListFile.readLines().filter { it.isNotBlank() }
         } else {
@@ -119,12 +127,27 @@ actual object PluginLoader {
     /** Deletes cached jars for a plugin file, so the next load translates it again. */
     actual fun clearCache(file: File) {
         AppDirs.convertedExtensions.listFiles()
-            ?.filter { it.name.startsWith(cachePrefix(file)) }
+            ?.filter { isCacheOf(it.name, file) }
             ?.forEach { it.delete() }
     }
 
     private fun cachePrefix(file: File) =
         "${file.parentFile.name}_${file.nameWithoutExtension}_"
+
+    /** The list of stubbed classes kept with a plugin's first converted jar, written once loading is done. */
+    private fun stubListFor(firstJar: File) = File(firstJar.path.removeSuffix(".jar") + "_android-stubs.jar.txt")
+
+    private val cacheRest = Regex("""\d+_\d+_v\d+_.*""")
+
+    /**
+     * Whether the cached file [name] belongs to [file]: "<prefix><size>_<time>_v<version>_...". The
+     * prefix alone also matched other plugins' files ("Foo_" is the start of "Foo_Bar_"), so
+     * updating Foo deleted Foo_Bar's converted jars.
+     */
+    private fun isCacheOf(name: String, file: File): Boolean {
+        val prefix = cachePrefix(file)
+        return name.startsWith(prefix) && cacheRest.matches(name.substring(prefix.length))
+    }
 
     /** Cache key includes size and modification time, so an updated .cs3 gets translated again. */
     private fun convertedJar(file: File, dexName: String): File {
@@ -134,7 +157,7 @@ actual object PluginLoader {
         if (!jar.exists()) {
             // Remove everything from older versions of this extension or of the translation
             AppDirs.convertedExtensions.listFiles()
-                ?.filter { it.name.startsWith(prefix) && !it.name.startsWith(key) }
+                ?.filter { isCacheOf(it.name, file) && !it.name.startsWith(key) }
                 ?.forEach { it.delete() }
         }
         return jar

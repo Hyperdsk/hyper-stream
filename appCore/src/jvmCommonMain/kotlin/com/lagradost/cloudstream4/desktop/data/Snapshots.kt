@@ -18,7 +18,16 @@ expect fun ImageBitmap.encodeJpeg(quality: Int): ByteArray?
  */
 object Snapshots {
     private const val WIDTH = 480
-    private val dir by lazy { File(AppDirs.data, "snapshots").apply { mkdirs() } }
+    private val dir by lazy {
+        File(AppDirs.data, "snapshots").apply {
+            mkdirs()
+            // Once a run: pictures no history entry points at (left by versions that didn't delete
+            // them). Not new ones: a picture is saved a moment before the progress that names it
+            val used = LibraryStore.state.value.history.mapNotNull { it.snapshotPath?.let { path -> File(path).name } }.toSet()
+            val settled = System.currentTimeMillis() - 60 * 60 * 1000
+            listFiles()?.filter { it.name !in used && it.lastModified() < settled }?.forEach { it.delete() }
+        }
+    }
 
 
     /**

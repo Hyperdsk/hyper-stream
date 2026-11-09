@@ -59,7 +59,8 @@ actual object PluginLoader {
     actual fun clearCache(file: File) {
         // Updating replaces the read-only file, so make it writable again
         file.setWritable(true)
-        optimizedDir().listFiles()?.filter { it.name.startsWith(file.nameWithoutExtension) }?.forEach { it.delete() }
+        // Only this plugin's: a name that merely starts the same ("Foo" and "Foo_Bar") is another's
+        optimizedDir().listFiles()?.filter { it.nameWithoutExtension == file.nameWithoutExtension }?.forEach { it.delete() }
         // Since Android 8 the compiled code goes in an oat folder beside the file, not optimizedDir
         File(file.parentFile, "oat").walkBottomUp().filter { it.isFile && it.name.startsWith(file.nameWithoutExtension + ".") }.forEach { it.delete() }
     }

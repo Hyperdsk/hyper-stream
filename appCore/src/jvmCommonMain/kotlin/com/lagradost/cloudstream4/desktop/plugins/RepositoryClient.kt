@@ -37,15 +37,29 @@ object RepositoryClient {
      */
     const val USER_AGENT = "CloudStream-Desktop/1.0"
 
+    /** Never follows a redirect from https to plain http, where anyone on the network could swap the file. */
+    private val client by lazy { app.baseClient.newBuilder().followSslRedirects(false).build() }
+
     private fun get(url: String): Response {
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
-        val response = app.baseClient.newCall(request).execute()
+        val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
             response.close()
+            if (response.isRedirect && response.header("Location").orEmpty().startsWith("http://", ignoreCase = true)) {
+                throw IOException("${hostOf(url)} sends it on over plain http, which isn't safe, so it wasn't followed.")
+            }
             throw IOException("${hostOf(url)} answered with HTTP ${response.code}.")
         }
         return response
     }
+
+    /**
+     * True when [to] is plain http but [from], the repository or list it came from, is https. The
+     * user agreed to http only for a repository they added as http, so a secure one can't hand
+     * out insecure lists or downloads.
+     */
+    fun downgrades(from: String, to: String): Boolean =
+        from.trim().startsWith("https://", ignoreCase = true) && to.trim().startsWith("http://", ignoreCase = true)
 
     /** Text of a json file, refusing html pages so the user gets a readable reason. */
     private fun getJsonText(url: String): String {
@@ -114,14 +128,43 @@ object RepositoryClient {
      * All plugins listed by a repository, across all of its plugin lists. A list that fails is
      * skipped, but if every list fails the first error is thrown, so the user sees why.
      */
-    suspend fun fetchRepoPlugins(repo: Repository): List<SitePlugin> = coroutineScope {
-        val results = repo.pluginLists.map { url -> async { runCatching { fetchPluginList(url) } } }.awaitAll()
+    suspend fun fetchRepoPlugins(repo: Repository, repositoryUrl: String? = null): List<SitePlugin> = coroutineScope {
+        val results = repo.pluginLists.map { url ->
+            async {
+                runCatching {
+                    if (repositoryUrl != null && downgrades(repositoryUrl, url)) {
+                        throw IOException("${hostOf(url)} serves this repository's list over plain http, which isn't safe.")
+                    }
+                    fetchPluginList(url)
+                }
+            }
+        }.awaitAll()
         if (results.isNotEmpty() && results.all { it.isFailure }) throw results.first().exceptionOrNull()!!
+        // The same extension in several lists (stable and pre-release, say): the newest version, once.
+        // Listed twice, it would also show twice, which the screens' lists can't take
         results.flatMap { it.getOrDefault(emptyList()) }
+            .groupBy { it.internalName }
+            .values
+            .map { same -> same.maxBy { it.version } }
     }
 
     /** Downloads to a temp file, checks the hash when the repository provides one, then moves into place. */
     suspend fun download(url: String, target: File, expectedHash: String?): File = withContext(Dispatchers.IO) {
+        val tmp = fetch(url, target, expectedHash)
+        try {
+            moveInto(tmp, target)
+            target
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
+     * Downloads an extension for [target] into a temp file beside it and checks it (a zip, and the
+     * hash when the repository provides one), without touching [target]. The caller moves it into
+     * place with [moveInto] and deletes it afterwards. Nothing is left behind when it fails.
+     */
+    suspend fun fetch(url: String, target: File, expectedHash: String?): File = withContext(Dispatchers.IO) {
         target.parentFile?.mkdirs()
         val tmp = File.createTempFile(target.name, ".tmp", target.parentFile)
         try {
@@ -150,14 +193,19 @@ object RepositoryClient {
                     "Extension hash mismatch for ${target.name}. Expected $expectedHash, got $actual."
                 }
             }
-            try {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-            target
-        } finally {
+            tmp
+        } catch (t: Throwable) {
             tmp.delete()
+            throw t
+        }
+    }
+
+    /** Replaces [target] with a file from [fetch], in one step where the file system allows it. */
+    fun moveInto(tmp: File, target: File) {
+        try {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
 

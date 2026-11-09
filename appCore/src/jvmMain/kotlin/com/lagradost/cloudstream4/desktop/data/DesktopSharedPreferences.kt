@@ -16,6 +16,10 @@ class DesktopSharedPreferences private constructor(private val file: File) : Sha
             runCatching {
                 val stored: Map<String, Any?> = jsonMapper.readValue(file, object : TypeReference<Map<String, Any?>>() {})
                 stored.forEach { (k, v) -> if (v != null) values[k] = v }
+            }.onFailure {
+                // Kept, not overwritten by the next save, so an extension's logins and settings can be recovered
+                System.err.println("Could not read ${file.name}, starting empty and keeping a copy: ${it.message}")
+                runCatching { file.copyTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"), overwrite = true) }
             }
         }
     }
@@ -55,13 +59,14 @@ class DesktopSharedPreferences private constructor(private val file: File) : Sha
         override fun clear() = apply { clear = true }
 
         override fun commit(): Boolean {
-            synchronized(this@DesktopSharedPreferences) {
+            val saved = synchronized(this@DesktopSharedPreferences) {
                 if (clear) values.clear()
                 changes.forEach { (k, v) -> if (v == null) values.remove(k) else values[k] = v }
                 save()
             }
             changes.keys.forEach { key -> listeners.forEach { it.onSharedPreferenceChanged(this@DesktopSharedPreferences, key) } }
-            return true
+            // As Android: false when the change couldn't be written to disk
+            return saved
         }
 
         override fun apply() {
@@ -69,12 +74,23 @@ class DesktopSharedPreferences private constructor(private val file: File) : Sha
         }
     }
 
-    private fun save() {
-        runCatching {
-            file.parentFile.mkdirs()
-            jsonMapper.writeValue(file, HashMap(values))
-        }.onFailure { System.err.println("Could not save ${file.name}: ${it.message}") }
-    }
+    /**
+     * Writes to a temp file, flushed to disk, which then replaces the old one: a crash or power cut
+     * while saving leaves the previous settings, not a half-written file. True once saved.
+     */
+    private fun save(): Boolean = runCatching {
+        file.parentFile.mkdirs()
+        val tmp = File(file.parentFile, "${file.name}.tmp")
+        java.io.FileOutputStream(tmp).use { out ->
+            out.write(jsonMapper.writeValueAsBytes(HashMap(values)))
+            out.fd.sync()
+        }
+        try {
+            java.nio.file.Files.move(tmp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(tmp.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    }.onFailure { System.err.println("Could not save ${file.name}: ${it.message}") }.isSuccess
 
     companion object {
         private val instances = ConcurrentHashMap<String, DesktopSharedPreferences>()

@@ -184,24 +184,28 @@ object SupabaseClient {
         }
     }
 
+    /** Rows per page when pulling. Tests make it small so every pull pages. */
+    internal var pageSize = 500
+
     /**
-     * Everything stored since [since] (server time), oldest first, a page at a time. Pages follow
-     * on from the last row's time rather than a fixed offset into the whole set, which shifted
-     * (skipping rows) when another device saved during a long pull. Rows saved together share one
-     * time, so within that time it skips the rows it already has.
+     * Everything stored since [since] (server time), oldest first, a page at a time. Each page
+     * starts after the last row of the one before, by (time, kind, key), the order the rows come
+     * in. Not an offset: rows another device saves during a long pull move to a later time, which
+     * shifted an offset past rows this device hadn't seen yet.
      */
     suspend fun pull(session: SyncSession, since: String?): List<RemoteItem> {
         val all = mutableListOf<RemoteItem>()
-        val pageSize = 500
-        var from = since
-        var seenAtFrom = 0
+        var after: RemoteItem? = null
         while (true) {
             val url = "${SyncConfig.URL}/rest/v1/hs_sync_items".toHttpUrl().newBuilder()
                 .addQueryParameter("select", "kind,item_key,data,deleted,client_updated_at,updated_at")
                 .addQueryParameter("order", "updated_at.asc,kind.asc,item_key.asc")
                 .addQueryParameter("limit", "$pageSize")
-                .addQueryParameter("offset", "$seenAtFrom")
-                .apply { if (from != null) addQueryParameter("updated_at", "gte.$from") }
+                .apply {
+                    val last = after
+                    if (last != null) addQueryParameter("or", afterRow(last))
+                    else if (since != null) addQueryParameter("updated_at", "gte.$since")
+                }
                 .build()
             val page = call(Request.Builder().url(url).header("apikey", SyncConfig.KEY).header("Authorization", "Bearer ${session.accessToken}").get())
                 ?.map { row ->
@@ -216,11 +220,17 @@ object SupabaseClient {
                 }.orEmpty()
             all += page
             if (page.size < pageSize) break
-            val last = page.last().serverTime
-            val atLast = page.count { it.serverTime == last }
-            seenAtFrom = if (last == from) seenAtFrom + atLast else atLast
-            from = last
+            after = page.last()
         }
         return all
+    }
+
+    /** A PostgREST filter for the rows that come after [row] in (updated_at, kind, item_key) order. */
+    internal fun afterRow(row: RemoteItem): String {
+        // Quoted, as values may hold the filter syntax's own characters (",.:()")
+        fun q(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val t = q(row.serverTime)
+        val k = q(row.kind)
+        return "(updated_at.gt.$t,and(updated_at.eq.$t,kind.gt.$k),and(updated_at.eq.$t,kind.eq.$k,item_key.gt.${q(row.key)}))"
     }
 }

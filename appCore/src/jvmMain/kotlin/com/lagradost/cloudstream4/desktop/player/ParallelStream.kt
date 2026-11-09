@@ -118,7 +118,13 @@ internal class ParallelStream(
     @Volatile
     private var readPosition = 0L
 
+    /** Set by [close]: nothing more is fetched. */
+    @Volatile
+    private var closed = false
+
     private fun request(index: Int): Chunk {
+        // Closed (the player moved on): fail now instead of waiting for a fetch that never starts
+        if (closed) throw IOException("Stream closed")
         val chunk = synchronized(lock) {
             chunks[index] ?: Chunk(minOf(CHUNK, total - index * CHUNK).toInt()).also {
                 chunks[index] = it
@@ -219,20 +225,24 @@ internal class ParallelStream(
         connectionLimit = maxOf(1, minOf(connectionLimit / 2, ceiling))
     }
 
-    /** Fills [chunk], resuming after what it already holds. */
+    /**
+     * Fills [chunk], resuming after what it already holds. A response that ends early keeps
+     * what it sent and the rest is asked for again: some hosts cap every response (at 256 KB, say).
+     */
     private suspend fun fetch(index: Int, chunk: Chunk) {
         val chunkStart = index * CHUNK
         val length = chunk.length
         var attempt = 0
         while (true) {
+            val from = chunk.filled.value
+            if (from >= length) return
             try {
                 StreamProxy.meter.open()
                 try {
-                    val from = chunk.filled.value
-                    if (from >= length) return
+                    val start = chunkStart + from
                     val request = Request.Builder().url(url).apply {
                         headers.forEach { (k, v) -> header(k, v) }
-                        header("Range", "bytes=${chunkStart + from}-${chunkStart + length - 1}")
+                        header("Range", "bytes=$start-${chunkStart + length - 1}")
                     }.build()
                     val call = client.newCall(request)
                     synchronized(lock) {
@@ -243,18 +253,22 @@ internal class ParallelStream(
                         if (response.code == 200) throw NoRangeSupport()
                         if (response.code == 429 || response.code == 503) throw Throttled(response.code)
                         if (response.code != 206) throw IOException("HTTP ${response.code}")
+                        // Only the part asked for will do: bytes from elsewhere would scramble the video
+                        val first = response.header("Content-Range")?.removePrefix("bytes ")?.substringBefore('-')?.trim()?.toLongOrNull()
+                        if (first != start) throw IOException("The host answered from ${first ?: "an unknown position"}, not $start")
                         response.body.byteStream().use { input ->
                             var read = chunk.filled.value
                             while (read < length) {
                                 val n = input.read(chunk.bytes, read, minOf(64 * 1024, length - read))
-                                if (n < 0) throw IOException("Connection closed early")
+                                if (n < 0) break
                                 read += n
                                 chunk.filled.value = read
                                 StreamProxy.meter.add(n)
                             }
                         }
-                        return
                     }
+                    if (chunk.filled.value < length) throw IOException("Connection closed early")
+                    return
                 } finally {
                     StreamProxy.meter.close()
                     synchronized(lock) { calls.remove(index) }
@@ -266,6 +280,12 @@ internal class ParallelStream(
             } catch (e: IOException) {
                 // Stopped on purpose: not the host's fault, don't slow down or retry
                 if (e is Abandoned || synchronized(lock) { index in abandoned }) throw Abandoned()
+                // It ended early but sent something: ask for the rest right away. Not a failure, so
+                // no fewer connections and a fresh count of attempts
+                if (chunk.filled.value > from) {
+                    attempt = 0
+                    continue
+                }
                 StreamLog.log("chunk $index attempt ${attempt + 1} failed: $e (connections ${connectionLimit})")
                 // Fewer connections: the host is refusing or failing under the load
                 backOff(refused = e is Throttled)
@@ -351,7 +371,19 @@ internal class ParallelStream(
         }
     }
 
-    fun close() = scope.cancel()
+    /** Stops every fetch and frees the cached chunks. Readers still waiting get an error. */
+    fun close() {
+        closed = true
+        scope.cancel()
+        synchronized(lock) {
+            // Blocking requests don't stop with the scope: cancel them too
+            abandoned += running
+            calls.values.forEach { it.cancel() }
+            queued.clear()
+            chunks.values.forEach { it.result.completeExceptionally(IOException("Stream closed")) }
+            chunks.clear()
+        }
+    }
 
     companion object {
         const val CHUNK = 2L shl 20

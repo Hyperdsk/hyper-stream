@@ -117,7 +117,7 @@ $$;
 revoke all on function public.hs_create_tv_code() from public, anon;
 grant execute on function public.hs_create_tv_code() to authenticated;
 
--- Wrong TV codes, by address, for the tv-sign-in function's limit. Service role only.
+-- TV code tries, by address, for the tv-sign-in function's limit. Service role only.
 create table if not exists public.hs_tv_attempts (
   ip text not null,
   at timestamptz not null default now()

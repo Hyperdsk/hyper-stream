@@ -24,7 +24,19 @@ import java.util.zip.ZipInputStream
  * unpacked.
  */
 object SubtitleFiles {
-    private val folder by lazy { File(AppDirs.root, "subtitles").apply { mkdirs() } }
+    /** Downloaded subtitles not used for this long are deleted, so the folder doesn't grow for ever. */
+    private const val KEEP_DAYS = 30L
+    /** The most a subtitle may be, packed or unpacked. */
+    private const val MAX_BYTES = 20 * 1024 * 1024
+
+    private val folder by lazy {
+        File(AppDirs.root, "subtitles").apply {
+            mkdirs()
+            // Once a run: subtitles not used for a month, and anything a crash left half written
+            val old = System.currentTimeMillis() - KEEP_DAYS * 24 * 60 * 60 * 1000
+            listFiles()?.filter { it.name.endsWith(".tmp") || it.lastModified() < old }?.forEach { it.delete() }
+        }
+    }
 
     /** Short limits: a subtitle host that hangs shouldn't keep the list waiting. */
     private val client by lazy {
@@ -49,7 +61,14 @@ object SubtitleFiles {
 
     suspend fun fetch(sub: SubtitleFile): File = withContext(Dispatchers.IO) {
         val key = MessageDigest.getInstance("SHA-1").digest(sub.url.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
-        folder.listFiles()?.firstOrNull { it.nameWithoutExtension == key }?.let { return@withContext it }
+        folder.listFiles()?.firstOrNull { it.nameWithoutExtension == key && it.extension != "tmp" }?.let { cached ->
+            // Still a subtitle (one cut short by an older version isn't): used now, so it's kept
+            if (formatOf(cached.readBytes()) != null) {
+                cached.setLastModified(System.currentTimeMillis())
+                return@withContext cached
+            }
+            cached.delete()
+        }
 
         val request = Request.Builder().url(sub.url).apply {
             header("User-Agent", USER_AGENT)
@@ -63,7 +82,7 @@ object SubtitleFiles {
                     return@run client.newCall(request).execute().use { r ->
                         if (!r.isSuccessful) throw HostAnswered(r.code)
                         val bytes = r.body.bytes()
-                        if (bytes.size > 20 shl 20) throw IOException("The file is too large.")
+                        if (bytes.size > MAX_BYTES) throw IOException("The file is too large.")
                         bytes
                     }
                 } catch (e: HostAnswered) {
@@ -74,9 +93,37 @@ object SubtitleFiles {
             }
             @Suppress("UNREACHABLE_CODE") ByteArray(0)
         }
-        val bytes = unpack(raw)
+        val bytes = utf8(unpack(raw))
         val ext = formatOf(bytes) ?: throw IOException("That isn't a subtitle file VLC can read.")
-        File(folder, "$key.$ext").apply { writeBytes(bytes) }
+        // Written whole or not at all: a file cut short would be taken from the cache every time
+        val target = File(folder, "$key.$ext")
+        val tmp = File(folder, "$key.${System.nanoTime()}.tmp")
+        try {
+            tmp.writeBytes(bytes)
+            java.nio.file.Files.move(tmp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            tmp.delete()
+        }
+        target
+    }
+
+    /** UTF-16 subtitles (they start with a byte order mark) as UTF-8, which is what's read; anything else as is. */
+    internal fun utf8(bytes: ByteArray): ByteArray {
+        val utf16 = bytes.size >= 2 && ((bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) || (bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()))
+        return if (utf16) String(bytes, Charsets.UTF_16).toByteArray(Charsets.UTF_8) else bytes
+    }
+
+    /** All of [input], refusing more than [MAX_BYTES]: a small packed file can unpack to gigabytes. */
+    private fun readLimited(input: java.io.InputStream): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            out.write(buffer, 0, read)
+            if (out.size() > MAX_BYTES) throw IOException("The subtitle file is too large once unpacked.")
+        }
+        return out.toByteArray()
     }
 
     /** Zip (first subtitle inside) and gzip are unpacked, anything else is returned as is. */
@@ -84,10 +131,10 @@ object SubtitleFiles {
         bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte() ->
             ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
                 generateSequence { zip.nextEntry }.firstOrNull { e -> !e.isDirectory && formatOf(e.name) != null }
-                    ?.let { zip.readBytes() } ?: throw IOException("No subtitle inside the zip file.")
+                    ?.let { readLimited(zip) } ?: throw IOException("No subtitle inside the zip file.")
             }
         bytes.size > 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte() ->
-            GZIPInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
+            GZIPInputStream(ByteArrayInputStream(bytes)).use { readLimited(it) }
         else -> bytes
     }
 

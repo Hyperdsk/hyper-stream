@@ -131,31 +131,37 @@ internal fun UpdateSettings() {
                     }) { Text("Release notes") }
                 }
             }
-            if (downloading) {
-                val value = progress
-                if (value == null) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
-                } else {
-                    LinearProgressIndicator(
-                        progress = { value },
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                    )
-                }
-                Text(
-                    "Downloading the update…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
+        }
+    }
+
+    // Outside the states above: an automatic check that fails, or finds nothing, while a download
+    // runs mustn't hide its progress or how it ended. But not under another version's release
+    val shownRelease = (state as? UpdateState.Available)?.release?.version
+    if (download != null && (shownRelease == null || shownRelease == download?.version)) {
+        if (downloading) {
+            val value = progress
+            if (value == null) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
+            } else {
+                LinearProgressIndicator(
+                    progress = { value },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 )
             }
-            installError?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
+            Text(
+                "Downloading the update…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        installError?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 

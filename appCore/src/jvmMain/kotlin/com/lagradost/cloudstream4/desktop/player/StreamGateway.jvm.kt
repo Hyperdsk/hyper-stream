@@ -11,6 +11,8 @@ actual object StreamGateway {
 
     actual fun clear() = StreamProxy.clear()
 
+    actual fun release(source: StreamSource) = StreamProxy.release(source.url)
+
     // "?preview" marks the seek bar player's requests as low priority in the proxy
     actual fun previewUrl(url: String): String = if (url.startsWith("http://127.0.0.1")) "$url?preview" else url
 }

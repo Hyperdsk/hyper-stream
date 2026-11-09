@@ -63,5 +63,8 @@ actual object StreamGateway {
         _stats.value = StreamStats()
     }
 
+    // Nothing is held per link here
+    actual fun release(source: StreamSource) = Unit
+
     actual fun previewUrl(url: String): String = url
 }

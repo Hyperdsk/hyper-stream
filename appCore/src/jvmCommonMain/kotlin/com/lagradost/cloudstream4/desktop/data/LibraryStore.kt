@@ -110,8 +110,15 @@ object LibraryStore {
     }
 
     fun clearHistory() {
+        val pictures = _state.value.history.mapNotNull { it.snapshotPath }
         _state.update { it.copy(history = persistentListOf()) }
         historyFile.write(emptyList())
+        pictures.forEach(::deleteSnapshot)
+    }
+
+    /** A Continue watching picture no entry uses any more. */
+    private fun deleteSnapshot(path: String) {
+        runCatching { java.io.File(path).delete() }
     }
 
     // ---------- Changes from other devices (sync) ----------
@@ -121,6 +128,8 @@ object LibraryStore {
 
     /** Applies another device's progress for one episode; null removes it. Keeps this device's snapshot. */
     fun applyRemoteHistory(key: String, entry: HistoryEntry?) {
+        // Removed on another device: its picture here goes too
+        val removedPicture = if (entry == null) _state.value.history.firstOrNull { historyKey(it) == key }?.snapshotPath else null
         _state.update { s ->
             val local = s.history.firstOrNull { historyKey(it) == key }
             val rest = s.history.removingAll { historyKey(it) == key }
@@ -128,6 +137,7 @@ object LibraryStore {
             else s.copy(history = (rest + entry.copy(snapshotPath = local?.snapshotPath)).sortedByDescending { it.updatedAt }.toPersistentList())
         }
         historyFile.writeLatest { _state.value.history }
+        removedPicture?.let(::deleteSnapshot)
     }
 
     /** Applies another device's bookmark; null removes it. */

@@ -191,6 +191,29 @@ class PlayerModelTest {
     }
 
     @Test
+    fun anOldSearchDoesNotReplaceTheReloadedSources() = runBlocking {
+        setUp()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        APIHolder.allProviders.add(FakeApi("StaleSearch") { _, callback ->
+            when (calls.incrementAndGet()) {
+                1 -> callback(link("first", 1080))
+                // "Search again" on a slow site, which answers after the user pressed "Reload links"
+                2 -> { delay(800); callback(link("stale", 1080)) }
+                else -> callback(link("fresh", 1080))
+            }
+        })
+        val model = PlayerModel(request("StaleSearch"), FakeEngine())
+        delay(1_000)
+        model.searchAgain()
+        delay(200)
+        model.reload()
+        delay(1_500)
+        assertEquals(listOf("https://example.invalid/fresh.mp4"), model.state.value.links.map { it.url })
+        assertTrue(!model.state.value.refreshing)
+        model.dispose()
+    }
+
+    @Test
     fun theAudioLanguagePickedOnceIsChosenNextTime() = runBlocking {
         setUp()
         APIHolder.allProviders.add(FakeApi("Dubbed") { _, callback -> callback(link("dubbed", 1080)) })

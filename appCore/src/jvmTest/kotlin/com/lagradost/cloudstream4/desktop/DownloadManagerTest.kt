@@ -42,6 +42,11 @@ class DownloadManagerTest {
     private val fmp4Init = "ftyp-fmp4-init".encodeToByteArray()
     private val fmp4Segments = List(2) { i -> ByteArray(256) { (i * 7 + it).toByte() } }
     private val rangeRequests = AtomicInteger()
+    // Different files of the same size, from different sources
+    private val flakyBytes = Random(3).nextBytes(3 * 1024 * 1024)
+    private val otherBytes = Random(4).nextBytes(3 * 1024 * 1024)
+    private val twinA = Random(5).nextBytes(1024 * 1024)
+    private val twinB = Random(6).nextBytes(1024 * 1024)
 
     private fun encrypt(data: ByteArray, index: Int): ByteArray {
         // Same IV rule as the library and the Android app: segment index + 1, big endian
@@ -58,7 +63,29 @@ class DownloadManagerTest {
         responseBody.use { it.write(bytes) }
     }
 
+    /** Serves [bytes], honouring "Range: bytes=N-" for resuming. */
+    private fun HttpExchange.sendRanged(bytes: ByteArray) {
+        val start = requestHeaders.getFirst("Range")?.removePrefix("bytes=")?.substringBefore('-')?.toLongOrNull() ?: 0L
+        responseHeaders.set("Content-Type", "video/mp4")
+        if (start > 0) responseHeaders.set("Content-Range", "bytes $start-${bytes.size - 1}/${bytes.size}")
+        sendResponseHeaders(if (start > 0) 206 else 200, bytes.size - start)
+        runCatching { responseBody.use { it.write(bytes, start.toInt(), (bytes.size - start).toInt()) } }
+    }
+
     private fun server() = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
+        // Promises the whole file, sends half, then drops the connection
+        createContext("/flaky.mp4") { ex ->
+            ex.responseHeaders.set("Content-Type", "video/mp4")
+            ex.sendResponseHeaders(200, flakyBytes.size.toLong())
+            runCatching {
+                ex.responseBody.write(flakyBytes, 0, flakyBytes.size / 2)
+                ex.responseBody.flush()
+                ex.close()
+            }
+        }
+        createContext("/other.mp4") { it.sendRanged(otherBytes) }
+        createContext("/twin-a.mp4") { it.sendRanged(twinA) }
+        createContext("/twin-b.mp4") { it.sendRanged(twinB) }
         createContext("/movie.mp4") { ex ->
             // Slow, so the test can pause part way. Honours Range for resuming.
             val start = ex.requestHeaders.getFirst("Range")?.removePrefix("bytes=")?.substringBefore('-')?.toLongOrNull() ?: 0L
@@ -124,6 +151,126 @@ class DownloadManagerTest {
                 else -> callback(newExtractorLink(name, "HLS", "$base/hls/index.m3u8", ExtractorLinkType.M3U8) { quality = 720 })
             }
             return true
+        }
+    }
+
+    /** Offers the same links, best first, for every episode. */
+    private class FixedLinksProvider(providerName: String, private val links: List<Pair<String, Int>>) : MainAPI() {
+        override var name = providerName
+        override var mainUrl = "http://127.0.0.1"
+        override suspend fun loadLinks(
+            data: String,
+            isCasting: Boolean,
+            subtitleCallback: (SubtitleFile) -> Unit,
+            callback: (ExtractorLink) -> Unit,
+        ): Boolean {
+            links.forEach { (url, q) -> callback(newExtractorLink(name, "Server $q", url, ExtractorLinkType.VIDEO) { quality = q }) }
+            return true
+        }
+    }
+
+    @Test
+    fun namesStayInTheDownloadFolderOnEverySystem() {
+        if (System.getProperty("cloudstream.dataDir") == null) {
+            System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl-names").toString())
+        }
+        // Never the folder above, or a hidden file
+        assertEquals("Untitled", DownloadManager.safeName(".."))
+        assertEquals("Untitled", DownloadManager.safeName(" . "))
+        assertEquals("hidden", DownloadManager.safeName(".hidden"))
+        // Windows drops trailing dots and spaces, and keeps device names
+        assertEquals("Mr. Robot", DownloadManager.safeName("Mr. Robot. "))
+        assertEquals("_Con", DownloadManager.safeName("Con"))
+        assertEquals("_nul.txt", DownloadManager.safeName("nul.txt"))
+        assertEquals("_COM1", DownloadManager.safeName("COM1"))
+        assertEquals("Console", DownloadManager.safeName("Console"))
+        assertEquals("a b c", DownloadManager.safeName("a/b:c"))
+    }
+
+    private suspend fun awaitFinished(id: String) = withTimeout(30_000) {
+        DownloadManager.entries.first { list -> list.any { it.id == id && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
+    }.first { it.id == id }
+
+    @Test
+    fun aFallbackSourceNeverCarriesOnFromAnotherSourcesPartialFile() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl-fallback").toString())
+        val folder = Files.createTempDirectory("cs-downloads-fallback").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        // The better link breaks half way; the next one is a different file of the same size
+        val api = FixedLinksProvider("FallbackTest", listOf("$base/flaky.mp4" to 1080, "$base/other.mp4" to 720))
+            .apply { sourcePlugin = "test-fallback" }
+        APIHolder.allProviders.add(api)
+        try {
+            DownloadManager.enqueue(
+                DownloadRequest("FallbackTest", "$base/fallback", "Fallback Movie", null, null, PlayableEpisode("auto", null, null, null), maxQuality = -1)
+            )
+            val auto = awaitFinished(DownloadManager.idFor("FallbackTest", "auto"))
+            assertEquals(DownloadStatus.Completed, auto.status, auto.error)
+            assertEquals("$base/other.mp4", auto.link?.url)
+            // Not the first half of one file joined to the second half of the other
+            assertContentEquals(otherBytes, auto.file!!.readBytes())
+
+            // A picked source that broke half way, then another source picked for the same episode
+            val (links, _) = DownloadManager.findLinks("FallbackTest", "picked", maxQuality = -1)
+            val episode = PlayableEpisode("picked", null, null, null)
+            DownloadManager.enqueue(DownloadRequest("FallbackTest", "$base/picked", "Picked Fallback", null, null, episode, link = links.first { "flaky" in it.url }))
+            val pickedId = DownloadManager.idFor("FallbackTest", "picked")
+            val broken = awaitFinished(pickedId)
+            assertEquals(DownloadStatus.Failed, broken.status)
+            DownloadManager.enqueue(DownloadRequest("FallbackTest", "$base/picked", "Picked Fallback", null, null, episode, link = links.first { "other" in it.url }))
+            val picked = withTimeout(30_000) {
+                DownloadManager.entries.first { list -> list.any { it.id == pickedId && it.status == DownloadStatus.Completed } }
+            }.first { it.id == pickedId }
+            assertContentEquals(otherBytes, picked.file!!.readBytes())
+            assertTrue(folder.walk().none { it.name.endsWith(".part") }, "no partial files left behind")
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-fallback" } }
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun downloadsWithTheSameNameGetTheirOwnFiles() = runBlocking {
+        System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl-twins").toString())
+        val folder = Files.createTempDirectory("cs-downloads-twins").toFile()
+        SettingsStore.update { it.copy(downloadFolder = folder.path, parallelDownloads = 2) }
+        val server = server()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val a = FixedLinksProvider("TwinA", listOf("$base/twin-a.mp4" to 720)).apply { sourcePlugin = "test-twins" }
+        val b = FixedLinksProvider("TwinB", listOf("$base/twin-b.mp4" to 720)).apply { sourcePlugin = "test-twins" }
+        APIHolder.allProviders.add(a)
+        APIHolder.allProviders.add(b)
+        try {
+            // Two different movies that happen to share a title, from two extensions, downloading at
+            // the same time, and a second item from the first extension with no episode numbers either
+            DownloadManager.enqueue(DownloadRequest("TwinA", "$base/a", "Twin Movie", null, null, PlayableEpisode("twin", null, null, null)))
+            delay(5) // distinct add times, so the order is defined
+            DownloadManager.enqueue(DownloadRequest("TwinB", "$base/b", "Twin Movie", null, null, PlayableEpisode("twin", null, null, null)))
+            delay(5)
+            DownloadManager.enqueue(DownloadRequest("TwinA", "$base/a2", "Twin Movie", null, null, PlayableEpisode("twin2", null, null, null)))
+            val first = awaitFinished(DownloadManager.idFor("TwinA", "twin"))
+            val second = awaitFinished(DownloadManager.idFor("TwinB", "twin"))
+            val third = awaitFinished(DownloadManager.idFor("TwinA", "twin2"))
+            listOf(first, second, third).forEach { assertEquals(DownloadStatus.Completed, it.status, it.error) }
+
+            assertEquals("Twin Movie.mp4", first.file!!.name)
+            assertEquals("Twin Movie (TwinB).mp4", second.file!!.name)
+            assertEquals(3, listOf(first, second, third).map { it.file!!.canonicalPath }.toSet().size, "each has its own file")
+            assertContentEquals(twinA, first.file!!.readBytes())
+            assertContentEquals(twinB, second.file!!.readBytes())
+            assertContentEquals(twinA, third.file!!.readBytes())
+
+            // Removing one leaves the others' videos alone
+            DownloadManager.delete(second.id)
+            withTimeout(5_000) { while (second.file!!.exists()) delay(50) }
+            assertTrue(first.file!!.exists() && third.file!!.exists())
+            DownloadManager.delete(first.id)
+            DownloadManager.delete(third.id)
+        } finally {
+            APIHolder.allProviders.withLock { APIHolder.allProviders.removeAll { it.sourcePlugin == "test-twins" } }
+            server.stop(0)
         }
     }
 

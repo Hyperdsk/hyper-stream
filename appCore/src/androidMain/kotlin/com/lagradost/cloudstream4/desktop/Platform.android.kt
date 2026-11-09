@@ -60,8 +60,10 @@ actual object Platform {
                     context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }.isSuccess
             }
-            if (opened) DesktopToasts.show("Allow installs from Hyper Stream, then tap Update again.")
-            return@withContext opened
+            // Not installed yet: reported as a failure with what to do, not as an install under way
+            // (which showed "Follow the Android prompt" beside this). The download is kept for the retry
+            if (opened) throw java.io.IOException("Allow installs from Hyper Stream in the settings that opened, then tap Download and install again.")
+            return@withContext false
         }
         runCatching {
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", file)
