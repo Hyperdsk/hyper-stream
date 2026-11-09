@@ -34,6 +34,11 @@ class SyncManagerTest {
     private data class Row(val kind: String, val key: String, val data: JsonNode?, val deleted: Boolean, val at: Long, var updatedAt: String)
 
     private val rows = mutableMapOf<Pair<String, String>, Row>()
+    /** Downloads of an extension whose file is gone from its host. */
+    private val brokenDownloads = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Runs once a page has been read, before it is sent: lets a test change rows mid-pull. */
+    @Volatile private var afterPage: (() -> Unit)? = null
     private var clock = 0L
     private fun serverTime() = Instant.ofEpochMilli(1_800_000_000_000 + clock++).toString()
 
@@ -45,6 +50,20 @@ class SyncManagerTest {
     }
 
     private fun server() = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
+        // An extension repository whose one extension can't be downloaded
+        createContext("/repo/repo.json") { ex ->
+            ex.json(mapOf("name" to "Ext Repo", "manifestVersion" to 1, "pluginLists" to listOf("http://127.0.0.1:${address.port}/repo/plugins.json")))
+        }
+        createContext("/repo/plugins.json") { ex ->
+            ex.json(listOf(mapOf(
+                "url" to "http://127.0.0.1:${address.port}/repo/Broken.cs3", "status" to 1, "version" to 1, "apiVersion" to 1,
+                "name" to "Broken", "internalName" to "Broken", "authors" to emptyList<String>(),
+            )))
+        }
+        createContext("/repo/Broken.cs3") { ex ->
+            brokenDownloads.incrementAndGet()
+            ex.json(mapOf("error" to "gone"), code = 404)
+        }
         createContext("/auth/v1/otp") { it.json(emptyMap<String, Any>()) }
         createContext("/auth/v1/recover") { it.json(emptyMap<String, Any>()) }
         // As Supabase answers a refresh token from a session that was signed out
@@ -77,9 +96,26 @@ class SyncManagerTest {
             ex.json(1)
         }
         createContext("/rest/v1/hs_sync_items") { ex ->
-            val since = ex.requestURI.query.split('&').firstOrNull { it.startsWith("updated_at=gte.") }?.removePrefix("updated_at=gte.")
-                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-            val list = synchronized(rows) { rows.values.filter { since == null || it.updatedAt >= since }.sortedBy { it.updatedAt } }
+            // As PostgREST: a start time, or the (time, kind, key) of the row to follow, and a page size
+            val query = ex.requestURI.rawQuery.split('&').associate {
+                it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8")
+            }
+            val since = query["updated_at"]?.removePrefix("gte.")
+            val after = query["or"]?.let { filter ->
+                Regex("\"((?:[^\"\\\\]|\\\\.)*)\"").findAll(filter).map { it.groupValues[1].replace(Regex("\\\\(.)"), "$1") }.toList()
+            }?.let { Triple(it[0], it[2], it[5]) }
+            val limit = query["limit"]?.toIntOrNull() ?: Int.MAX_VALUE
+            val list = synchronized(rows) {
+                rows.values
+                    .filter { since == null || it.updatedAt >= since }
+                    .filter { r ->
+                        after == null || r.updatedAt > after.first ||
+                            (r.updatedAt == after.first && (r.kind > after.second || (r.kind == after.second && r.key > after.third)))
+                    }
+                    .sortedWith(compareBy<Row>({ it.updatedAt }, { it.kind }, { it.key }))
+                    .take(limit)
+            }
+            afterPage?.invoke()
             ex.json(list.map { mapOf("kind" to it.kind, "item_key" to it.key, "data" to it.data, "deleted" to it.deleted, "client_updated_at" to it.at, "updated_at" to it.updatedAt) })
         }
         start()
@@ -87,6 +123,38 @@ class SyncManagerTest {
 
     private fun remote(kind: String, key: String, value: Any?, at: Long, deleted: Boolean = false) = synchronized(rows) {
         rows[kind to key] = Row(kind, key, value?.let { jsonMapper.valueToTree<ObjectNode>(it) }, deleted, at, serverTime())
+    }
+
+    @Test
+    fun aRowSavedElsewhereDuringAPullDoesntHideOthers() = runBlocking {
+        val server = server()
+        System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${server.address.port}")
+        val client = com.lagradost.cloudstream4.desktop.sync.SupabaseClient
+        client.pageSize = 2
+        try {
+            // Three rows saved together share one time, then one more
+            fun row(key: String, time: String) = Row("bookmark", key, null, deleted = false, at = 1, updatedAt = time)
+            synchronized(rows) {
+                rows.clear()
+                listOf("a", "b", "c").forEach { rows["bookmark" to it] = row(it, "2027-01-01T00:00:00Z") }
+                rows["bookmark" to "d"] = row("d", "2027-01-01T00:00:01Z")
+            }
+            // After the first page, another device saves "a" again, which moves it to a later time
+            afterPage = {
+                afterPage = null
+                synchronized(rows) { rows["bookmark" to "a"] = row("a", "2027-01-01T00:00:09Z") }
+            }
+            val session = com.lagradost.cloudstream4.desktop.sync.SyncSession("token", "refresh", Long.MAX_VALUE, "user-1", null)
+            val pulled = client.pull(session, null).map { it.key }
+            assertTrue("c" in pulled && "d" in pulled, "no row skipped: $pulled")
+            assertEquals(listOf("a", "b", "c", "d", "a"), pulled)
+        } finally {
+            afterPage = null
+            synchronized(rows) { rows.clear() }
+            client.pageSize = 500
+            server.stop(0)
+            System.clearProperty("hyperstream.syncUrl")
+        }
     }
 
     @Test
@@ -123,6 +191,8 @@ class SyncManagerTest {
 
     @Test
     fun pushesPullsAndKeepsTheNewerChange() = runBlocking {
+        // Small pages, so every pull here goes over several
+        com.lagradost.cloudstream4.desktop.sync.SupabaseClient.pageSize = 3
         val server = server()
         System.setProperty("hyperstream.syncUrl", "http://127.0.0.1:${server.address.port}")
         System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-sync").toString())
@@ -176,6 +246,25 @@ class SyncManagerTest {
             assertEquals(false, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.autoPlayNext, "the other device's change arrived")
             assertEquals(30, synchronized(rows) { rows["setting" to "seekSeconds"] }!!.data!!["value"].asInt(), "and this one was sent")
 
+            // Another device whose clock runs 2 minutes ahead changes a setting; changing it back here
+            // still reaches the server, though this device's clock says it's earlier
+            remote("setting", "skipButtons", mapOf("value" to false), at = System.currentTimeMillis() + 120_000)
+            SyncManager.syncNow()
+            assertEquals(false, com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.skipButtons, "the other device's change arrived")
+            com.lagradost.cloudstream4.desktop.data.SettingsStore.update { it.copy(skipButtons = true) }
+            SyncManager.syncNow()
+            assertEquals(true, synchronized(rows) { rows["setting" to "skipButtons"] }!!.data!!["value"].asBoolean(), "the change made here wasn't refused as older")
+
+            // A setting changed here while offline, after an older change to it on another device:
+            // the change made here is kept, and sent
+            Thread.sleep(5)
+            remote("setting", "sourceOrder", mapOf("value" to "provider"), at = System.currentTimeMillis())
+            Thread.sleep(5)
+            com.lagradost.cloudstream4.desktop.data.SettingsStore.update { it.copy(sourceOrder = "size") }
+            SyncManager.syncNow()
+            assertEquals("size", com.lagradost.cloudstream4.desktop.data.SettingsStore.state.value.sourceOrder, "the newer change made here stayed")
+            assertEquals("size", synchronized(rows) { rows["setting" to "sourceOrder"] }!!.data!!["value"].asText(), "and was sent")
+
             // A removal on another device removes it here
             remote("bookmark", "Prov|other", null, at = 6_000, deleted = true)
             SyncManager.syncNow()
@@ -228,6 +317,23 @@ class SyncManagerTest {
             ExtensionManager.removeRepository(repoUrl).join()
             SyncManager.syncNow()
             assertTrue(synchronized(rows) { rows["repository" to repoUrl] }?.deleted == true, "removing it here removed it there")
+
+            // An extension installed on another device that fails to download here: tried a few times,
+            // not again on every pass, and not sent back as removed
+            val extRepo = "http://127.0.0.1:${server.address.port}/repo/repo.json"
+            ExtensionManager.addRepositoryData(RepositoryData("Ext Repo", extRepo))
+            withTimeout(10_000) { ExtensionManager.state.first { s -> s.repositories.any { it.data.url == extRepo && it.plugins.isNotEmpty() } } }
+            remote("extension", "$extRepo|Broken", mapOf("internalName" to "Broken", "name" to "Broken", "repositoryUrl" to extRepo), at = System.currentTimeMillis())
+            repeat(6) {
+                SyncManager.syncNow()
+                delay(300)
+                withTimeout(10_000) { ExtensionManager.state.first { "Broken" !in it.busy } }
+            }
+            assertTrue(brokenDownloads.get() in 1..3, "tried ${brokenDownloads.get()} times")
+            assertTrue(synchronized(rows) { rows["extension" to "$extRepo|Broken"] }?.deleted == false, "not sent back as removed")
+            ExtensionManager.removeRepository(extRepo).join()
+            SyncManager.syncNow()
+            ExtensionManager.dismissMessage()
 
             // A data file that couldn't be read: its items are missing, not deleted, so no deletions go out
             LibraryStore.setBookmark(Bookmark("kept", "Prov", "Kept", null, null, null, WatchType.WATCHING), "Prov", "kept")
@@ -330,6 +436,7 @@ class SyncManagerTest {
         } finally {
             server.stop(0)
             System.clearProperty("hyperstream.syncUrl")
+            com.lagradost.cloudstream4.desktop.sync.SupabaseClient.pageSize = 500
         }
     }
 }

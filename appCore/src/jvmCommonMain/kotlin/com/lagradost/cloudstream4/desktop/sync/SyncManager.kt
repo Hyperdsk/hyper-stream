@@ -67,6 +67,12 @@ data class SyncStore(
      * them on a later run, when the file reads fine again but holds only what was saved since.
      */
     @JsonProperty("restoring") val restoring: Set<String> = emptySet(),
+    /**
+     * When each synced setting was last changed on this device, in ms. Settings have no change
+     * time of their own, so without this a change made offline lost to any older change from
+     * another device that synced in the meantime.
+     */
+    @JsonProperty("settingTimes") val settingTimes: Map<String, Long> = emptyMap(),
 )
 
 data class SyncUiState(
@@ -142,6 +148,8 @@ object SyncManager {
     private val _ui = MutableStateFlow(SyncUiState(email = store.session?.email, lastSyncedAt = store.lastSyncedAt))
     val ui: StateFlow<SyncUiState> = _ui.asStateFlow()
 
+    // One at a time: a pass and the settings watcher both save, and each reads the store first
+    @Synchronized
     private fun save(update: (SyncStore) -> SyncStore) {
         store = update(store)
         file.write(store)
@@ -158,6 +166,19 @@ object SyncManager {
                     .drop(1)
                     .debounce(4_000)
                     .collect { wake.trySend(Unit) }
+            }
+            // When each setting changes here, to tell a change made here from an older one elsewhere
+            launch {
+                var previous = syncedSettings(SettingsStore.state.value)
+                SettingsStore.state.collect { settings ->
+                    val current = syncedSettings(settings)
+                    val changed = current.keys.filter { current[it] != previous[it] }
+                    previous = current
+                    if (changed.isNotEmpty()) {
+                        val now = System.currentTimeMillis()
+                        save { it.copy(settingTimes = it.settingTimes + changed.associateWith { now }) }
+                    }
+                }
             }
             while (true) {
                 if (store.session != null && foreground) syncNow()
@@ -511,7 +532,11 @@ object SyncManager {
             // Removed here but not sent yet: only a later change elsewhere brings it back. Unless a data
             // file couldn't be read: then it's missing, not removed, and the server's copy restores it
             val removedHere = mine == null && known[id] != null && DataHealth.unreadable.isEmpty() && item.kind !in restoring
-            val myAt = mine?.at ?: known[id]?.at ?: 0
+            // A setting changed here since it last synced compares by when that change was made
+            val changedHere = if (item.kind == SETTING && mine != null && known[id]?.hash != hashOf(mine.data)) {
+                settingChangedAt(item.key, known[id])
+            } else null
+            val myAt = changedHere ?: mine?.at ?: known[id]?.at ?: 0
             // Lost here with no change time to compare (settings): what's here is only the defaults
             val lostHere = item.kind in restoring && mine?.at == null
             if (lostHere || (mine == null && !removedHere) || item.at > myAt) {
@@ -536,7 +561,12 @@ object SyncManager {
             val hash = hashOf(item.data)
             val was = next[id]
             if (was == null || was.hash != hash) {
-                val at = item.at ?: now
+                // No change time of its own: now, but always later than the version it replaces,
+                // or a device whose clock is behind the one that sent that version would lose
+                // every change it makes to the server's "newer wins" rule
+                val at = item.at
+                    ?: (if (item.kind == SETTING) settingChangedAt(item.key, was) else null)
+                    ?: maxOf(now, (was?.at ?: 0) + 1)
                 changes += LocalChange(item.kind, item.key, item.data, deleted = false, at = at)
                 next[id] = KnownItem(hash, at)
             }
@@ -548,13 +578,25 @@ object SyncManager {
         } else emptyList()
         for (id in deletions) {
             val (kind, key) = id.split('/', limit = 2)
-            changes += LocalChange(kind, key, null, deleted = true, at = now)
+            // Later than the version it removes, as above
+            changes += LocalChange(kind, key, null, deleted = true, at = maxOf(now, (next[id]?.at ?: 0) + 1))
             next.remove(id)
         }
         if (changes.isNotEmpty()) {
             SupabaseClient.push(session, changes)
             save { it.copy(known = next) }
         }
+    }
+
+    /**
+     * When the setting [name], whose value here differs from what last synced ([known]), was
+     * changed: as recorded, or now if that wasn't recorded (changed before syncing started), and
+     * always later than [known]. Null for a setting never synced and never changed here, which is
+     * only this device's default, so a new device takes the account's settings.
+     */
+    private fun settingChangedAt(name: String, known: KnownItem?): Long? {
+        val at = store.settingTimes[name] ?: if (known != null) System.currentTimeMillis() else return null
+        return maxOf(at, (known?.at ?: 0) + 1)
     }
 
     private data class LocalItem(val kind: String, val key: String, val data: Any, val at: Long?)
@@ -633,15 +675,29 @@ object SyncManager {
         }
     }
 
+    /** Installs started for extensions from other devices, this run, by "repository|name". */
+    private val installAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private const val MAX_INSTALL_ATTEMPTS = 3
+
     /** Installs an extension another device has, once its repository's list is loaded. */
     private fun installExtension(value: Map<String, Any?>): Boolean {
         val repo = value["repositoryUrl"] as? String ?: return true
         val name = value["internalName"] as? String ?: return true
         val state = ExtensionManager.state.value
-        if (state.installed.any { it.repositoryUrl == repo && it.internalName == name }) return true
+        val id = "$repo|$name"
+        if (state.installed.any { it.repositoryUrl == repo && it.internalName == name }) {
+            installAttempts.remove(id)
+            return true
+        }
         val plugin = state.repositories.firstOrNull { it.data.url == repo }?.plugins?.firstOrNull { it.internalName == name } ?: return false
-        // Installing runs in the background; it counts as applied once it's installed, on a later pass
-        if (plugin.internalName !in state.busy) ExtensionManager.install(repo, plugin)
+        // Installing runs in the background; it counts as applied once it's installed, on a later pass.
+        // An install that keeps failing (a dead link, a wrong hash) is tried a few times, not on every
+        // pass: each failure changes the extension list, which starts another pass a few seconds later.
+        // It stays waiting, not applied, so it isn't sent back as removed; the next run tries again
+        if (plugin.internalName !in state.busy && (installAttempts[id] ?: 0) < MAX_INSTALL_ATTEMPTS) {
+            installAttempts.merge(id, 1) { a, b -> a + b }
+            ExtensionManager.install(repo, plugin)
+        }
         return false
     }
 
