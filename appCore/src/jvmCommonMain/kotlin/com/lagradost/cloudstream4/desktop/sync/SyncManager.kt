@@ -477,12 +477,17 @@ object SyncManager {
                 pending.remove(id)
                 // An older version removes settings it doesn't know; they stay here, and aren't sent again
                 if (item.kind in undeletable) continue
-                val myAt = mine?.at ?: known[id]?.at ?: 0
-                if (mine != null && item.at >= myAt) {
+                // Items with no change time of their own (repositories, extensions) compare against when
+                // this device last synced them. One never synced from here (added before signing in,
+                // or again after a removal came in) has nothing to say the removal is newer: it stays,
+                // and is sent as added, which replaces the removal on the server
+                val myAt = mine?.at ?: known[id]?.at
+                val removes = mine != null && myAt != null && item.at >= myAt
+                if (removes) {
                     removeLocal(item.kind, item.key)
                     removedNow += id
                 }
-                if (mine == null || item.at >= myAt) known.remove(id)
+                if (mine == null || removes) known.remove(id)
                 continue
             }
             val value = decode(item.kind, item.data) ?: continue

@@ -7,9 +7,12 @@ import com.lagradost.cloudstream4.desktop.data.HistoryEntry
 import com.lagradost.cloudstream4.desktop.data.LibraryStore
 import com.lagradost.cloudstream4.desktop.data.WatchType
 import com.lagradost.cloudstream4.desktop.data.jsonMapper
+import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
+import com.lagradost.cloudstream3.ui.settings.extensions.RepositoryData
 import com.lagradost.cloudstream4.desktop.sync.SyncManager
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -196,6 +199,35 @@ class SyncManagerTest {
             com.lagradost.cloudstream4.desktop.data.SearchHistory.remove("dune")
             SyncManager.syncNow()
             assertTrue(synchronized(rows) { rows["search" to "dune"] }?.deleted == true, "removing it here removed it there")
+
+            // Repositories and extensions carry no change time of their own. One added here that was
+            // never synced from here isn't taken away by an old removal from another device: it stays,
+            // and is sent as added
+            val repoUrl = "http://127.0.0.1:1/sync-test-repo.json"
+            remote("repository", repoUrl, null, at = 1_000, deleted = true)
+            ExtensionManager.addRepositoryData(RepositoryData("Sync Test", repoUrl))
+            SyncManager.syncNow()
+            delay(300) // a removal would run in the background
+            assertTrue(ExtensionManager.repositories().any { it.url == repoUrl }, "an old removal didn't remove a repository added here")
+            assertTrue(synchronized(rows) { rows["repository" to repoUrl] }?.deleted == false, "and it was sent as added")
+
+            // Removed on another device after this one synced it: removed here too
+            val removedAt = System.currentTimeMillis()
+            remote("repository", repoUrl, null, at = removedAt, deleted = true)
+            SyncManager.syncNow()
+            withTimeout(5_000) { ExtensionManager.state.first { s -> s.repositories.none { it.data.url == repoUrl } } }
+
+            // Added back here right after: the same removal, pulled again by the next pass, doesn't undo it
+            Thread.sleep(5)
+            ExtensionManager.addRepositoryData(RepositoryData("Sync Test", repoUrl))
+            SyncManager.syncNow()
+            SyncManager.syncNow()
+            delay(300)
+            assertTrue(ExtensionManager.repositories().any { it.url == repoUrl }, "adding it back stuck")
+            assertTrue(synchronized(rows) { rows["repository" to repoUrl] }?.deleted == false, "and reached the server")
+            ExtensionManager.removeRepository(repoUrl).join()
+            SyncManager.syncNow()
+            assertTrue(synchronized(rows) { rows["repository" to repoUrl] }?.deleted == true, "removing it here removed it there")
 
             // A data file that couldn't be read: its items are missing, not deleted, so no deletions go out
             LibraryStore.setBookmark(Bookmark("kept", "Prov", "Kept", null, null, null, WatchType.WATCHING), "Prov", "kept")

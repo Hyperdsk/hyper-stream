@@ -191,12 +191,29 @@ object DownloadManager {
         val existing = _entries.value.firstOrNull { it.id == id }
         if (existing != null) {
             if (existing.status == DownloadStatus.Completed) return
-            // A different source was picked: start over with it
+            // A different source was picked: start over with it. The old worker is stopped first and
+            // its partial file removed, or the new source would carry on from the old one's bytes
             if (request.link != null && request.link.url != existing.link?.url) {
-                jobs.remove(id)?.cancel()
-                set(id) {
-                    it.copy(link = request.link, chosen = true, bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList(), error = null)
+                val switch = {
+                    discardPartial(id)
+                    set(id) {
+                        // Stopped mid-download: back in line, so the queue starts it again
+                        val status = if (it.status == DownloadStatus.Downloading) DownloadStatus.Queued else it.status
+                        it.copy(link = request.link, chosen = true, status = status, error = null)
+                    }
+                    resume(id)
                 }
+                val old = jobs[id]
+                if (old == null || old.isCompleted) switch()
+                else {
+                    // Stays listed until it has stopped, so no second worker starts on the same file
+                    old.cancel()
+                    scope.launch {
+                        old.join()
+                        switch()
+                    }
+                }
+                return
             }
             resume(id)
             return
@@ -439,7 +456,6 @@ object DownloadManager {
                 val link = entry.link?.let { listOf(it) }?.takeIf { entry.bytesDone > 0 || entry.segmentsDone > 0 }
                 // Try the saved link first when resuming, then freshly loaded links
                 link?.let { tryLinks(id, it) } == true || run {
-                    set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
                     val (links, subs) = findLinks(entry.apiName, entry.episodeData, maxQuality = entry.maxQuality)
                     if (links.isEmpty()) throw IOException("No downloadable links were found. Streams in DASH or torrent form can't be downloaded.")
                     downloadSubtitles(id, subs)
@@ -502,11 +518,19 @@ object DownloadManager {
         return usable() to subtitles()
     }
 
-    /** Tries each link in turn. Returns true once one downloads completely. */
+    /**
+     * Tries each link in turn. Returns true once one downloads completely.
+     *
+     * The entry's link always names the source its partial file came from: the downloaders only
+     * resume when that is the link they were given. So before another source starts, what the
+     * previous one left is removed, or the new source's bytes would be added onto the old one's.
+     * A failed link keeps its partial file and progress, so trying the same link again resumes.
+     */
     private suspend fun tryLinks(id: String, links: List<SavedLink>): Boolean {
         var lastError: Throwable? = null
         for (link in links) {
             coroutineScope { ensureActive() }
+            if (current(id)?.link?.url != link.url) discardPartial(id)
             set(id) { it.copy(link = link, error = null) }
             try {
                 if (link.type == ExtractorLinkType.M3U8) downloadHls(id, link) else downloadDirect(id, link)
@@ -515,11 +539,24 @@ object DownloadManager {
                 throw e
             } catch (t: Throwable) {
                 lastError = t
-                set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
             }
         }
         lastError?.let { throw it }
         return false
+    }
+
+    /** Deletes what an unfinished download left on disk and forgets its progress. */
+    private fun discardPartial(id: String) {
+        val entry = current(id) ?: return
+        if (entry.status != DownloadStatus.Completed) {
+            entry.file?.let { f ->
+                when {
+                    HlsPackage.isPackage(f) -> f.parentFile?.deleteRecursively()
+                    f.name.endsWith(".part") -> f.delete()
+                }
+            }
+        }
+        set(id) { it.copy(bytesDone = 0, segmentsDone = 0, segmentsTotal = null, bytesTotal = null, chunkSize = null, doneChunks = emptyList()) }
     }
 
     /** fMP4 streams keep their codec setup in a separate init segment; without it nothing plays. */
@@ -559,19 +596,55 @@ object DownloadManager {
     private fun targetBase(entry: DownloadEntry): File {
         // A download already under way carries on in the folder it started in, even after the
         // download folder changed, or it would start again from nothing
-        val started = entry.file
+        val startedFile = entry.file
             ?.takeIf { entry.status != DownloadStatus.Completed && (entry.bytesDone > 0 || entry.segmentsDone > 0) }
+        val started = startedFile
             ?.let { if (it.name == HlsPackage.MASTER) it.parentFile?.parentFile else it.parentFile }
             ?.takeIf { it.isDirectory }
+        // And under the name it started with, which may have been told apart from another's
+        if (started != null && startedFile != null) startedName(startedFile)?.let { return File(started, it) }
         val dir = started ?: File(folder, safeName(entry.title)).apply { mkdirs() }
-        val name = when {
+        val name = fileName(entry)
+        // Another download whose name comes out the same (two titles called the same, the same
+        // episode from two extensions, specials with no numbers) would share its partial file and
+        // replace its finished one. The one added first keeps the plain name
+        val natural = File(dir, name).path
+        val rivals = _entries.value.filter { other ->
+            other.id != entry.id &&
+                (other.addedAt < entry.addedAt || (other.addedAt == entry.addedAt && other.id < entry.id)) &&
+                naturalBase(other).path == natural
+        }
+        val unique = when {
+            rivals.isEmpty() -> name
+            rivals.none { it.apiName == entry.apiName } -> safeName("$name (${entry.apiName})")
+            else -> safeName("$name [${entry.id.take(8)}]")
+        }
+        return File(dir, unique)
+    }
+
+    /** The base name a partial download was saved under: "Name.mp4.part", "Name.hls.part" or "Name.hls/master.m3u8". */
+    private fun startedName(file: File): String? = when {
+        file.name == HlsPackage.MASTER -> file.parentFile?.name?.removeSuffix(".hls")
+        file.name.endsWith(".part") -> file.name.removeSuffix(".part").substringBeforeLast('.', "")
+        else -> null
+    }?.takeIf { it.isNotBlank() }
+
+    private fun fileName(entry: DownloadEntry): String = safeName(
+        when {
             entry.season != null && entry.episode != null ->
                 "S%02dE%02d".format(entry.season, entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
             entry.episode != null -> "E%02d".format(entry.episode) + (entry.episodeName?.let { " - $it" } ?: "")
             entry.episodeName != null -> entry.episodeName
             else -> entry.title
         }
-        return File(dir, safeName(name))
+    )
+
+    /** Where [entry]'s files go before telling it apart from other downloads with the same name. */
+    private fun naturalBase(entry: DownloadEntry): File {
+        val dir = entry.file
+            ?.let { if (it.name == HlsPackage.MASTER) it.parentFile?.parentFile else it.parentFile }
+            ?: File(folder, safeName(entry.title))
+        return File(dir, fileName(entry))
     }
 
     private fun safeName(name: String) =
@@ -680,7 +753,8 @@ object DownloadManager {
             val start = if (resuming) offset else 0L
             val total = response.header("Content-Range")?.substringAfter('/')?.toLongOrNull()
                 ?: response.body.contentLength().takeIf { it > 0 }?.plus(start)
-            set(id) { it.copy(filePath = part.path, bytesDone = start, bytesTotal = total, connections = 1) }
+            // Written from its start in one piece now, so no longer a multi-connection file
+            set(id) { it.copy(filePath = part.path, bytesDone = start, bytesTotal = total, connections = 1, chunkSize = null, doneChunks = emptyList()) }
 
             FileOutputStream(part, resuming).use { out ->
                 response.body.byteStream().use { input ->

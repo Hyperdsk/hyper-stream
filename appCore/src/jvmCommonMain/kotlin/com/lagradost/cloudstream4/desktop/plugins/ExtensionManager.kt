@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 sealed interface PluginStatus {
     data object NotLoaded : PluginStatus
@@ -263,8 +264,7 @@ object ExtensionManager {
     fun install(repositoryUrl: String, plugin: SitePlugin) = scope.launch {
         busy(plugin.internalName, true)
         try {
-            val folder = File(AppDirs.extensions, folderName(repositoryUrl))
-            val file = File(folder, "${plugin.internalName}.cs3")
+            val file = pluginFile(repositoryUrl, plugin.internalName)
             // Unload any previous version before replacing the file
             withContext(Dispatchers.IO) { PluginLoader.unload(file) }
             RepositoryClient.download(plugin.url, file, plugin.fileHash)
@@ -372,6 +372,22 @@ object ExtensionManager {
 
     private fun busy(name: String, on: Boolean) = _state.update {
         it.copy(busy = if (on) it.busy.adding(name) else it.busy.removing(name))
+    }
+
+    /**
+     * Where an extension from [repositoryUrl] is saved. [internalName] comes from the repository's
+     * plugin list, so a name that would point anywhere but a file in the repository's own folder
+     * ("../Other", "a/b", a drive letter) is refused: it could replace another repository's extension.
+     */
+    internal fun pluginFile(repositoryUrl: String, internalName: String): File {
+        val folder = File(AppDirs.extensions, folderName(repositoryUrl))
+        val file = File(folder, "$internalName.cs3")
+        val plain = internalName.isNotBlank() && internalName.length <= 128 && !internalName.startsWith('.') &&
+            internalName.none { it == '/' || it == '\\' || it == ':' || it.isISOControl() }
+        if (!plain || file.canonicalFile.parentFile != folder.canonicalFile) {
+            throw IOException("The repository lists an extension with an unsafe name: \"$internalName\".")
+        }
+        return file
     }
 
     private fun folderName(repositoryUrl: String): String =
