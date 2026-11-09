@@ -602,7 +602,7 @@ object DownloadManager {
             ?.let { if (it.name == HlsPackage.MASTER) it.parentFile?.parentFile else it.parentFile }
             ?.takeIf { it.isDirectory }
         // And under the name it started with, which may have been told apart from another's
-        if (started != null && startedFile != null) startedName(startedFile)?.let { return File(started, it) }
+        if (started != null) startedName(startedFile)?.let { return File(started, it) }
         val dir = started ?: File(folder, safeName(entry.title)).apply { mkdirs() }
         val name = fileName(entry)
         // Another download whose name comes out the same (two titles called the same, the same
@@ -647,8 +647,21 @@ object DownloadManager {
         return File(dir, fileName(entry))
     }
 
-    private fun safeName(name: String) =
-        name.replace(Regex("[/\\\\:*?\"<>|\\p{Cntrl}]"), " ").replace(Regex("\\s+"), " ").trim().take(120).ifBlank { "Untitled" }
+    /**
+     * A title or episode name as a file or folder name on any system: no separators or characters
+     * Windows refuses, never "." or ".." (which would name the folder above), no leading dot
+     * (hidden), no trailing dot or space (Windows drops them), and no device name like "CON".
+     */
+    internal fun safeName(name: String): String {
+        val cleaned = name.replace(Regex("[/\\\\:*?\"<>|\\p{Cntrl}]"), " ").replace(Regex("\\s+"), " ").trim()
+            .take(120).trimStart('.', ' ').trimEnd('.', ' ')
+            .ifBlank { "Untitled" }
+        // Names Windows keeps for devices: a folder or file called that (any extension) can't be made
+        val reserved = cleaned.substringBefore('.').trim().uppercase().let {
+            it in setOf("CON", "PRN", "AUX", "NUL") || Regex("(COM|LPT)[1-9]").matches(it)
+        }
+        return if (reserved) "_$cleaned" else cleaned
+    }
 
     /**
      * Separate HTTP/1.1 connections for downloads. Over HTTP/2 every range request would share a

@@ -169,6 +169,24 @@ class DownloadManagerTest {
         }
     }
 
+    @Test
+    fun namesStayInTheDownloadFolderOnEverySystem() {
+        if (System.getProperty("cloudstream.dataDir") == null) {
+            System.setProperty("cloudstream.dataDir", Files.createTempDirectory("cs-dl-names").toString())
+        }
+        // Never the folder above, or a hidden file
+        assertEquals("Untitled", DownloadManager.safeName(".."))
+        assertEquals("Untitled", DownloadManager.safeName(" . "))
+        assertEquals("hidden", DownloadManager.safeName(".hidden"))
+        // Windows drops trailing dots and spaces, and keeps device names
+        assertEquals("Mr. Robot", DownloadManager.safeName("Mr. Robot. "))
+        assertEquals("_Con", DownloadManager.safeName("Con"))
+        assertEquals("_nul.txt", DownloadManager.safeName("nul.txt"))
+        assertEquals("_COM1", DownloadManager.safeName("COM1"))
+        assertEquals("Console", DownloadManager.safeName("Console"))
+        assertEquals("a b c", DownloadManager.safeName("a/b:c"))
+    }
+
     private suspend fun awaitFinished(id: String) = withTimeout(30_000) {
         DownloadManager.entries.first { list -> list.any { it.id == id && it.status in setOf(DownloadStatus.Completed, DownloadStatus.Failed) } }
     }.first { it.id == id }

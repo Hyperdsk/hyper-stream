@@ -114,6 +114,8 @@ IFS=. read -r major minor patch <<<"$version"
 # Each release's version code is higher than the last one's, so Android installs it as an update.
 # (GitHub's test builds use their run number, which stays far below.)
 code=$((major * 10000 + minor * 100 + patch))
+# Two digits each, or two versions get the same code (1.2.100 and 1.3.0) and Android won't update
+(( minor < 100 && patch < 100 )) || fail "$version can't be released: the minor and patch numbers must stay under 100."
 if ! $resume; then
   git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "$tag already exists."
   [ -z "$(git tag --list "$tag-*")" ] || fail "$version is already used by another tag (Android-only release)."

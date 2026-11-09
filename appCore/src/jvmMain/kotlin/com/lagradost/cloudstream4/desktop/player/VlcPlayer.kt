@@ -215,6 +215,9 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
     override fun setVolume(volume: Int) {
         val v = volume.coerceIn(0, 200)
         player.audio().setVolume(v)
+        // Changing the volume unmutes, as the icon shows; VLC keeps mute apart from the volume,
+        // so without this the sound stayed off and the next mute press muted it again
+        if (_state.value.muted) player.audio().setMute(false)
         _state.update { it.copy(volume = v, muted = false) }
     }
 

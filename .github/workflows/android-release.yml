@@ -46,6 +46,11 @@ jobs:
           IFS=. read -r major minor patch <<< "$version"
           # Each release's version code is higher than the last one's, so Android installs it as an update.
           code=$((major * 10000 + minor * 100 + patch))
+          # Two digits each, or two versions get the same code (1.2.100 and 1.3.0) and Android won't update
+          if (( minor >= 100 || patch >= 100 )); then
+            echo "::error::$version can't be released: the minor and patch numbers must stay under 100."
+            exit 1
+          fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "Releasing Android $version (version code $code)"
