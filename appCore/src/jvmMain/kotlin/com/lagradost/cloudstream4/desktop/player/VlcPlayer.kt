@@ -110,7 +110,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
                             ImageInfo(w, h, imageInfo.colorType, imageInfo.colorAlphaType)
                         } else imageInfo
                         bitmap.installPixels(visible, pixels, imageInfo.minRowBytes)
-                        frame = bitmap.asComposeImageBitmap()
+                        // Not the start of the video shown before a resume jump (see open)
+                        if (!jumping) frame = bitmap.asComposeImageBitmap()
                     }
                 },
                 true,
@@ -124,7 +125,9 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
 
             override fun playing(mediaPlayer: MediaPlayer) {
                 VlcLog.log("event playing")
-                _state.update { it.copy(playing = true, buffering = false, ended = false, error = null) }
+                // "Playing" comes as soon as the input opens, often seconds before any picture: the
+                // loader stays until the first time update (timeChanged) clears it
+                _state.update { it.copy(playing = true, buffering = it.buffering || jumping, ended = false, error = null) }
             }
 
             override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
@@ -139,11 +142,38 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
                 _state.update { it.copy(playing = false, buffering = false, error = "This source could not be played.") }
 
             override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) =
-                _state.update { it.copy(buffering = newCache < 100f, bufferPercent = newCache) }
+                _state.update { it.copy(buffering = jumping || newCache < 100f, bufferPercent = newCache) }
 
             override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
+                // Live: nothing to resume, show it as it comes (a saved position from an older
+                // version would otherwise keep the picture hidden for good)
+                if (jumping && currentUrl?.let { StreamProxy.isLive(it) } == true) {
+                    pendingJumpMs = null
+                    landingMs = null
+                    VlcLog.log("event live, no jump")
+                    mediaPlayer.submit { player.audio().setMute(_state.value.muted) }
+                }
+                pendingJumpMs?.let { target ->
+                    // A second played from 0: jump to the resume point (off VLC's event thread).
+                    // Jumping at the first time event, as playback became ready, stalled VLC
+                    if (newTime >= 1_000) {
+                        pendingJumpMs = null
+                        landingMs = target
+                        VlcLog.log("event jump to $target ms")
+                        mediaPlayer.submit { seekTo(target) }
+                    }
+                    return
+                }
+                landingMs?.let { target ->
+                    // Times from before the jump, or the target itself (VLC reports it the moment it
+                    // jumps): not landed yet, keep showing the resume point
+                    if (newTime == target || newTime < target - 3_000) return
+                    landingMs = null
+                    VlcLog.log("event landed at $newTime ms")
+                    mediaPlayer.submit { player.audio().setMute(_state.value.muted) }
+                }
                 if (_state.value.timeMs == 0L && newTime > 0) VlcLog.log("event first frame time: $newTime ms")
-                _state.update { it.copy(timeMs = newTime, buffering = false) }
+                _state.update { it.copy(timeMs = newTime, buffering = false, live = currentUrl?.let { u -> StreamProxy.isLive(u) } == true) }
             }
 
             override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) =
@@ -178,13 +208,23 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
         val url = source.url
         VlcLog.log("open ${if (url.startsWith("http://127.0.0.1")) "proxied stream" else url.substringBefore(':')} at $startMs ms")
         frame = null
-        // The speed carries over to the next video, as the player itself keeps it
-        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = true) }
+        // HLS started mid-way showed no picture at all (Prime Video, audio in its own playlist):
+        // VLC's clock began minutes early and dropped every frame. Start at 0, jump once it runs
+        val jumpLater = (source.mimeType == StreamSource.HLS || source.mimeType == StreamSource.DASH) && startMs > 0
+        pendingJumpMs = if (jumpLater) startMs else null
+        landingMs = null
+        // So the proxy fetches the segments there while the start plays, not after the jump
+        if (jumpLater) StreamProxy.resumeAt(url, startMs)
+        // The speed carries over to the next video, as the player itself keeps it. While a jump
+        // waits, the time shown (and saved as progress) is where it will land
+        _state.update { PlaybackState(volume = it.volume, muted = it.muted, rate = it.rate, buffering = true, timeMs = pendingJumpMs ?: 0L) }
         val options = buildList {
             add(":network-caching=$NETWORK_CACHING_MS")
-            if (startMs > 0) add(":start-time=${startMs / 1000.0}")
+            if (startMs > 0 && !jumpLater) add(":start-time=${startMs / 1000.0}")
         }
         player.media().play(url, *options.toTypedArray())
+        // Silent until the resume jump lands; the user's mute setting comes back then
+        if (jumpLater) player.audio().setMute(true)
         currentUrl = url
         // External subtitles are added but not selected, the user picks one
         subtitles.forEach { player.media().addSlave(MediaSlaveType.SUBTITLE, it, false) }
@@ -251,6 +291,17 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
     /** The url currently opened, so seek bar previews can open the same video. */
     override var currentUrl by mutableStateOf<String?>(null)
         private set
+
+    /** Where an HLS stream opened at 0 jumps once it plays (see [open]). */
+    @Volatile
+    private var pendingJumpMs: Long? = null
+
+    /** Where that jump lands, until VLC's time gets there. */
+    @Volatile
+    private var landingMs: Long? = null
+
+    /** Before a resume jump has landed: no picture or sound from the start, the loader stays up. */
+    private val jumping get() = pendingJumpMs != null || landingMs != null
 
     /** A silent second player for seek bar thumbnails. Release it when done. */
     override fun createPreview(): SeekPreview = VlcSeekPreview(factory)

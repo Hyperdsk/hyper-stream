@@ -25,7 +25,8 @@ import java.util.zip.ZipFile
  */
 actual object PluginLoader {
     /** Bump when translation output changes, so cached jars are rebuilt. */
-    private const val TRANSLATION_VERSION = 7
+    // 8: Resources.getAssets() and AssetManager became real, so jars patched around them are redone
+    private const val TRANSLATION_VERSION = 8
 
     private val loaded = ConcurrentHashMap<String, LoadedPlugin>()
 
@@ -102,6 +103,8 @@ actual object PluginLoader {
                 .getDeclaredConstructor()
                 .newInstance() as BasePlugin
             instance.filename = file.absolutePath
+            // Its assets, read from the .cs3 (extensions that set requiresResources keep data there)
+            if (instance is Plugin) instance.resources = android.content.res.Resources(android.content.res.AssetManager(file))
 
             if (instance is Plugin) instance.load(desktopContext) else instance.load()
 

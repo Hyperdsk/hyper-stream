@@ -76,9 +76,14 @@ object RepositoryClient {
      * Turns what the user typed into a repository url. Accepts full urls, cloudstreamrepo:// links
      * and the short codes the Android app accepts (cutt.ly codes, or py.md codes prefixed with !).
      */
+    /** CloudStream's community list of repositories. Typing "all" or "mega" adds every one in it. */
+    const val COMMUNITY_REPOS = "https://raw.githubusercontent.com/recloudstream/cs-repos/master/repos-db.json"
+
     suspend fun parseRepoUrl(input: String): String? = withContext(Dispatchers.IO) {
         val fixed = input.trim()
         when {
+            // Before short codes: someone who knows no repository can still find them all
+            fixed.lowercase() in setOf("all", "mega") -> COMMUNITY_REPOS
             fixed.contains("^https?://".toRegex()) -> fixed
             fixed.contains(schemeRegex) -> fixed.replace(schemeRegex, "").let {
                 if (!it.contains("^https?://".toRegex())) "https://$it" else it

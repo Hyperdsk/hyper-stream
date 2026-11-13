@@ -466,7 +466,7 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                                     download = download,
                                     onDownload = { model.download(ep.playable) },
                                 ) {
-                                    val start = progress?.takeIf { !it.finished }?.positionMs ?: 0
+                                    val start = progress?.takeIf { !it.finished }?.resumeMs ?: 0
                                     model.playRequest(ep.playable, start)?.let { nav.open(Route.Player(it)) }
                                 }
                             }
@@ -633,14 +633,14 @@ private fun PlayButton(route: Route.Details, response: LoadResponse, state: Deta
         state.isMovieLike -> {
             val data = (response as? MovieLoadResponse)?.dataUrl ?: (response as? LiveStreamLoadResponse)?.dataUrl
             val p = data?.let { library.progress(route.apiName, it) }
-            if (p != null && !p.finished && p.positionMs > 0) Triple("Resume", null, p.positionMs)
+            if (p != null && !p.finished && p.resumeMs > 0) Triple("Resume", null, p.resumeMs)
             else Triple("Play", null, 0L)
         }
 
         last != null -> {
             val ep = state.allEpisodes.firstOrNull { it.playable.data == last.episodeData }
             if (ep != null && !last.finished) {
-                Triple("Resume ${ep.playable.label.substringBefore(" · ")}", ep.playable, last.positionMs)
+                Triple("Resume ${ep.playable.label.substringBefore(" · ")}", ep.playable, last.resumeMs)
             } else {
                 val idx = state.allEpisodes.indexOfFirst { it.playable.data == last.episodeData }
                 val next = state.allEpisodes.getOrNull(idx + 1) ?: state.allEpisodes.firstOrNull()

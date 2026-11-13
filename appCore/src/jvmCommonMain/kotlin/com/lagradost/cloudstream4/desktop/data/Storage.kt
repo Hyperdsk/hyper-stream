@@ -9,7 +9,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-/** Folders the app keeps its data in. On macOS this is ~/Library/Application Support/CloudStream, on Android the app's private files. */
+/** Folders the app keeps its data in. On macOS this is ~/Library/Application Support/HyperStream, on Android the app's private files. */
 object AppDirs {
     val root: File by lazy {
         // Lets tests and portable installs use a different folder
@@ -64,6 +64,9 @@ class JsonFile<T : Any>(
     @Synchronized
     fun write(value: T) {
         val tmp = File(file.parentFile, "${file.name}.tmp")
+        // The folder can disappear while the app runs (a cleaner app removed it): saving then
+        // failed with "No such file or directory" and extensions couldn't be installed
+        file.parentFile.mkdirs()
         java.io.FileOutputStream(tmp).use { out ->
             out.write(jsonMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(value))
             out.fd.sync()

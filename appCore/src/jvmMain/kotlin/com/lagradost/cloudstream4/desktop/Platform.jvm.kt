@@ -81,10 +81,22 @@ actual object Platform {
     actual fun dataFolder(): File {
         val home = System.getProperty("user.home")
         return when {
-            isMac -> File(home, "Library/Application Support/CloudStream")
-            os.contains("win") -> File(System.getenv("APPDATA") ?: home, "CloudStream")
-            else -> File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share", "cloudstream")
+            isMac -> dataFolderIn(File(home, "Library/Application Support"), "HyperStream", "CloudStream")
+            os.contains("win") -> dataFolderIn(File(System.getenv("APPDATA") ?: home), "HyperStream", "CloudStream")
+            else -> dataFolderIn(File(System.getenv("XDG_DATA_HOME") ?: "$home/.local/share"), "hyperstream", "cloudstream")
         }
+    }
+
+    /**
+     * The app's folder [name] in [base]. Versions before 1.2.12 used [oldName]: that folder is
+     * moved over the first time, so updating keeps extensions, history and settings. Should the
+     * move fail, the old folder keeps being used rather than starting empty.
+     */
+    internal fun dataFolderIn(base: File, name: String, oldName: String): File {
+        val folder = File(base, name)
+        val old = File(base, oldName)
+        if (folder.exists() || !old.isDirectory) return folder
+        return runCatching { java.nio.file.Files.move(old.toPath(), folder.toPath()); folder }.getOrElse { old }
     }
 
     actual val playerMissing: PlayerMissing? = PlayerMissing(
