@@ -101,7 +101,7 @@ object UpdateChecker {
      * Deletes installers for this version or older, once they're installed: an APK left in the
      * app's files (27 MB) would also put the app over Android's 25 MB backup limit.
      */
-    fun removeInstalledDownloads(updates: File = File(Platform.dataFolder(), "updates"), current: String = currentVersion) {
+    fun removeInstalledDownloads(updates: File = File(com.lagradost.cloudstream4.desktop.data.AppDirs.root, "updates"), current: String = currentVersion) {
         updates.listFiles()
             ?.filter { !isNewer(it.name, current) }
             ?.forEach { it.deleteRecursively() }
@@ -273,7 +273,7 @@ object UpdateChecker {
         val safeName = release.asset.name.substringAfterLast('/')
             .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
             .ifBlank { "HyperStream-${release.version}" }
-        val updates = File(Platform.dataFolder(), "updates")
+        val updates = File(com.lagradost.cloudstream4.desktop.data.AppDirs.root, "updates")
         updates.listFiles()?.filter { it.name != release.version }?.forEach { it.deleteRecursively() }
         val folder = File(updates, release.version)
         folder.mkdirs()

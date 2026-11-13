@@ -89,6 +89,17 @@ class RealLiveChannelTest {
                     }
                     Thread.sleep(40)
                 }
+                // What the back button does: how long the player takes to stop
+                val stopStarted = System.nanoTime()
+                StreamProxy.clear()
+                // What's still busy 2 s into the stop
+                Thread {
+                    Thread.sleep(2000)
+                    Thread.getAllStackTraces().filter { (th, st) -> st.any { "cloudstream4" in it.className || "vlcj" in it.className || "okhttp" in it.className } }
+                        .forEach { (th, st) -> println("BUSY ${th.name}: " + st.take(14).joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }) }
+                }.apply { isDaemon = true }.start()
+                player.stop()
+                println("STOP took ${(System.nanoTime() - stopStarted) / 1_000_000} ms")
                 val s = player.state.value
                 val line = "${link.name}: $info -> blackNoLoader=${blackNoLoader} ms, frames=$frames first=${first ?: "never"} ms playing=${s.playing} error=${s.error} host=${link.url.substringAfter("://").substringBefore('/')}"
                 println("CHANNEL $line")

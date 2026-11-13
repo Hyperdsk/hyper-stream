@@ -32,7 +32,15 @@ class RealStreamStartTest {
         val links = Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val t0 = System.nanoTime()
         fun now() = (System.nanoTime() - t0) / 1_000_000
-        runBlocking { api.loadLinks(data, false, {}, { links += it }) }
+        val subs = Collections.synchronizedList(mutableListOf<com.lagradost.cloudstream3.SubtitleFile>())
+        runBlocking { api.loadLinks(data, false, { subs += it }, { links += it }) }
+        println("SUBTITLES from the extension: ${subs.size} ${subs.take(6).map { it.lang }}")
+        // HYPER_REAL_MASTER: the host's own playlist, before the proxy changes anything
+        System.getenv("HYPER_REAL_MASTER")?.let { out ->
+            val l = links.first { it.type == ExtractorLinkType.M3U8 }
+            val text = runBlocking { com.lagradost.cloudstream3.app.get(l.url, headers = l.headers + listOfNotNull(l.referer.takeIf { it.isNotBlank() }?.let { "Referer" to it })).text }
+            File(out).writeText(text)
+        }
         println("${now()} ms: ${links.size} links: ${links.map { "${it.name} ${it.type} ${it.quality}" }}")
         val link = links.first { it.type == ExtractorLinkType.M3U8 }
 
@@ -60,6 +68,7 @@ class RealStreamStartTest {
                 }
                 Thread.sleep(40)
             }
+            println("PLAYER subtitle tracks ${player.state.value.subtitleTracks.map { it.name }}, live=${StreamProxy.isLive(url)}, length=${player.state.value.lengthMs}")
             println("RESULT blackNoLoader=${blackNoLoader} ms, frames shown $frames, first picture after ${firstPicture ?: "never"} ms, " +
                 "audio choices ${StreamProxy.audioChoices(url)}, length ${player.state.value.lengthMs} ms")
             VlcLog.log("real stream test done")

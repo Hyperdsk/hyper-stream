@@ -218,7 +218,14 @@ object StreamProxy {
         return local(session, url)
     }
 
+    /** Bumped by [clear]: requests from before it end instead of fetching anything more. */
+    @Volatile
+    private var generation = 0
+
     fun clear() {
+        generation++
+        // Downloads still running for the closed player: without this its stop waited for them
+        streamClient.dispatcher.cancelAll()
         sessions.clear()
         sessionHosts.clear()
         parallelSessions.clear()
@@ -309,6 +316,7 @@ object StreamProxy {
             ?: "media"
 
     private fun handle(exchange: HttpExchange) {
+        val gen = generation
         // /s/{session}/{base64 url}/{name}
         val parts = exchange.requestURI.rawPath.removePrefix("/s/").split('/')
         val session = parts.getOrNull(0)
@@ -361,6 +369,11 @@ object StreamProxy {
             if (range == null && serveSegment(exchange, session, target, headers)) return
         }
 
+        // The player closed while this waited: nothing more to fetch for it
+        if (gen != generation) {
+            exchange.sendResponseHeaders(502, -1)
+            return
+        }
         val request = Request.Builder().url(target).apply {
             headers.forEach { (k, v) -> header(k, v) }
             range?.let { header("Range", it) }
@@ -630,6 +643,7 @@ object StreamProxy {
     }
 
     private suspend fun fetchSegment(url: String, headers: Map<String, String>): Segment {
+        val gen = generation
         var attempt = 0
         while (true) {
             try {
@@ -639,6 +653,8 @@ object StreamProxy {
                 StreamLog.log("segment ${segment.bytes.size / 1024} KB in ${(System.nanoTime() - started) / 1_000_000} ms")
                 return segment
             } catch (e: IOException) {
+                // Cancelled by clear(): no retries
+                if (gen != generation) throw e
                 StreamLog.log("segment attempt ${attempt + 1} failed: $e")
                 if (++attempt >= 3) throw e
                 kotlinx.coroutines.delay(500L * attempt)

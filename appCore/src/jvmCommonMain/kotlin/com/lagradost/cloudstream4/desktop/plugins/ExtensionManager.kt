@@ -110,9 +110,14 @@ object ExtensionManager {
             loadAllInstalled()
             // Checking repositories for updates can wait until the first screen has loaded
             delay(REFRESH_DELAY_MS)
-            _state.value.repositories.forEach { refreshRepository(it.data.url) }
+            // The Extensions screen may have loaded them already (see loadPendingRepositories)
+            _state.value.repositories.filter { it.repository == null && !it.loading }.forEach { refreshRepository(it.data.url) }
         }
     }
+
+    /** Loads repositories not loaded yet now, instead of after the startup delay: someone is looking at them. */
+    fun loadPendingRepositories() =
+        _state.value.repositories.filter { it.repository == null && !it.loading && it.error == null }.forEach { refreshRepository(it.data.url) }
 
     private const val REFRESH_DELAY_MS = 15_000L
 

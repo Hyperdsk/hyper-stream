@@ -200,8 +200,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         val token = ++loadToken
         playToken++
         linksJob?.cancel()
-        player?.stop()
+        // The proxy first: its downloads end, so the player's stop doesn't wait on a slow segment
         StreamGateway.clear()
+        player?.stop()
         playingSource = null
         pendingStartMs = startMs
         autoSkipped.clear()
@@ -683,8 +684,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     override fun dispose() {
         saveProgress()
         linksJob?.cancel()
-        player?.stop()
+        // The proxy first: its downloads end, so the player's stop doesn't wait on a slow segment
         StreamGateway.clear()
+        player?.stop()
         playingSource = null
         super.dispose()
     }

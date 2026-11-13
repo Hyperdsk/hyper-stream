@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,6 +86,7 @@ fun ExtensionsScreen() {
 @Composable
 private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     val state by ExtensionManager.state.collectAsState()
+    LaunchedEffect(state.repositories.size) { ExtensionManager.loadPendingRepositories() }
     var input by remember { mutableStateOf("") }
     // A repository over plain http: anyone on the network (public Wi-Fi, the ISP) could swap its
     // extensions for harmful code, which then runs inside the app. Ask before adding one
@@ -257,7 +259,8 @@ private fun RepoCard(repo: RepositoryState, onClick: () -> Unit) {
                     Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.titleSmall)
                     Text(
                         when {
-                            repo.loading -> "Loading…"
+                            // Not loaded yet (the app waits a moment after starting): not "0 extensions"
+                            repo.loading || (repo.repository == null && repo.error == null) -> "Loading…"
                             repo.error != null -> repo.error
                             repo.data.url.startsWith("http://", ignoreCase = true) -> "Not secure (http) · ${repo.plugins.size} extensions"
                             else -> "${repo.plugins.size} extensions" + (repo.repository?.description?.let { " · $it" } ?: "")

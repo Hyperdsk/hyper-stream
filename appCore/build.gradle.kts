@@ -117,6 +117,9 @@ tasks.withType<Test>().configureEach {
     inputs.property("csCompatDir", providers.environmentVariable("CS_COMPAT_DIR").orElse(""))
     // The compatibility sweep loads many extensions in one JVM
     maxHeapSize = providers.environmentVariable("CS_TEST_HEAP").orElse("2g").get()
+    // Tests never touch the real app's data folder (they wrote logs into it, and the app now moves
+    // an old CloudStream folder to HyperStream): a folder in build/ unless a test sets its own
+    systemProperty("cloudstream.dataDir", layout.buildDirectory.dir("test-data").get().asFile.path)
 }
 
 // Index of the Android app's own classes (parent class, interface or not), read from its sources.
