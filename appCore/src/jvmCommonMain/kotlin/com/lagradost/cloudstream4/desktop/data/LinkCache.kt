@@ -3,6 +3,7 @@ package com.lagradost.cloudstream4.desktop.data
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import java.security.MessageDigest
@@ -16,12 +17,20 @@ data class CachedLink(
     @JsonProperty("headers") val headers: Map<String, String>,
     @JsonProperty("type") val type: ExtractorLinkType,
     @JsonProperty("extractorData") val extractorData: String? = null,
+    /** ClearKey key id and key of an encrypted stream (live channels), which it can't play without. */
+    @JsonProperty("kid") val kid: String? = null,
+    @JsonProperty("key") val key: String? = null,
 ) {
-    @Suppress("DEPRECATION")
-    fun toLink() = ExtractorLink(source, name, url, referer, quality, headers, extractorData, type)
+    @Suppress("DEPRECATION", "DEPRECATION_ERROR")
+    fun toLink(): ExtractorLink =
+        if (kid != null && key != null) DrmExtractorLink(source, name, url, referer, quality, type, headers, extractorData, kid, key)
+        else ExtractorLink(source, name, url, referer, quality, headers, extractorData, type)
 
     companion object {
-        fun of(l: ExtractorLink) = CachedLink(l.source, l.name, l.url, l.referer, l.quality, l.headers, l.type, l.extractorData)
+        fun of(l: ExtractorLink) = CachedLink(
+            l.source, l.name, l.url, l.referer, l.quality, l.headers, l.type, l.extractorData,
+            (l as? DrmExtractorLink)?.kid, (l as? DrmExtractorLink)?.key,
+        )
     }
 }
 

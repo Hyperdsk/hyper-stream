@@ -433,7 +433,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         audioChosen = false
         update { copy(current = index, error = null) }
         // Single video files stream over several connections, playlists stream segment by segment
-        val source = StreamGateway.prepare(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO).copy(
+        val source = StreamGateway.prepare(link.url, link.referer, link.headers, parallel = link.type == ExtractorLinkType.VIDEO, audio = hlsAudio, clearKeys = link.clearKeys()).copy(
             mimeType = when (link.type) {
                 ExtractorLinkType.M3U8 -> StreamSource.HLS
                 ExtractorLinkType.DASH -> StreamSource.DASH
@@ -467,6 +467,26 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         audioChosen = true
         val key = audioLanguageKey(track.name) ?: return
         if (SettingsStore.state.value.audioLanguage != key) SettingsStore.update { it.copy(audioLanguage = key) }
+    }
+
+    /** An encrypted stream's ClearKey key id and key, which the proxy decrypts it with on desktop. */
+    private fun ExtractorLink.clearKeys(): Map<String, String> =
+        (this as? com.lagradost.cloudstream3.utils.DrmExtractorLink)?.let { d -> d.kid?.let { kid -> d.key?.let { mapOf(kid to it) } } } ?: emptyMap()
+
+    /** The audio language asked for on HLS streams the player gets one language of (see [audioChoices]). */
+    private var hlsAudio: String? = null
+
+    /** The playing stream's audio languages and the one playing, when the player has only that one. */
+    fun audioChoices(): Pair<List<String>, String>? = playingSource?.let { StreamGateway.audioChoices(it) }
+
+    /** Switches to another of [audioChoices]: the stream reloads at the same spot with that language. */
+    fun pickHlsAudio(name: String) {
+        val index = current.current ?: return
+        if (audioChoices()?.second == name) return
+        hlsAudio = name
+        audioChosen = true
+        audioLanguageKey(name)?.let { key -> if (SettingsStore.state.value.audioLanguage != key) SettingsStore.update { it.copy(audioLanguage = key) } }
+        playLink(index)
     }
 
     /** The language word in a track name ("Track 2 - [Hindi]", "Hindi AAC 5.1" -> "hindi"). */
@@ -635,7 +655,8 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         // The player is shared, so only save once this session has started a source
         if (current.current == null) return
         val s = p.state.value
-        if (s.lengthMs <= 0 || (s.timeMs <= 0 && !finished)) return
+        // Live: no position worth resuming
+        if (s.live || s.lengthMs <= 0 || (s.timeMs <= 0 && !finished)) return
         val ep = episode
         val now = System.currentTimeMillis()
         val picture = if (!finished && (snapshot || now - lastSnapshotAt > 60_000)) {

@@ -17,6 +17,8 @@ data class PlaybackState(
     val bufferPercent: Float = 0f,
     val timeMs: Long = 0,
     val lengthMs: Long = 0,
+    /** A live stream: no position to resume or save. */
+    val live: Boolean = false,
     val volume: Int = 100,
     val muted: Boolean = false,
     val rate: Float = 1f,
@@ -133,8 +135,25 @@ interface SeekPreview {
 expect object StreamGateway {
     val stats: StateFlow<StreamStats>
 
-    /** [parallel]: [url] is a single video file, stream it over several connections where supported. */
-    fun prepare(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean = false): StreamSource
+    /**
+     * [parallel]: [url] is a single video file, stream it over several connections where supported.
+     * [audio]: of an HLS stream's audio languages, the one to play (see [audioChoices]).
+     * [clearKeys]: ClearKey key ids to keys of an encrypted stream (a live channel's DrmExtractorLink).
+     */
+    fun prepare(
+        url: String,
+        referer: String?,
+        headers: Map<String, String>,
+        parallel: Boolean = false,
+        audio: String? = null,
+        clearKeys: Map<String, String> = emptyMap(),
+    ): StreamSource
+
+    /**
+     * An HLS stream's audio languages and the one playing, when the player was given only that
+     * one (VLC downloads every language it's given, and with 8 the video never started). Null otherwise.
+     */
+    fun audioChoices(source: StreamSource): Pair<List<String>, String>?
 
     /** Forgets every prepared link, when the player closes or switches source. */
     fun clear()

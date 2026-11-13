@@ -123,7 +123,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
             } })
             Text(
                 "Extensions are the same files the Android app uses. Add a repository by link or short code, " +
-                    "paste a list of repositories to add them all" + if (Platform.canOpenFolders) ", or drop .cs3 files into the extensions folder." else ".",
+                    "paste a list of repositories to add them all, type \"all\" for every community repository" + if (Platform.canOpenFolders) ", or drop .cs3 files into the extensions folder." else ".",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -134,7 +134,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
-                        label = { Text("Repository link or code") },
+                        label = { Text("Repository link, code, or \"all\"") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { addChecked(input); input = "" } }),
@@ -165,7 +165,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
         val repos = state.repositories.filter {
             matches(q, it.repository?.name ?: it.data.name, it.repository?.description, it.data.url)
         }
-        item { SectionTitle(if (q.isEmpty()) "Repositories" else "Repositories (${repos.size})") }
+        item { SectionTitle(if (q.isEmpty()) "Repositories (${state.repositories.size})" else "Repositories (${repos.size} of ${state.repositories.size})") }
         if (repos.isEmpty()) {
             item { Hint(if (q.isEmpty()) "No repositories added." else "No repositories match.") }
         }
@@ -203,7 +203,10 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
         val localFiles = state.status.keys
             .filter { path -> state.installed.none { it.filePath == path } }
             .filter { matches(q, java.io.File(it).nameWithoutExtension) }
-        item { SectionTitle("Installed") }
+        // Loose .cs3 files in the folder are listed here too, so they count
+        val installedTotal = state.installed.size + state.status.keys.count { path -> state.installed.none { it.filePath == path } }
+        val installedShown = installed.size + localFiles.size
+        item { SectionTitle(if (q.isEmpty()) "Installed ($installedTotal)" else "Installed ($installedShown of $installedTotal)") }
         if (installed.isEmpty() && localFiles.isEmpty()) {
             item { Hint(if (q.isEmpty()) "No extensions installed." else "No installed extensions match.") }
         }

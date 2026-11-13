@@ -752,8 +752,10 @@ private fun BottomControls(
         }
     }
     var dragValue by remember { mutableFloatStateOf(0f) }
+    var showRemaining by remember { mutableStateOf(false) }
     val length = playback.lengthMs.coerceAtLeast(1)
-    val shown = if (dragging) dragValue else playback.timeMs.toFloat() / length
+    // Before the length is known (a resume shows its time while loading) the bar stays empty, not full
+    val shown = if (dragging) dragValue else if (playback.lengthMs > 0) playback.timeMs.toFloat() / length else 0f
 
     Column(modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -770,7 +772,20 @@ private fun BottomControls(
                 },
                 modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
             )
-            PlayerTime(if (playback.lengthMs > 0) formatTime(playback.lengthMs) else "Live", playback.lengthMs, alignEnd = false)
+            // A live stream's "length" is only its rewind window: say it's live instead
+            if (playback.live) Text("● LIVE", color = Color(0xFFFF4D4D), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            // "Live" only once playing with no length; while loading the length just isn't known yet
+            else PlayerTime(
+                when {
+                    playback.lengthMs <= 0 -> if (playback.buffering) "--:--" else "Live"
+                    showRemaining -> "-" + formatTime((playback.lengthMs - playback.timeMs).coerceAtLeast(0))
+                    else -> formatTime(playback.lengthMs)
+                },
+                playback.lengthMs,
+                alignEnd = false,
+                // A click switches between the total length and the time left
+                modifier = Modifier.clickable(enabled = playback.lengthMs > 0) { showRemaining = !showRemaining },
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             ControlButton(Icons.Default.SkipPrevious, "Previous episode", enabled = model.hasPrevious) { model.previous() }
@@ -1161,7 +1176,7 @@ private fun SlimSlider(
  * longest time [lengthMs] can show, so the bar doesn't shift as the seconds tick.
  */
 @Composable
-private fun PlayerTime(text: String, lengthMs: Long, alignEnd: Boolean) {
+private fun PlayerTime(text: String, lengthMs: Long, alignEnd: Boolean, modifier: Modifier = Modifier) {
     val style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
@@ -1174,7 +1189,7 @@ private fun PlayerTime(text: String, lengthMs: Long, alignEnd: Boolean) {
         style = style,
         textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
         maxLines = 1,
-        modifier = Modifier.widthIn(min = width),
+        modifier = modifier.widthIn(min = width),
     )
 }
 

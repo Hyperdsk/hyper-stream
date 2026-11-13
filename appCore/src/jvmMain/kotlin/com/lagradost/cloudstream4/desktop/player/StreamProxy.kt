@@ -10,6 +10,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import okhttp3.ConnectionPool
@@ -109,11 +112,37 @@ object StreamProxy {
 
     /** For each session's HLS media playlists: segment url to (all segment urls, its position). */
     private val segmentOrder = ConcurrentHashMap<String, ConcurrentHashMap<String, Pair<List<String>, Int>>>()
+    /** Each session's first video variant, to learn the real length from (see [fixPlaceholderLength]). */
+    private val firstVariant = ConcurrentHashMap<String, String>()
+    /** Each session's video length in seconds, once known. */
+    private val videoLength = ConcurrentHashMap<String, Double>()
+    /** Sessions whose playlist or manifest is live (no end marker, or a dynamic DASH manifest). */
+    private val liveSessions = ConcurrentHashMap.newKeySet<String>()
+
+    /** Whether the stream at [url], a local url from [proxiedUrl], turned out to be live. */
+    fun isLive(url: String): Boolean = url.substringAfter("/s/", "").substringBefore('/') in liveSessions
+
+    /** Each encrypted session's ClearKey keys, key id to key (see [Cenc]). */
+    private val sessionKeys = ConcurrentHashMap<String, Map<String, ByteArray>>()
+    /** Each session's resume point in ms, when it opens at 0 and jumps there (see [resumeAt]). */
+    private val resumeAt = ConcurrentHashMap<String, Long>()
+    /** Each media playlist (by its first segment) to the position the player read last. */
+    private val lastServed = ConcurrentHashMap<String, Int>()
+    /** Each session's audio language asked for, by name. */
+    private val sessionAudio = ConcurrentHashMap<String, String>()
+    /** Each session's audio languages and the one kept (see [keepOneAudio]). */
+    private val audioOffered = ConcurrentHashMap<String, Pair<List<String>, String>>()
+    /** "session|url" to a playlist fetched ahead (see [warm]). */
+    private val playlists = ConcurrentHashMap<String, Deferred<Pair<String, String>?>>()
     private class Segment(val contentType: String?, val bytes: ByteArray)
     private val segmentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val segmentPermits = Semaphore(16)
+    /** Requests open at once for segments and their parts. Fair, so the earliest asked go first. */
+    private val partPermits = Semaphore(16)
     private val segments = object : LinkedHashMap<String, Deferred<Segment>>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Deferred<Segment>>) = size > 40
+        // Room for read-ahead on every audio language (8 on Prime Video) without losing the first
+        // segments fetched ahead for each track
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Deferred<Segment>>) = size > 120
     }
 
     /**
@@ -131,6 +160,10 @@ object StreamProxy {
     private val connections: Int get() = SettingsStore.state.value.streamConnections
     /** How much of a body to look at to tell whether it's a playlist. */
     private const val PEEK_BYTES = 256L
+    /** A single segment this long (a day) is a placeholder, not a real length. */
+    private const val PLACEHOLDER_SECONDS = 86_400.0
+    /** Segments are fetched in pieces this big, each over its own connection. */
+    private const val SEGMENT_PART = 256L * 1024
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
@@ -156,7 +189,14 @@ object StreamProxy {
      * Registers a set of headers and returns the local url VLC should open for [url].
      * [parallel]: [url] is a single video file, stream it over several connections.
      */
-    fun proxiedUrl(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean = false): String {
+    fun proxiedUrl(
+        url: String,
+        referer: String?,
+        headers: Map<String, String>,
+        parallel: Boolean = false,
+        audio: String? = null,
+        clearKeys: Map<String, String> = emptyMap(),
+    ): String {
         val all = buildMap {
             put("User-Agent", USER_AGENT)
             if (!referer.isNullOrBlank()) put("Referer", referer)
@@ -173,6 +213,8 @@ object StreamProxy {
         sessions[session] = all
         url.toHttpUrlOrNull()?.host?.let { sessionHosts[session] = it }
         if (parallel) parallelSessions += session
+        audio?.let { sessionAudio[session] = it }
+        Cenc.parseKeys(clearKeys).takeIf { it.isNotEmpty() }?.let { sessionKeys[session] = it }
         return local(session, url)
     }
 
@@ -183,6 +225,16 @@ object StreamProxy {
         streams.values.forEach { (it as? ParallelStream)?.close() }
         streams.clear()
         segmentOrder.clear()
+        firstVariant.clear()
+        videoLength.clear()
+        playlists.clear()
+        sessionAudio.clear()
+        audioOffered.clear()
+        lastServed.clear()
+        resumeAt.clear()
+        sessionKeys.clear()
+        liveSessions.clear()
+        Cenc.clear()
         synchronized(segments) { segments.clear() }
         lastStream = null
         lastSegment = null
@@ -198,6 +250,15 @@ object StreamProxy {
         sessions.remove(session)
         sessionHosts.remove(session)
         parallelSessions -= session
+        firstVariant.remove(session)
+        videoLength.remove(session)
+        playlists.keys.removeIf { it.startsWith("$session|") }
+        sessionAudio.remove(session)
+        audioOffered.remove(session)
+        resumeAt.remove(session)
+        sessionKeys.remove(session)
+        liveSessions.remove(session)
+        Cenc.forget(session)
         streams.keys.filter { it.startsWith("$session|") }.forEach { key ->
             val stream = streams.remove(key) as? ParallelStream ?: return@forEach
             if (lastStream === stream) lastStream = null
@@ -267,6 +328,32 @@ object StreamProxy {
         val headers = headersFor(sessionHeaders, session?.let { sessionHosts[it] }, target)
 
         val range = exchange.requestHeaders.getFirst("Range")
+        // A playlist fetched ahead by [warm]. Served once only: a live playlist changes
+        if (exchange.requestMethod == "GET" && range == null) playlists.remove("$session|$target")?.let { pending ->
+            val cached = runBlocking { withTimeoutOrNull(30_000) { pending.await() } }
+            if (cached != null) {
+                val bytes = rewritePlaylist(cached.second, cached.first, session).toByteArray()
+                exchange.responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl")
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+                return
+            }
+        }
+        // An encrypted DASH segment: in parallel parts like HLS segments, as one connection gave
+        // 200-400 KB/s and each 2 MB, 2 second segment took up to 12 s, so live channels stalled
+        val keys = sessionKeys[session]
+        if (keys != null && range == null && exchange.requestMethod == "GET" &&
+            target.substringBefore('?').substringAfterLast('.').lowercase() in setOf("mp4", "m4s", "m4v", "m4a", "cmfv", "cmfa")
+        ) {
+            val fetched = runCatching { runBlocking { withTimeout(60_000) { fetchSegment(target, headers) } } }.getOrNull()
+            if (fetched != null) {
+                val bytes = fetched.bytes.also { Cenc.process(session, it, keys) }
+                fetched.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                try { exchange.responseBody.use { it.write(bytes) } } catch (_: IOException) {}
+                return
+            }
+        }
         if (connections > 1 && exchange.requestMethod == "GET") {
             // The seek-bar preview player asks with "?preview": it must not slow the main player
             val lowPriority = exchange.requestURI.rawQuery == "preview"
@@ -302,6 +389,11 @@ object StreamProxy {
                 finalUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
                 (readable && !media && runCatching { isPlaylist(String(response.peekBody(PEEK_BYTES).bytes(), Charsets.UTF_8)) }.getOrDefault(false))
 
+            // A live DASH manifest: the player mustn't resume a position in it
+            if (readable && (contentType.contains("dash", ignoreCase = true) || finalUrl.substringBefore('?').endsWith(".mpd", ignoreCase = true)) &&
+                runCatching { String(response.peekBody(64 * 1024).bytes()).contains("type=\"dynamic\"") }.getOrDefault(false)
+            ) liveSessions += session
+
             if (looksLikePlaylist && readable) {
                 // A byte order mark would otherwise be taken for part of the first line
                 val text = body.string().removePrefix("\uFEFF")
@@ -316,6 +408,19 @@ object StreamProxy {
                 val bytes = text.toByteArray()
                 if (contentType.isNotEmpty()) exchange.responseHeaders.set("Content-Type", contentType)
                 exchange.sendResponseHeaders(response.code, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+                return
+            }
+
+            // An encrypted stream with its keys: decrypt each MP4 segment before VLC sees it
+            val keys = sessionKeys[session]
+            if (keys != null && readable) {
+                val bytes = countedBytes(body.byteStream())
+                Cenc.process(session, bytes, keys)
+                listOf("Content-Type", "Content-Range", "Accept-Ranges").forEach { name ->
+                    response.header(name)?.let { exchange.responseHeaders.set(name, it) }
+                }
+                exchange.sendResponseHeaders(response.code, bytes.size.toLong().takeIf { it > 0 } ?: -1)
                 exchange.responseBody.use { it.write(bytes) }
                 return
             }
@@ -482,18 +587,27 @@ object StreamProxy {
         val (order, position) = segmentOrder[session]?.get(target) ?: return false
         lastSegment = order to position
         lastStream = null
-        val ahead = (connections / 2).coerceIn(2, 8)
-        for (next in order.subList(position + 1, minOf(order.size, position + 1 + ahead))) segment(next, headers)
+        // Read-ahead waits until the segment the player wants has arrived: hosts cap the total
+        // speed too (about 3 MB/s on Prime Video), and sharing it made that segment the slowest
+        val wanted = segment(target, headers)
+        // Far ahead only while the player reads in order: VLC reads segment 0, then jumps to where
+        // it resumes, and 37 MB fetched after segment 0 made that jump wait
+        val previous = lastServed.put(order.first(), position)
+        val ahead = if (previous != null && position - previous in 0..1) (connections / 2).coerceIn(2, 8) else 1
+        val next = order.subList(position + 1, minOf(order.size, position + 1 + ahead)).toList()
+        wanted.invokeOnCompletion { next.forEach { segment(it, headers) } }
         val segment = try {
-            runBlocking { withTimeout(60_000) { segment(target, headers).await() } }
+            runBlocking { withTimeout(60_000) { wanted.await() } }
         } catch (_: Throwable) {
             synchronized(segments) { segments.remove(target) }
             return false
         }
+        // Encrypted HLS (fMP4 with SAMPLE-AES-CTR): a decrypted copy, the cached bytes stay as fetched
+        val bytes = sessionKeys[session]?.let { keys -> segment.bytes.copyOf().also { Cenc.process(session, it, keys) } } ?: segment.bytes
         segment.contentType?.let { exchange.responseHeaders.set("Content-Type", it) }
-        exchange.sendResponseHeaders(200, segment.bytes.size.toLong())
+        exchange.sendResponseHeaders(200, bytes.size.toLong())
         try {
-            exchange.responseBody.use { it.write(segment.bytes) }
+            exchange.responseBody.use { it.write(bytes) }
         } catch (_: IOException) {
         }
         return true
@@ -519,21 +633,63 @@ object StreamProxy {
         var attempt = 0
         while (true) {
             try {
-                val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
-                meter.open()
-                try {
-                    streamClient.newCall(request).execute().use { r ->
-                        if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
-                        return Segment(r.header("Content-Type"), countedBytes(r.body.byteStream()))
-                    }
-                } finally {
-                    meter.close()
-                }
+                val started = System.nanoTime()
+                // The last try asks for it whole, for hosts that mishandle ranges
+                val segment = if (attempt < 2) fetchInParts(url, headers) else get(url, headers, null).let { Segment(it.contentType, it.bytes) }
+                StreamLog.log("segment ${segment.bytes.size / 1024} KB in ${(System.nanoTime() - started) / 1_000_000} ms")
+                return segment
             } catch (e: IOException) {
+                StreamLog.log("segment attempt ${attempt + 1} failed: $e")
                 if (++attempt >= 3) throw e
                 kotlinx.coroutines.delay(500L * attempt)
             }
         }
+    }
+
+    private class Part(val code: Int, val contentType: String?, val contentRange: String?, val bytes: ByteArray)
+
+    /** One request, under [partPermits] so parallel parts don't flood the host. */
+    private suspend fun get(url: String, headers: Map<String, String>, range: String?): Part = partPermits.withPermit {
+        val request = Request.Builder().url(url).apply {
+            headers.forEach { (k, v) -> header(k, v) }
+            range?.let { header("Range", it) }
+        }.build()
+        meter.open()
+        try {
+            streamClient.newCall(request).execute().use { r ->
+                if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+                Part(r.code, r.header("Content-Type"), r.header("Content-Range"), countedBytes(r.body.byteStream()))
+            }
+        } finally {
+            meter.close()
+        }
+    }
+
+    /**
+     * Fetches a segment in [SEGMENT_PART] pieces over several connections at once: hosts cap each
+     * connection (330 KB/s on Prime Video), so one request for a 1080p segment took 14 seconds.
+     */
+    private suspend fun fetchInParts(url: String, headers: Map<String, String>): Segment = coroutineScope {
+        val first = get(url, headers, "bytes=0-${SEGMENT_PART - 1}")
+        // 200: the host ignores ranges and sent the whole segment
+        if (first.code != 206) return@coroutineScope Segment(first.contentType, first.bytes)
+        val total = first.contentRange?.takeIf { it.startsWith("bytes 0-") }?.substringAfterLast('/')?.toLongOrNull()
+            ?: throw IOException("Unusable Content-Range: ${first.contentRange}")
+        if (first.bytes.size.toLong() != minOf(SEGMENT_PART, total)) throw IOException("First part was ${first.bytes.size} bytes")
+        val rest = (SEGMENT_PART until total step SEGMENT_PART).map { start ->
+            async {
+                val end = minOf(start + SEGMENT_PART, total) - 1
+                val part = get(url, headers, "bytes=$start-$end")
+                // Only the bytes asked for will do: anything else would scramble the video
+                if (part.code != 206 || part.contentRange?.startsWith("bytes $start-") != true || part.bytes.size.toLong() != end - start + 1)
+                    throw IOException("Part $start-$end came back as ${part.code} ${part.contentRange}, ${part.bytes.size} bytes")
+                part.bytes
+            }
+        }.awaitAll()
+        val out = java.io.ByteArrayOutputStream(total.toInt())
+        out.write(first.bytes)
+        rest.forEach { out.write(it) }
+        Segment(first.contentType, out.toByteArray())
     }
 
     /** Writing to the player failed: it closed the connection, by seeking or stopping. */
@@ -541,8 +697,147 @@ object StreamProxy {
 
     private val uriAttribute = Regex("URI=\"([^\"]+)\"")
 
+    private val extinf = Regex("#EXTINF:\\s*([0-9.]+)")
+
+    /**
+     * Prime Video's subtitle playlists are one segment of "#EXTINF:99999". VLC takes the longest
+     * track as the video's length, so the movie became 27 hours long: the seek bar landed past the
+     * end and resuming there never started. Such a segment gets the video's real length instead.
+     */
+    private fun fixPlaceholderLength(text: String, session: String): String {
+        val durations = extinf.findAll(text).map { it.groupValues[1].toDoubleOrNull() ?: 0.0 }.toList()
+        if (durations.size != 1 || durations[0] < PLACEHOLDER_SECONDS) return text
+        val length = firstVariant[session]?.let { mediaLength(session, it) } ?: return text
+        return extinf.replace(text) { "#EXTINF:%.3f".format(java.util.Locale.ROOT, length) }
+    }
+
+    /** The total length of the media playlist at [url], or null when it can't be read. */
+    private fun mediaLength(session: String, url: String): Double? = videoLength[session]
+        ?: runBlocking { playlist(session, url).await() }?.second
+            ?.let { text -> extinf.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 } }
+            ?.takeIf { it > 0 && it < PLACEHOLDER_SECONDS }
+            ?.also { videoLength[session] = it }
+
+    /** A playlist of [session] as (its final url, its text), fetched once and shared. */
+    private fun playlist(session: String, url: String): Deferred<Pair<String, String>?> = playlists.getOrPut("$session|$url") {
+        segmentScope.async {
+            runCatching {
+                val headers = headersFor(sessions[session] ?: return@async null, sessionHosts[session], url)
+                val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+                meter.open()
+                try {
+                    app.baseClient.newCall(request).execute().use { r ->
+                        if (!r.isSuccessful) return@async null
+                        r.request.url.toString() to r.body.string().removePrefix("﻿")
+                    }
+                } finally {
+                    meter.close()
+                }
+            }.getOrNull()?.takeIf { isPlaylist(it.second) }
+        }
+    }
+
+    /** Tells the proxy the stream at [url] (from [proxiedUrl]) will be jumped to [ms] once it plays. */
+    fun resumeAt(url: String, ms: Long) {
+        url.substringAfter("/s/", "").substringBefore('/').takeIf { it.isNotEmpty() }?.let { resumeAt[it] = ms }
+    }
+
+    /** The segment of a media playlist playing at [seconds] and the one after it, as absolute urls. */
+    internal fun segmentsAt(text: String, playlistUrl: String, seconds: Double): List<String> {
+        val base = playlistUrl.toHttpUrlOrNull() ?: return emptyList()
+        var elapsed = 0.0
+        var duration = 0.0
+        val uris = mutableListOf<Pair<Double, String>>()
+        text.lineSequence().map { it.trim() }.forEach { line ->
+            when {
+                line.startsWith("#EXTINF:") -> duration = line.removePrefix("#EXTINF:").substringBefore(',').trim().toDoubleOrNull() ?: 0.0
+                line.isNotEmpty() && !line.startsWith("#") -> {
+                    base.resolve(line)?.let { uris += elapsed to it.toString() }
+                    elapsed += duration
+                }
+            }
+        }
+        val at = uris.indexOfLast { it.first <= seconds }.takeIf { it >= 0 } ?: return emptyList()
+        return uris.drop(at).take(2).map { it.second }
+    }
+
+    /**
+     * Fetches every track's playlist and first segment at once. VLC opens the tracks one after
+     * another, and with 8 audio languages and 5 subtitles at about a second per request, the
+     * video started 25 seconds late. Now those requests are answered from memory.
+     */
+    private fun warm(session: String, urls: List<String>) {
+        val sessionHeaders = sessions[session] ?: return
+        urls.distinct().forEach { url ->
+            val pending = playlist(session, url)
+            segmentScope.launch {
+                val (final, text) = pending.await() ?: return@launch
+                // Registers its segment order, so the segment below is served from memory
+                rewritePlaylist(text, final, session)
+                val first = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() && !it.startsWith("#") } ?: return@launch
+                val segmentUrl = final.toHttpUrlOrNull()?.resolve(first)?.toString() ?: return@launch
+                segment(segmentUrl, headersFor(sessionHeaders, sessionHosts[session], segmentUrl))
+                // A resume: the player opens at 0 and jumps there (see VlcPlayer.open), so the
+                // segments it jumps to are fetched now too, instead of after the jump
+                resumeAt[session]?.let { ms ->
+                    segmentsAt(text, final, ms / 1000.0).forEach { segment(it, headersFor(sessionHeaders, sessionHosts[session], it)) }
+                }
+            }
+        }
+    }
+
+    /** The audio languages of the stream at [url], a local url from [proxiedUrl], when only one was kept. */
+    fun audioChoices(url: String): Pair<List<String>, String>? =
+        audioOffered[url.substringAfter("/s/", "").substringBefore('/')]
+
+    private fun attribute(line: String, name: String): String? =
+        Regex("(?:^|[:,])$name=(\"[^\"]*\"|[^,]*)").find(line)?.groupValues?.get(1)?.trim('"')
+
+    /**
+     * A master playlist with several audio languages keeps only one per group: VLC downloads
+     * every language it's given (8 on Prime Video), and the video never started. The one kept is
+     * the session's choice, else the language last picked, else the stream's default.
+     */
+    private fun keepOneAudio(text: String, session: String): String {
+        if (!text.contains("#EXT-X-STREAM-INF")) return text
+        val audio = text.lines().filter { line ->
+            line.trim().startsWith("#EXT-X-MEDIA:") && attribute(line, "TYPE") == "AUDIO" && attribute(line, "URI") != null
+        }
+        val groups = audio.groupBy { attribute(it, "GROUP-ID") }
+        if (groups.values.none { it.size > 1 }) return text
+        fun name(line: String) = attribute(line, "NAME") ?: attribute(line, "LANGUAGE") ?: "Audio"
+        val wanted = sessionAudio[session]
+        val language = SettingsStore.state.value.audioLanguage
+        val kept = groups.values.map { lines ->
+            lines.firstOrNull { name(it) == wanted }
+                ?: language?.let { l -> lines.firstOrNull { l in name(it).lowercase() } }
+                ?: lines.firstOrNull { attribute(it, "DEFAULT") == "YES" }
+                ?: lines.first()
+        }.toSet()
+        audioOffered[session] = audio.map(::name).distinct() to name(kept.first())
+        return text.lines().filter { it !in audio || it in kept }.joinToString("\n")
+    }
+
+    /**
+     * A master playlist with several qualities keeps only the best. VLC started on a lower one,
+     * which nothing had fetched ahead, then switched up: frames came too late and the picture
+     * stayed black for 30 seconds while the sound played.
+     */
+    private fun keepBestVariant(text: String): String {
+        val lines = text.lines()
+        val variants = lines.indices.filter { lines[it].trim().startsWith("#EXT-X-STREAM-INF") }
+        if (variants.size < 2) return text
+        val best = variants.maxBy { attribute(lines[it], "BANDWIDTH")?.toLongOrNull() ?: 0L }
+        // Each variant is its tag and the uri line after it
+        val dropped = variants.filter { it != best }.flatMap { i ->
+            listOf(i) + ((i + 1)..lines.lastIndex).firstOrNull { lines[it].isNotBlank() && !lines[it].trim().startsWith("#") }.let { listOfNotNull(it) }
+        }.toSet()
+        return lines.filterIndexed { i, _ -> i !in dropped }.joinToString("\n")
+    }
+
     /** Points every uri in the playlist at this proxy, resolved against the playlist's own url. */
-    internal fun rewritePlaylist(text: String, playlistUrl: String, session: String): String {
+    internal fun rewritePlaylist(original: String, playlistUrl: String, session: String): String {
+        val text = keepOneAudio(keepBestVariant(original), session)
         val base = playlistUrl.toHttpUrlOrNull()
         // OkHttp's parser, as java.net.URI rejects characters hosts do use, like the brackets in
         // "hi-in.[CC].m3u8", and a single bad line would fail the whole playlist
@@ -550,15 +845,31 @@ object StreamProxy {
             ?: runCatching { URI(playlistUrl).resolve(ref.trim()).toString() }.getOrNull()
         fun resolve(ref: String): String = absolute(ref)?.let { local(session, it) } ?: ref
 
+        // A master playlist: remember the first variant, whose length is the video's, and fetch
+        // every track's playlist ahead
+        if (text.contains("#EXT-X-STREAM-INF")) {
+            val lines = text.lineSequence().map { it.trim() }.toList()
+            val variants = lines.filterIndexed { i, line ->
+                line.isNotEmpty() && !line.startsWith("#") && lines.getOrNull(i - 1)?.startsWith("#EXT-X-STREAM-INF") == true
+            }.mapNotNull { absolute(it) }
+            variants.firstOrNull()?.let { firstVariant.putIfAbsent(session, it) }
+            val renditions = lines.filter { it.startsWith("#EXT-X-MEDIA:") }
+                .mapNotNull { uriAttribute.find(it)?.groupValues?.get(1) }.mapNotNull { absolute(it) }
+            // The first variant only: VLC starts there, and the others would waste the bandwidth
+            warm(session, variants.take(1) + renditions)
+        }
+
         // A media playlist: remember the segment order, for fetching ahead
         if (text.contains("#EXTINF")) {
+            // No end marker: a live stream, still growing
+            if (!text.contains("#EXT-X-ENDLIST")) liveSessions += session
             val order = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
                 .mapNotNull { absolute(it) }.toList()
             val index = segmentOrder.getOrPut(session) { ConcurrentHashMap() }
             order.forEachIndexed { i, url -> index[url] = order to i }
         }
 
-        return text.lineSequence().joinToString("\n") { line ->
+        return fixPlaceholderLength(text, session).lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line

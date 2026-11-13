@@ -46,7 +46,10 @@ actual object StreamGateway {
         _stats.asStateFlow()
     }
 
-    actual fun prepare(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean): StreamSource {
+    /** ExoPlayer downloads only the audio track it plays, so every language stays in the stream. */
+    actual fun audioChoices(source: StreamSource): Pair<List<String>, String>? = null
+
+    actual fun prepare(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean, audio: String?, clearKeys: Map<String, String>): StreamSource {
         val all = buildMap {
             put("User-Agent", USER_AGENT)
             if (!referer.isNullOrBlank()) put("Referer", referer)

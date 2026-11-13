@@ -134,14 +134,18 @@ class ParallelStreamTest {
             assertTrue(peak.get() >= 6, "expected parallel connections, peak was ${peak.get()}")
             assertTrue(parallel * 2 < single, "parallel ${parallel} ms should be well under single ${single} ms")
 
-            // HLS: asking for the first segment fetches the next ones ahead
+            // HLS: a first segment fetches only the next one (VLC may jump away from it to resume),
+            // reading on in order fetches further ahead
             val playlistUrl = StreamProxy.proxiedUrl("$base/hls/index.m3u8", null, emptyMap())
             val playlist = String(get(playlistUrl).second)
             val segmentUrls = playlist.lines().filter { it.startsWith("http") }
             assertEquals(10, segmentUrls.size)
             assertContentEquals(segments[0], get(segmentUrls[0]).second)
             Thread.sleep(500)
-            assertTrue(segmentHits.containsAll((1..8).toList()), "prefetched segments: $segmentHits")
+            assertEquals(setOf(0, 1), segmentHits.toSet(), "after the first segment")
+            assertContentEquals(segments[1], get(segmentUrls[1]).second)
+            Thread.sleep(500)
+            assertTrue(segmentHits.containsAll((2..9).toList()), "prefetched segments: $segmentHits")
             // Already prefetched, so it's served from memory with the right bytes
             assertContentEquals(segments[3], get(segmentUrls[3]).second)
             println("HLS segments fetched from host: ${segmentHits.sorted()}")

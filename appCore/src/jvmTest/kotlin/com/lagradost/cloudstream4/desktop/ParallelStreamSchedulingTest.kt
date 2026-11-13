@@ -103,6 +103,27 @@ class ParallelStreamSchedulingTest {
         }
     }
 
+    /** Resuming mid-file on a host that caps each connection: the first 2 MB must not come over one connection. */
+    @Test
+    fun freshReadUsesSeveralConnectionsOnThrottledHost() {
+        val server = server(bytesPerSecond = 330 * 1024)
+        try {
+            val stream = ParallelStream(client, "http://127.0.0.1:${server.address.port}/f", emptyMap(), file.size.toLong(), "video/mp4", 16)
+            val at = 30L * 1024 * 1024
+            val length = 2 * 1024 * 1024
+            val out = ByteArrayOutputStream()
+            val t = System.nanoTime()
+            stream.serve(at, at + length - 1, out)
+            val ms = (System.nanoTime() - t) / 1_000_000
+            println("2 MB from a fresh position in $ms ms (one connection at 330 KB/s takes about 6200 ms)")
+            assertContentEquals(file.copyOfRange(at.toInt(), at.toInt() + length), out.toByteArray())
+            assertTrue(ms < 3_500, "fresh read took $ms ms")
+            stream.close()
+        } finally {
+            server.stop(0)
+        }
+    }
+
     @Test
     fun backsOffWhenTheHostRefusesConnections() {
         val server = server(bytesPerSecond = 8 * 1024 * 1024, maxConnections = 3)
