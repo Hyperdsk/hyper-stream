@@ -728,11 +728,21 @@ object StreamProxy {
     }
 
     /** The total length of the media playlist at [url], or null when it can't be read. */
-    private fun mediaLength(session: String, url: String): Double? = videoLength[session]
-        ?: runBlocking { playlist(session, url).await() }?.second
-            ?.let { text -> extinf.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 } }
-            ?.takeIf { it > 0 && it < PLACEHOLDER_SECONDS }
-            ?.also { videoLength[session] = it }
+    private fun mediaLength(session: String, url: String): Double? {
+        videoLength[session]?.let { return it }
+        // Hosts time out often (Connect timed out): one failed fetch left the movie 27 hours long
+        repeat(3) { attempt ->
+            val text = runBlocking { playlist(session, url).await() }?.second
+            if (text != null) {
+                return extinf.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
+                    .takeIf { it > 0 && it < PLACEHOLDER_SECONDS }?.also { videoLength[session] = it }
+            }
+            playlists.remove("$session|$url")
+            videoLength[session]?.let { return it }
+            Thread.sleep(1_000L * (attempt + 1))
+        }
+        return null
+    }
 
     /** A playlist of [session] as (its final url, its text), fetched once and shared. */
     private fun playlist(session: String, url: String): Deferred<Pair<String, String>?> = playlists.getOrPut("$session|$url") {
@@ -883,6 +893,11 @@ object StreamProxy {
                 .mapNotNull { absolute(it) }.toList()
             val index = segmentOrder.getOrPut(session) { ConcurrentHashMap() }
             order.forEachIndexed { i, url -> index[url] = order to i }
+            // A real track's length, noted on the way through: the subtitle fix needs no fetch then
+            if (order.size > 1) {
+                extinf.findAll(text).sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
+                    .takeIf { it > 0 && it < PLACEHOLDER_SECONDS }?.let { total -> videoLength.merge(session, total) { a, b -> maxOf(a, b) } }
+            }
         }
 
         return fixPlaceholderLength(text, session).lineSequence().joinToString("\n") { line ->

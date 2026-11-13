@@ -28,7 +28,14 @@ class HlsPlaceholderLengthTest {
                 #EXT-X-STREAM-INF:BANDWIDTH=1000000,SUBTITLES="subs"
                 1080p/index.m3u8
             """.trimIndent())
-            reply("/1080p/index.m3u8", "#EXTM3U\n#EXTINF:4.0,\na.ts\n#EXTINF:4.0,\nb.ts\n#EXTINF:2.5,\nc.ts\n#EXT-X-ENDLIST\n")
+            // The host times out the first time it's asked for the video playlist, as Alpha's did
+            val videoHits = java.util.concurrent.atomic.AtomicInteger()
+            createContext("/1080p/index.m3u8") { ex ->
+                if (videoHits.incrementAndGet() == 1) { ex.sendResponseHeaders(503, -1); ex.close(); return@createContext }
+                val bytes = "#EXTM3U\n#EXTINF:4.0,\na.ts\n#EXTINF:4.0,\nb.ts\n#EXTINF:2.5,\nc.ts\n#EXT-X-ENDLIST\n".toByteArray()
+                ex.sendResponseHeaders(200, bytes.size.toLong())
+                ex.responseBody.use { it.write(bytes) }
+            }
             reply("/subs/hi.m3u8", "#EXTM3U\n#EXT-X-TARGETDURATION:99999\n#EXTINF:99999,\nhi.vtt\n#EXT-X-ENDLIST\n")
             start()
         }

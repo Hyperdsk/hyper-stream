@@ -40,6 +40,16 @@ class RealStreamStartTest {
             val l = links.first { it.type == ExtractorLinkType.M3U8 }
             val text = runBlocking { com.lagradost.cloudstream3.app.get(l.url, headers = l.headers + listOfNotNull(l.referer.takeIf { it.isNotBlank() }?.let { "Referer" to it })).text }
             File(out).writeText(text)
+            // Each track playlist: how many segments and the longest one
+            val hdrs = l.headers + listOfNotNull(l.referer.takeIf { it.isNotBlank() }?.let { "Referer" to it })
+            val base = java.net.URI(l.url)
+            val uris = Regex("URI=\"([^\"]+)\"").findAll(text).map { it.groupValues[1] }.toList() +
+                text.lines().filter { it.isNotBlank() && !it.startsWith("#") }.take(1)
+            uris.forEach { u ->
+                val pl = runCatching { runBlocking { com.lagradost.cloudstream3.app.get(base.resolve(u).toString(), headers = hdrs).text } }.getOrElse { "ERR $it" }
+                val d = Regex("#EXTINF:\\s*([0-9.]+)").findAll(pl).map { it.groupValues[1].toDouble() }.toList()
+                println("TRACK ${u.substringBefore('?').takeLast(50)}: ${d.size} segments, longest ${d.maxOrNull()}, total ${d.sum()}, endlist=${"EXT-X-ENDLIST" in pl}")
+            }
         }
         println("${now()} ms: ${links.size} links: ${links.map { "${it.name} ${it.type} ${it.quality}" }}")
         val link = links.first { it.type == ExtractorLinkType.M3U8 }
