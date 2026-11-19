@@ -1,6 +1,8 @@
 package com.lagradost.cloudstream4.desktop.plugins
 
 import android.content.Context
+import android.content.res.AssetManager
+import android.content.res.Resources
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream4.desktop.AndroidHost
@@ -41,12 +43,25 @@ actual object PluginLoader {
         try {
             val instance = classLoader.loadClass(className).getDeclaredConstructor().newInstance() as BasePlugin
             instance.filename = file.absolutePath
+            // Before load(): extensions that ship files (scripts, lists, images) read them from
+            // their own resources there, and failed on every title without them
+            if (manifest.requiresResources && instance is Plugin) instance.resources = resourcesOf(file)
             if (instance is Plugin) instance.load(loadContext) else instance.load()
             return LoadedPlugin(file, manifest, instance, classLoader).also { loaded[file.absolutePath] = it }
         } catch (t: Throwable) {
             removePluginRegistrations(file.absolutePath)
             throw PluginLoadException(describe(t), t)
         }
+    }
+
+    /** The .cs3's own resources and assets, as the CloudStream app makes them. */
+    private fun resourcesOf(file: File): Resources {
+        val assets = AssetManager::class.java.getDeclaredConstructor().newInstance()
+        // Hidden, but how every app loads another package's resources, the CloudStream app included
+        AssetManager::class.java.getMethod("addAssetPath", String::class.java).invoke(assets, file.absolutePath)
+        val host = AndroidHost.context.resources
+        @Suppress("DEPRECATION")
+        return Resources(assets, host.displayMetrics, host.configuration)
     }
 
     @Synchronized

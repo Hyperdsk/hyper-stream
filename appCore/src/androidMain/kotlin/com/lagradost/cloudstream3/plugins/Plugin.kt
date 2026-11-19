@@ -15,7 +15,7 @@ abstract class Plugin : BasePlugin() {
         load()
     }
 
-    /** The extension's own resources. Not loaded by this app, so this stays null. */
+    /** The extension's own resources and assets, when its manifest says it needs them (requiresResources). */
     var resources: Resources? = null
 
     /** Extensions may set this to show a settings screen. Not shown by this app yet. */
