@@ -54,6 +54,13 @@ data class HistoryEntry(
     /** Counts as watched near the end, matching the Android app's 95% threshold. */
     @get:JsonIgnore
     val finished: Boolean get() = progress >= 0.95f
+
+    /**
+     * Where to resume. A length of a day or more came from a placeholder subtitle playlist (see
+     * StreamProxy), and its position may be past the real end, where playback never starts.
+     */
+    @get:JsonIgnore
+    val resumeMs: Long get() = if (durationMs >= 86_400_000L) 0L else positionMs
 }
 
 data class LibraryState(

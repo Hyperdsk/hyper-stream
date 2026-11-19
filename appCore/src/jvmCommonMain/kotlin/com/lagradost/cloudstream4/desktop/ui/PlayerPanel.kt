@@ -123,7 +123,7 @@ fun BoxScope.PlayerPanel(
                 val count = when (t) {
                     PanelTab.Sources -> ui.links.size
                     PanelTab.Subtitles -> playback.subtitleTracks.count { it.id >= 0 }
-                    PanelTab.Audio -> playback.audioTracks.count { it.id >= 0 }
+                    PanelTab.Audio -> model.audioChoices()?.first?.size ?: playback.audioTracks.count { it.id >= 0 }
                 }
                 val selected = t == tab
                 Column(
@@ -451,6 +451,15 @@ private fun SubtitlesTab(ui: PlayerUiState, playback: PlaybackState, model: Play
 @Composable
 private fun AudioTab(playback: PlaybackState, model: PlayerModel) {
     val player = model.player ?: return
+    // An HLS stream the player got one language of: list them all, picking one reloads the stream
+    model.audioChoices()?.let { (names, playing) ->
+        LazyColumn(contentPadding = PaddingValues(12.dp)) {
+            items(names, key = { "hls-audio-$it" }) { name ->
+                TrackRow(name, name == playing) { model.pickHlsAudio(name) }
+            }
+        }
+        return
+    }
     val tracks = playback.audioTracks.filter { it.id >= 0 }
     LazyColumn(contentPadding = PaddingValues(12.dp)) {
         if (tracks.isEmpty()) {

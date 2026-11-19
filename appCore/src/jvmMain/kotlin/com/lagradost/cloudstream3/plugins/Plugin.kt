@@ -21,7 +21,7 @@ abstract class Plugin : BasePlugin() {
         load()
     }
 
-    /** Extension resources are not available on desktop, so this stays null. */
+    /** Only the extension's assets on desktop (see android.content.res.AssetManager); set by the loader. */
     var resources: Resources? = null
 
     /** Extensions may set this to show a settings screen. Android-only, ignored on desktop. */

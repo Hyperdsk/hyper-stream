@@ -223,7 +223,7 @@ private fun HeroText(item: HeroItem, open: (Route) -> Unit) {
                 // Movies play straight away (resuming where you were); shows open their page to choose an episode
                 val data = (details as? MovieLoadResponse)?.dataUrl ?: (details as? LiveStreamLoadResponse)?.dataUrl
                 if (details != null && data != null) {
-                    val resume = library.progress(item.search.apiName, data)?.takeIf { !it.finished }?.positionMs ?: 0
+                    val resume = library.progress(item.search.apiName, data)?.takeIf { !it.finished }?.resumeMs ?: 0
                     open(
                         Route.Player(
                             PlayRequest(

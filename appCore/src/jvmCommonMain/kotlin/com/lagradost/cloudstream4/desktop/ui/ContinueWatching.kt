@@ -66,7 +66,7 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.decodeToImageBitmap
 import java.io.File
 
-/** "Continue watching", Netflix style: where you stopped, with the poster on hover. */
+/** "Continue watching": each title's banner, with where you stopped on hover. */
 @Composable
 fun ContinueWatchingRow(entries: List<HistoryEntry>) {
     if (entries.isEmpty()) return
@@ -99,7 +99,7 @@ fun HistoryEntry.resumeRequest() = PlayRequest(
     posterHeaders = posterHeaders,
     episodes = listOf(PlayableEpisode(episodeData, episodeName, season, episode)),
     index = 0,
-    startMs = positionMs,
+    startMs = resumeMs,
 )
 
 @Composable
@@ -118,8 +118,9 @@ fun ContinueWatchingCard(entry: HistoryEntry, onPlay: () -> Unit, onDetails: () 
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clickable(interactionSource = interaction, indication = null, onClick = onPlay),
         ) {
-            // Where you stopped; the original poster fades in on hover, or when there is no picture yet
-            Crossfade(targetState = hovered || snapshot == null, animationSpec = tween(250)) { showPoster ->
+            // The title's banner; where you stopped fades in on hover. A snapshot alone often showed a
+            // studio logo or a black frame from the opening, so the cards were hard to tell apart
+            Crossfade(targetState = !hovered || snapshot == null, animationSpec = tween(250)) { showPoster ->
                 if (showPoster || snapshot == null) {
                     WideImage(entry.posterUrl, entry.posterHeaders, Modifier.fillMaxSize())
                 } else {

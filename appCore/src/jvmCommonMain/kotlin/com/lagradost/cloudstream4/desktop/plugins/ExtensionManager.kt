@@ -97,7 +97,11 @@ object ExtensionManager {
             // Before any extension loads, so ids they add are stored under the right keys
             com.lagradost.cloudstream4.desktop.LibrarySetup.init()
             val savedRepos = reposFile.read()
-            val savedInstalled = installedFile.read()
+            val savedInstalled = installedFile.read().let { list ->
+                val moved = list.map { p -> p.copy(filePath = inExtensionsFolder(p.filePath)) }
+                if (moved != list) installedFile.write(moved)
+                moved
+            }
             // Merged, so anything added while the files were being read stays
             _state.update {
                 it.copy(
@@ -110,9 +114,14 @@ object ExtensionManager {
             loadAllInstalled()
             // Checking repositories for updates can wait until the first screen has loaded
             delay(REFRESH_DELAY_MS)
-            _state.value.repositories.forEach { refreshRepository(it.data.url) }
+            // The Extensions screen may have loaded them already (see loadPendingRepositories)
+            _state.value.repositories.filter { it.repository == null && !it.loading }.forEach { refreshRepository(it.data.url) }
         }
     }
+
+    /** Loads repositories not loaded yet now, instead of after the startup delay: someone is looking at them. */
+    fun loadPendingRepositories() =
+        _state.value.repositories.filter { it.repository == null && !it.loading && it.error == null }.forEach { refreshRepository(it.data.url) }
 
     private const val REFRESH_DELAY_MS = 15_000L
 
@@ -380,6 +389,19 @@ object ExtensionManager {
     }
 
     // ---------- Loading ----------
+
+    /**
+     * [path] as it is now that the data folder has moved (1.2.12 renamed CloudStream to
+     * HyperStream): installed extensions are listed by absolute path, so after the move every one
+     * pointed into a folder that no longer exists, and none loaded. Unchanged if it still exists.
+     */
+    internal fun inExtensionsFolder(path: String, extensions: File = AppDirs.extensions): String {
+        if (File(path).exists()) return path
+        val marker = "${File.separator}${extensions.name}${File.separator}"
+        val inside = path.substringAfterLast(marker, "").takeIf { it.isNotEmpty() } ?: return path
+        val moved = File(extensions, inside)
+        return if (moved.exists()) moved.absolutePath else path
+    }
 
     private fun loadAllInstalled() {
         val files = _state.value.installed.map { File(it.filePath) } + localFiles()

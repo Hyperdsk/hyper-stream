@@ -119,7 +119,7 @@ tasks.withType<Test>().configureEach {
     maxHeapSize = providers.environmentVariable("CS_TEST_HEAP").orElse("2g").get()
     // Tests never touch the real app's data (library, settings, sync sign-in): the data folder is
     // chosen once per test run, so a test that reads a store before picking its own folder still
-    // lands here rather than in ~/Library/Application Support/CloudStream
+    // lands here rather than in the real data folder
     val testData = layout.buildDirectory.dir("test-data").get().asFile
     doFirst { testData.deleteRecursively(); testData.mkdirs() }
     systemProperty("cloudstream.dataDir", testData.path)

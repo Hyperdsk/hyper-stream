@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,6 +86,7 @@ fun ExtensionsScreen() {
 @Composable
 private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
     val state by ExtensionManager.state.collectAsState()
+    LaunchedEffect(state.repositories.size) { ExtensionManager.loadPendingRepositories() }
     var input by remember { mutableStateOf("") }
     // A repository over plain http: anyone on the network (public Wi-Fi, the ISP) could swap its
     // extensions for harmful code, which then runs inside the app. Ask before adding one
@@ -123,7 +125,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
             } })
             Text(
                 "Extensions are the same files the Android app uses. Add a repository by link or short code, " +
-                    "paste a list of repositories to add them all" + if (Platform.canOpenFolders) ", or drop .cs3 files into the extensions folder." else ".",
+                    "paste a list of repositories to add them all, type \"all\" for every community repository" + if (Platform.canOpenFolders) ", or drop .cs3 files into the extensions folder." else ".",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -134,7 +136,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
-                        label = { Text("Repository link or code") },
+                        label = { Text("Repository link, code, or \"all\"") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { if (input.isNotBlank()) { addChecked(input); input = "" } }),
@@ -165,7 +167,7 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
         val repos = state.repositories.filter {
             matches(q, it.repository?.name ?: it.data.name, it.repository?.description, it.data.url)
         }
-        item { SectionTitle(if (q.isEmpty()) "Repositories" else "Repositories (${repos.size})") }
+        item { SectionTitle(if (q.isEmpty()) "Repositories (${state.repositories.size})" else "Repositories (${repos.size} of ${state.repositories.size})") }
         if (repos.isEmpty()) {
             item { Hint(if (q.isEmpty()) "No repositories added." else "No repositories match.") }
         }
@@ -203,7 +205,10 @@ private fun ExtensionsOverview(onOpenRepo: (String) -> Unit) {
         val localFiles = state.status.keys
             .filter { path -> state.installed.none { it.filePath == path } }
             .filter { matches(q, java.io.File(it).nameWithoutExtension) }
-        item { SectionTitle("Installed") }
+        // Loose .cs3 files in the folder are listed here too, so they count
+        val installedTotal = state.installed.size + state.status.keys.count { path -> state.installed.none { it.filePath == path } }
+        val installedShown = installed.size + localFiles.size
+        item { SectionTitle(if (q.isEmpty()) "Installed ($installedTotal)" else "Installed ($installedShown of $installedTotal)") }
         if (installed.isEmpty() && localFiles.isEmpty()) {
             item { Hint(if (q.isEmpty()) "No extensions installed." else "No installed extensions match.") }
         }
@@ -254,7 +259,8 @@ private fun RepoCard(repo: RepositoryState, onClick: () -> Unit) {
                     Text(repo.repository?.name ?: repo.data.name, style = MaterialTheme.typography.titleSmall)
                     Text(
                         when {
-                            repo.loading -> "Loading…"
+                            // Not loaded yet (the app waits a moment after starting): not "0 extensions"
+                            repo.loading || (repo.repository == null && repo.error == null) -> "Loading…"
                             repo.error != null -> repo.error
                             repo.data.url.startsWith("http://", ignoreCase = true) -> "Not secure (http) · ${repo.plugins.size} extensions"
                             else -> "${repo.plugins.size} extensions" + (repo.repository?.description?.let { " · $it" } ?: "")

@@ -6,8 +6,10 @@ import kotlinx.coroutines.flow.StateFlow
 actual object StreamGateway {
     actual val stats: StateFlow<StreamStats> get() = StreamProxy.stats
 
-    actual fun prepare(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean): StreamSource =
-        StreamSource(StreamProxy.proxiedUrl(url, referer, headers, parallel))
+    actual fun prepare(url: String, referer: String?, headers: Map<String, String>, parallel: Boolean, audio: String?, clearKeys: Map<String, String>): StreamSource =
+        StreamSource(StreamProxy.proxiedUrl(url, referer, headers, parallel, audio, clearKeys))
+
+    actual fun audioChoices(source: StreamSource): Pair<List<String>, String>? = StreamProxy.audioChoices(source.url)
 
     actual fun clear() = StreamProxy.clear()
 

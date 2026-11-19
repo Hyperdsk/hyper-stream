@@ -33,7 +33,7 @@ private class Abandoned : IOException("No longer needed")
  * Streams one video file over several connections at once, the way the multi-part downloader
  * downloads it.
  *
- * The file is split into 2 MB chunks. A small pool of workers fetches them with HTTP Range
+ * The file is split into 512 KB chunks. A small pool of workers fetches them with HTTP Range
  * requests for everything the player is reading:
  *
  * - The chunk a reader is waiting on always goes first, so a seek never queues behind
@@ -87,13 +87,14 @@ internal class ParallelStream(
         val window: Int
             get() = when {
                 lowPriority -> 1
-                delivered < 1L shl 20 -> 1
-                delivered < 8L shl 20 -> 4
+                // 2 MB over 4 connections: hosts that cap each connection still start fast
+                delivered < 1L shl 20 -> 4
+                delivered < 8L shl 20 -> 16
                 else -> WINDOW
             }
     }
 
-    /** A 2 MB piece, filled as it downloads so the player gets bytes as soon as they arrive. */
+    /** A 512 KB piece, filled as it downloads so the player gets bytes as soon as they arrive. */
     private class Chunk(val length: Int) {
         val bytes = ByteArray(length)
         val filled = MutableStateFlow(0)
@@ -386,11 +387,11 @@ internal class ParallelStream(
     }
 
     companion object {
-        const val CHUNK = 2L shl 20
+        const val CHUNK = 512L shl 10
         /** Chunks fetched ahead of a reader: 32 MB. */
-        const val WINDOW = 16
+        const val WINDOW = 64
         /** Chunks kept in memory: 96 MB. */
-        const val MAX_CACHED = 48
+        const val MAX_CACHED = 192
         const val START_CONNECTIONS = 4
         /** A chunk faster than this lets the pool grow by one connection. */
         const val FAST = 512.0 * 1024

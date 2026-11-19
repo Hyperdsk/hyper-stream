@@ -296,6 +296,6 @@ internal fun downloadPlayRequest(entry: DownloadEntry, done: List<DownloadEntry>
         posterHeaders = entry.posterHeaders,
         episodes = done.map { it.playable },
         index = done.indexOfFirst { it.id == entry.id }.coerceAtLeast(0),
-        startMs = progress?.takeIf { !it.finished }?.positionMs ?: 0,
+        startMs = progress?.takeIf { !it.finished }?.resumeMs ?: 0,
     )
 }
