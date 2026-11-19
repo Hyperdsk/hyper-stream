@@ -273,6 +273,15 @@ object DownloadManager {
             .forEach { pause(it.id) }
     }
 
+    /** Whether anything is downloading or waiting to. */
+    val anyActive: Boolean
+        get() = _entries.value.any { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }
+
+    /** Pauses everything that's downloading or waiting, such as before quitting. */
+    fun pauseEverything() {
+        _entries.value.filter { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }.forEach { pause(it.id) }
+    }
+
     /** Resumes or retries every unfinished download of one title. */
     fun resumeAll(apiName: String, parentUrl: String) {
         _entries.value.filter { it.apiName == apiName && it.parentUrl == parentUrl }

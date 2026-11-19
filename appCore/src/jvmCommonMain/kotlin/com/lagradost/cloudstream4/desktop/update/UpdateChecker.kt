@@ -215,10 +215,14 @@ object UpdateChecker {
                 Regex("""-windows-x64\.msi$""", RegexOption.IGNORE_CASE),
                 Regex("""-windows-x64-portable\.zip$""", RegexOption.IGNORE_CASE),
             )
+            // A copy unpacked by hand updates with the same kind of file: an installer would put a second copy elsewhere
+            UpdateTarget.WindowsPortable -> listOf(Regex("""-windows-x64-portable\.zip$""", RegexOption.IGNORE_CASE))
             UpdateTarget.Linux -> listOf(
                 Regex("""-linux-x64\.deb$""", RegexOption.IGNORE_CASE),
                 Regex("""-linux-x64\.tar\.gz$""", RegexOption.IGNORE_CASE),
             )
+            // Unpacked by hand, or a system without Debian packages (Fedora, Arch...)
+            UpdateTarget.LinuxPortable -> listOf(Regex("""-linux-x64\.tar\.gz$""", RegexOption.IGNORE_CASE))
         }
         for (pattern in patterns) {
             val match = assets.firstOrNull { pattern.containsMatchIn(it.path("name").asText("")) }

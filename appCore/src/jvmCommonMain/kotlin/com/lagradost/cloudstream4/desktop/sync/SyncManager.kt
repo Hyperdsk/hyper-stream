@@ -73,6 +73,12 @@ data class SyncStore(
      * another device that synced in the meantime.
      */
     @JsonProperty("settingTimes") val settingTimes: Map<String, Long> = emptyMap(),
+    /** The account this device last synced with, kept after signing out, to notice a switch to another one. */
+    @JsonProperty("lastUserId") val lastUserId: String? = null,
+    /** Signed in to a different account than before: nothing syncs until the user says what to do with this device's library. */
+    @JsonProperty("awaitingChoice") val awaitingChoice: Boolean = false,
+    /** Repositories from other devices the user chose not to add here. */
+    @JsonProperty("declinedRepositories") val declinedRepositories: Set<String> = emptySet(),
 )
 
 data class SyncUiState(
@@ -92,6 +98,13 @@ data class SyncUiState(
     val resetSentTo: String? = null,
     /** Signed in to reset the password: ask for the new one. */
     val choosingPassword: Boolean = false,
+    /** Signed in to another account than before: ask whether to keep this device's library in it. */
+    val askMerge: Boolean = false,
+    /**
+     * Repositories the account's other devices use that aren't added here. They run code, so they're
+     * only added when the user says so, never just because the account lists them.
+     */
+    val suggestedRepositories: List<RepositoryData> = emptyList(),
 ) {
     val signedIn: Boolean get() = email != null
 }
@@ -139,13 +152,16 @@ object SyncManager {
         SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t -> System.err.println("Sync: $t") },
     )
     private val refreshLock = Mutex()
-    private val file = jsonFile<SyncStore>("sync.json") { SyncStore() }
+    // Holds the account's session: readable by this user only
+    private val file = jsonFile<SyncStore>("sync.json", private = true) { SyncStore() }
     private var store = file.read()
     private val lock = Mutex()
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var loop: Job? = null
 
-    private val _ui = MutableStateFlow(SyncUiState(email = store.session?.email, lastSyncedAt = store.lastSyncedAt))
+    private val _ui = MutableStateFlow(
+        SyncUiState(email = store.session?.email, lastSyncedAt = store.lastSyncedAt, askMerge = store.session != null && store.awaitingChoice)
+    )
     val ui: StateFlow<SyncUiState> = _ui.asStateFlow()
 
     // One at a time: a pass and the settings watcher both save, and each reads the store first
@@ -391,14 +407,61 @@ object SyncManager {
     fun skipNewPassword() = _ui.update { it.copy(choosingPassword = false) }
 
     private fun signedIn(session: SyncSession, email: String?, choosingPassword: Boolean = false) {
-        // A new account starts from this device's data; known items from another account don't apply
+        SignInRedirect.stop()
         val previous = store.session?.userId
-        save { if (previous == session.userId) it.copy(session = session) else SyncStore(session = session.copy(email = session.email ?: email)) }
-        _ui.update { SyncUiState(email = session.email ?: email, choosingPassword = choosingPassword) }
+        // Another account than the one this device used before, with a library of its own: ask
+        // before sending it there, instead of merging two people's libraries without a word
+        val before = previous ?: store.lastUserId
+        val library = LibraryStore.state.value
+        val switching = before != null && before != session.userId && (library.history.isNotEmpty() || library.bookmarks.isNotEmpty())
+        save {
+            if (previous == session.userId) it.copy(session = session, lastUserId = session.userId)
+            // A new account starts from this device's data; known items from another account don't apply
+            else SyncStore(
+                session = session.copy(email = session.email ?: email),
+                lastUserId = session.userId,
+                awaitingChoice = switching,
+                declinedRepositories = if (before == session.userId) it.declinedRepositories else emptySet(),
+            )
+        }
+        _ui.update { SyncUiState(email = session.email ?: email, choosingPassword = choosingPassword, askMerge = switching) }
         requestSync()
     }
 
+    /**
+     * After signing in to another account: [keepThisDevice] adds this device's library to it;
+     * otherwise this device's progress, library, searches and remembered sources are replaced by
+     * the account's.
+     */
+    fun chooseMerge(keepThisDevice: Boolean) = scope.launch {
+        lock.withLock {
+            if (!keepThisDevice) {
+                LibraryStore.clearAll()
+                SearchHistory.clear()
+                SourceMemory.clear()
+            }
+            save { it.copy(awaitingChoice = false) }
+        }
+        _ui.update { it.copy(askMerge = false) }
+        requestSync()
+    }
+
+    /** Adds the repositories the account's other devices use; their extensions then install here too. */
+    fun addSuggestedRepositories() = scope.launch {
+        _ui.value.suggestedRepositories.forEach { ExtensionManager.addRepositoryData(it) }
+        _ui.update { it.copy(suggestedRepositories = emptyList()) }
+        requestSync()
+    }
+
+    /** Leaves the other devices' repositories off this one, and stops suggesting them. */
+    fun declineSuggestedRepositories() {
+        val urls = _ui.value.suggestedRepositories.map { it.url }
+        save { it.copy(declinedRepositories = it.declinedRepositories + urls) }
+        _ui.update { it.copy(suggestedRepositories = emptyList()) }
+    }
+
     fun cancelCode() {
+        SignInRedirect.stop()
         save { it.copy(pendingEmail = null, pendingAt = null) }
         _ui.update { it.copy(codeSentTo = null, error = null) }
     }
@@ -406,7 +469,7 @@ object SyncManager {
     /** Stops syncing on this device. Its data stays as it is. */
     fun signOut() = scope.launch {
         val session = store.session
-        lock.withLock { save { SyncStore() } }
+        lock.withLock { save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) } }
         _ui.value = SyncUiState()
         if (session != null) SupabaseClient.signOut(session)
     }
@@ -439,7 +502,7 @@ object SyncManager {
             fresh.also { save { it.copy(session = fresh) } }
         } catch (e: SyncAuthException) {
         // The session was revoked or expired for good: sign in again
-        save { SyncStore() }
+        save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) }
             _ui.value = SyncUiState(error = "Signed out of sync. Sign in again to keep syncing.")
             null
         }
@@ -451,7 +514,8 @@ object SyncManager {
     // ---------- Syncing ----------
 
     suspend fun syncNow() = lock.withLock {
-        if (store.session == null) return@withLock
+        // Waiting for the user to say what happens to this device's library in a new account
+        if (store.session == null || store.awaitingChoice) return@withLock
         _ui.update { it.copy(syncing = true) }
         try {
             // Inside the try: refreshing needs the network, which may be down
@@ -554,6 +618,7 @@ object SyncManager {
 
         // Extensions waiting for their repository to load
         retryPending()
+        updateSuggestions()
 
         // Push what changed here since the last pass
         val now = System.currentTimeMillis()
@@ -668,10 +733,9 @@ object SyncManager {
             if (key !in deviceSettings) mergeSettings(mapOf(key to (value as Map<String, Any?>)["value"]))
             true
         }
-        REPOSITORY -> {
-            val data = value as RepositoryData
-            ExtensionManager.repositories().any { it.url == data.url } || ExtensionManager.addRepositoryData(data)
-        }
+        // Only repositories the user added on this device, or agreed to add (see suggestedRepositories):
+        // the others wait as pending
+        REPOSITORY -> ExtensionManager.repositories().any { it.url == (value as RepositoryData).url }
         EXTENSION -> installExtension(value as Map<String, Any?>)
         SEARCH -> { SearchHistory.applyRemote(key, value as SearchHistoryEntry); true }
         else -> true
@@ -728,6 +792,22 @@ object SyncManager {
             }
         }
         save { it.copy(pending = pending, known = known) }
+    }
+
+    /** Repositories other devices added that wait for the user here, shown in Settings, Sync. */
+    private fun updateSuggestions() {
+        val added = ExtensionManager.repositories().map { it.url }.toSet()
+        val suggested = store.pending.values.filter { it.kind == REPOSITORY }
+            .mapNotNull { decode(it.kind, it.data) as? RepositoryData }
+            .filter { it.url !in added && it.url !in store.declinedRepositories }
+            .distinctBy { it.url }
+        val before = _ui.value.suggestedRepositories.map { it.url }.toSet()
+        _ui.update { it.copy(suggestedRepositories = suggested) }
+        if (suggested.any { it.url !in before }) {
+            com.lagradost.cloudstream4.desktop.DesktopToasts.show(
+                "Your other devices use ${suggested.size} ${if (suggested.size == 1) "repository" else "repositories"} not added here. Open Settings, Sync to add them."
+            )
+        }
     }
 
     private fun removeLocal(kind: String, key: String) {

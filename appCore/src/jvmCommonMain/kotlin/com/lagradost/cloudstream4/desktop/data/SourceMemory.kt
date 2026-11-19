@@ -36,6 +36,13 @@ object SourceMemory {
     }
 
     @Synchronized
+    fun clear() {
+        load().clear()
+        file.write(emptyMap())
+        changes.value++
+    }
+
+    @Synchronized
     fun get(key: String): RememberedSource? = load()[key]
 
     @Synchronized

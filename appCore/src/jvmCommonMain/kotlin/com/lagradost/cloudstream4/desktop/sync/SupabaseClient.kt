@@ -93,10 +93,12 @@ object SupabaseClient {
             .toMap()
         params["error_description"]?.let { throw IOException(it.replace('+', ' ')) }
         val access = params["access_token"] ?: throw IOException("The link has no sign-in in it. Copy the whole address.")
+        // Without it the session would end in an hour with nothing to renew it
+        val refresh = params["refresh_token"]?.takeIf { it.isNotBlank() } ?: throw IOException("The link has no sign-in in it. Copy the whole address.")
         val user = call(request("/auth/v1/user").header("Authorization", "Bearer $access").get())
         return SyncSession(
             accessToken = access,
-            refreshToken = params["refresh_token"].orEmpty(),
+            refreshToken = refresh,
             expiresAt = System.currentTimeMillis() + (params["expires_in"]?.toLongOrNull() ?: 3600) * 1000,
             userId = user?.get("id")?.asText().orEmpty(),
             email = user?.get("email")?.asText(),

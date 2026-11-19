@@ -117,6 +117,12 @@ tasks.withType<Test>().configureEach {
     inputs.property("csCompatDir", providers.environmentVariable("CS_COMPAT_DIR").orElse(""))
     // The compatibility sweep loads many extensions in one JVM
     maxHeapSize = providers.environmentVariable("CS_TEST_HEAP").orElse("2g").get()
+    // Tests never touch the real app's data (library, settings, sync sign-in): the data folder is
+    // chosen once per test run, so a test that reads a store before picking its own folder still
+    // lands here rather than in ~/Library/Application Support/CloudStream
+    val testData = layout.buildDirectory.dir("test-data").get().asFile
+    doFirst { testData.deleteRecursively(); testData.mkdirs() }
+    systemProperty("cloudstream.dataDir", testData.path)
 }
 
 // Index of the Android app's own classes (parent class, interface or not), read from its sources.

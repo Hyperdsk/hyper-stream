@@ -17,9 +17,19 @@ actual object SignInRedirect {
 
     actual val url: String? get() = if (server != null) "http://127.0.0.1:$PORT/auth" else null
 
+    /** Stops listening once a link can't be valid any more (it lasts an hour; sign-in waits two). */
+    private var expiry: java.util.Timer? = null
+
     @Synchronized
     actual fun prepare() {
+        generation++
+        expiry?.cancel()
+        expiry = java.util.Timer("sign-in-page", true).apply {
+            schedule(object : java.util.TimerTask() { override fun run() = stop() }, 2 * 60 * 60_000L)
+        }
         if (server != null) return
+        // When the port is taken, url stays null: the email's link then can't return here, and the
+        // sign-in screen asks for the link to be pasted instead
         server = runCatching {
             HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), PORT), 0).apply {
                 createContext("/auth") { ex -> ex.send(PAGE, "text/html") }
@@ -30,6 +40,29 @@ actual object SignInRedirect {
                 start()
             }
         }.getOrNull()
+    }
+
+    /** Bumped by [prepare], so a stop asked for before a new sign-in email doesn't close the page it needs. */
+    private var generation = 0
+
+    /**
+     * Stops shortly after: sign-in usually finishes inside this server's own request, whose answer
+     * ("You're signed in") must still reach the page.
+     */
+    @Synchronized
+    actual fun stop() {
+        expiry?.cancel()
+        expiry = null
+        val asked = generation
+        Thread({
+            Thread.sleep(2_000)
+            synchronized(this) {
+                if (generation == asked) {
+                    server?.stop(0)
+                    server = null
+                }
+            }
+        }, "sign-in-page-stop").apply { isDaemon = true }.start()
     }
 
     private fun HttpExchange.send(text: String, type: String) {

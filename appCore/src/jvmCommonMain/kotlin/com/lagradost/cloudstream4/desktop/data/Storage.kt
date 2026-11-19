@@ -48,6 +48,8 @@ class JsonFile<T : Any>(
     name: String,
     private val type: TypeReference<T>,
     private val default: () -> T,
+    /** Readable by this user only (POSIX systems), for files holding a sign-in. */
+    private val private: Boolean = false,
 ) {
     private val file = File(AppDirs.data, name)
 
@@ -64,6 +66,12 @@ class JsonFile<T : Any>(
     @Synchronized
     fun write(value: T) {
         val tmp = File(file.parentFile, "${file.name}.tmp")
+        if (private) {
+            tmp.delete()
+            runCatching {
+                Files.createFile(tmp.toPath(), java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")))
+            }
+        }
         java.io.FileOutputStream(tmp).use { out ->
             out.write(jsonMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(value))
             out.fd.sync()
@@ -99,8 +107,13 @@ class JsonFile<T : Any>(
 
     companion object {
         private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "data-writer").apply { isDaemon = true } }
+
+        /** Waits (briefly) for saves still queued by [writeSoon], before the app quits. */
+        fun flushAll() {
+            runCatching { writer.submit {}.get(3, java.util.concurrent.TimeUnit.SECONDS) }
+        }
     }
 }
 
-inline fun <reified T : Any> jsonFile(name: String, noinline default: () -> T): JsonFile<T> =
-    JsonFile(name, object : TypeReference<T>() {}, default)
+inline fun <reified T : Any> jsonFile(name: String, private: Boolean = false, noinline default: () -> T): JsonFile<T> =
+    JsonFile(name, object : TypeReference<T>() {}, default, private)

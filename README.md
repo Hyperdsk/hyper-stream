@@ -24,7 +24,7 @@ Get the latest builds from [Releases](https://github.com/Hyperdsk/hyper-stream/r
 
 ## Features
 
-- **No ads, no tracking.**
+- **No ads, no analytics.** Some features look titles up online; see [Online services](#online-services).
 - **Extensions:** add repositories and install extensions as in CloudStream. On Android they load
   as they are; on desktop they're converted to run on the JVM.
 - **Player:** VLC on desktop, ExoPlayer on Android, with subtitles, audio tracks, quality and
@@ -39,8 +39,23 @@ Get the latest builds from [Releases](https://github.com/Hyperdsk/hyper-stream/r
   Next list.
 - **Optional sync:** sign in to keep progress, library, settings and extensions the same on every
   device, through a small Supabase project ([backend/supabase](backend/supabase/README.md)).
+  Repositories added on another device are only added here once you agree, since extensions
+  run code.
   Sign in with an email link, a password, or (on a TV) a code shown on your phone or Mac.
   Everything works without it.
+
+## Online services
+
+Besides the extensions you install (which talk to their own sites), Hyper Stream contacts:
+
+| Service | What it gets | When | Turn off |
+| --- | --- | --- | --- |
+| AniSkip, IntroDB, TheIntroDB, and AniList or Kitsu to find an anime's id | The title's name or IMDb/MyAnimeList id, season and episode number | Playing an episode, to find intro, recap and credits times | Settings, Player, Show skip intro buttons |
+| IMDb | The title's name or IMDb id | Opening a title's page, for ratings and reviews | Not separately |
+| GitHub | Your app version | Checking for updates, about every six hours | Settings, Updates |
+| The sync server (Supabase) | Your email, and your progress, library, settings, searches and repositories | Only when signed in to sync | Sign out |
+
+None of them get anything that identifies you, beyond your IP address, unless you sign in to sync.
 
 ## Build from source
 
@@ -63,7 +78,9 @@ More detail:
 - [Android, tablets and TV](androidApp/ANDROID.md): what differs from the desktop app, and what isn't done yet.
 - [Sync backend](backend/supabase/README.md): setting up your own Supabase project.
 
-Pushes to `master` build every platform on GitHub Actions, as downloadable artifacts. Releases are
+Pushes to `master` build every platform on GitHub Actions, as downloadable artifacts. The jobs run on
+[Blacksmith](https://www.blacksmith.sh) runners (the Intel Mac app on GitHub's own Intel runner), so the Blacksmith
+GitHub App must be installed on the repository. Releases are
 built on a Mac and published with `scripts/release.sh` (see `scripts/release.sh --help`), without
 GitHub Actions: it makes the macOS apps and the Android APK, bumps the version, tags it and
 publishes the release. Windows and Linux builds come from GitHub Actions only.

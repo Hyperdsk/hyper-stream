@@ -11,4 +11,7 @@ expect object SignInRedirect {
 
     /** Gets ready to receive the link's return, just before the email is sent. */
     fun prepare()
+
+    /** No link is expected any more (signed in, cancelled, or it expired): stop listening. */
+    fun stop()
 }
