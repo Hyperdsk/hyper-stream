@@ -16,6 +16,11 @@ data class PlaybackState(
     /** The player's buffer fill while buffering, 0 to 100. */
     val bufferPercent: Float = 0f,
     val timeMs: Long = 0,
+    /**
+     * The video has actually played. Not the same as [timeMs] > 0: a resume shows its target there
+     * as soon as it opens, before anything has loaded.
+     */
+    val started: Boolean = false,
     val lengthMs: Long = 0,
     /** A live stream: no position to resume or save. */
     val live: Boolean = false,

@@ -101,6 +101,9 @@ class UpdateCheckerTest {
         assertTrue(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))
         assertFalse(UpdateChecker.isOwnDownload("https://github.com/someone/hyper-stream/releases/download/v1.2.5/HyperStream-1.2.5-android-and-tv.apk"))
         assertFalse(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream.evil.com/releases/download/x.apk"))
+        // "../" escapes the release folder once resolved, as OkHttp does before fetching
+        assertFalse(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream/releases/download/../../../../evil/x/releases/download/v9/a.dmg"))
+        assertFalse(UpdateChecker.isOwnDownload("https://github.com/Hyperdsk/hyper-stream/releases/download/%2e%2e/%2e%2e/%2e%2e/%2e%2e/evil/x/a.dmg"))
     }
 
     @Test

@@ -154,9 +154,9 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
             }
             // Remember the source once it actually plays, so this title starts with it next time
             scope.launch {
-                p.state.distinctUntilChangedBy { it.timeMs > 0 }.collect { s ->
+                p.state.distinctUntilChangedBy { it.started }.collect { s ->
                     val index = current.current ?: return@collect
-                    if (s.timeMs <= 0 || index == OFFLINE) return@collect
+                    if (!s.started || index == OFFLINE) return@collect
                     val link = current.links.getOrNull(index) ?: return@collect
                     val info = link.info()
                     SourceMemory.put(memoryKey, RememberedSource(info.provider, info.server, link.quality))
@@ -176,8 +176,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
                         onSourceFailed()
                         return@collect
                     }
-                    saveProgress(finished = true)
-                    if (SettingsStore.state.value.autoPlayNext && hasNext) next()
+                    if (SettingsStore.state.value.autoPlayNext && hasNext) next(finished = true) else saveProgress(finished = true)
                 }
             }
             scope.launch {
@@ -195,8 +194,8 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
     /** "Reload links": search again from where the video was, not from the start. */
     fun reload() = loadEpisode(current.index, resumePosition(), useCache = false)
 
-    fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true, useCache: Boolean = true) {
-        saveProgress()
+    fun loadEpisode(index: Int, startMs: Long = 0, allowOffline: Boolean = true, useCache: Boolean = true, saveCurrent: Boolean = true) {
+        if (saveCurrent) saveProgress()
         val token = ++loadToken
         playToken++
         linksJob?.cancel()
@@ -541,7 +540,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         val p = player ?: return
         subtitleCheck?.cancel()
         subtitleCheck = scope.launch {
-            p.state.first { it.timeMs > 0 }
+            p.state.first { it.started }
             val limit = kotlinx.coroutines.sync.Semaphore(4)
             val started = mutableSetOf<String>()
             // Subtitles keep arriving while the remaining sources load
@@ -629,7 +628,7 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
 
     /** Skips a section: to its end, or to the next episode when it runs to the end of the video. */
     fun skip(stamp: VideoSkipStamp) {
-        if (stamp.skipToNextEpisode && hasNext) next() else player?.seekTo(stamp.stamp.endMs)
+        if (stamp.skipToNextEpisode && hasNext) next(finished = true) else player?.seekTo(stamp.stamp.endMs)
     }
 
     /** The Android player's "Skip OP" button: jump 85 seconds, the length of a typical anime opening. */
@@ -637,8 +636,15 @@ class PlayerModel(val request: PlayRequest, val player: VideoEngine?) :
         player?.seekBy(85_000)
     }
 
-    fun next() {
-        if (hasNext) loadEpisode(current.index + 1)
+    /**
+     * [finished]: this episode played to its end, or its credits were skipped. It's saved as
+     * watched, not at the playhead (loading the next one saved the playhead over it, so an episode
+     * skipped at the credits showed "Resume" there).
+     */
+    fun next(finished: Boolean = false) {
+        if (!hasNext) return
+        if (finished) saveProgress(finished = true)
+        loadEpisode(current.index + 1, saveCurrent = !finished)
     }
 
     fun previous() {

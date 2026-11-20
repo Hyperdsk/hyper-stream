@@ -163,7 +163,7 @@ fun PlayerScreen(model: PlayerModel, onExit: () -> Unit) {
     // Open the preview player only once the video plays, and at low priority ("?preview"), so it
     // never competes with the main player for bandwidth while that is starting up
     // VLC reports "playing" before it has a frame; wait for the clock to actually move
-    val startedPlaying = playback.timeMs > 0
+    val startedPlaying = playback.started
     LaunchedEffect(preview, currentUrl, startedPlaying) {
         preview?.open(currentUrl?.takeIf { startedPlaying }?.let(StreamGateway::previewUrl))
     }

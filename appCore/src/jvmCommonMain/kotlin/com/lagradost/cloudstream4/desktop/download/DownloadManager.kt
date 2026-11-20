@@ -621,7 +621,8 @@ object DownloadManager {
         val rivals = _entries.value.filter { other ->
             other.id != entry.id &&
                 (other.addedAt < entry.addedAt || (other.addedAt == entry.addedAt && other.id < entry.id)) &&
-                naturalBase(other).path == natural
+                // Ignoring case: macOS and Windows disks do, so "Show" and "show" are one file there
+                naturalBase(other).path.equals(natural, ignoreCase = true)
         }
         val unique = when {
             rivals.isEmpty() -> name
@@ -996,7 +997,18 @@ object DownloadManager {
     }
 
     @Synchronized
-    private fun save() = file.write(_entries.value)
+    /**
+     * Never throws: a full disk (likely, as downloads fill it) made the worker skip starting the
+     * next download, and Pause throw in its click handler. The list stays in memory and the next
+     * save writes it.
+     */
+    private fun save() {
+        try {
+            file.write(_entries.value)
+        } catch (e: Exception) {
+            System.err.println("Couldn't save the download list: ${e.message}")
+        }
+    }
 
     /** Reports bytes per second at most once a second. */
     private class SpeedMeter(start: Long) {

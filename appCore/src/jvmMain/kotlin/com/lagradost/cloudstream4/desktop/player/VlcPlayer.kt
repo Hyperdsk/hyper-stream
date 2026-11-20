@@ -145,6 +145,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
                 _state.update { it.copy(buffering = jumping || newCache < 100f, bufferPercent = newCache) }
 
             override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
+                // Time moving: it plays, also during the second played before a resume jump
+                if (newTime > 0 && !_state.value.started) _state.update { it.copy(started = true) }
                 // Live: nothing to resume, show it as it comes (a saved position from an older
                 // version would otherwise keep the picture hidden for good)
                 if (jumping && currentUrl?.let { StreamProxy.isLive(it) } == true) {
@@ -160,7 +162,8 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
                         pendingJumpMs = null
                         landingMs = target
                         VlcLog.log("event jump to $target ms")
-                        mediaPlayer.submit { jumpTo(target) }
+                        // Not if the user seeked meanwhile ([seekTo] clears landingMs): theirs wins
+                        mediaPlayer.submit { if (landingMs == target) jumpTo(target) }
                     }
                     return
                 }
@@ -181,14 +184,18 @@ class VlcPlayer private constructor(private val factory: MediaPlayerFactory) : V
 
             override fun elementaryStreamAdded(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) {
                 VlcLog.log("event track added: $type $id")
-                refreshTracks()
+                mediaPlayer.submit { refreshTracks() }
             }
 
-            override fun elementaryStreamDeleted(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
-                refreshTracks()
+            // Off VLC's event thread, like the jump: asking libVLC for tracks from inside its own
+            // callback could wait on a stop() or play() from the UI that waits on this callback
+            override fun elementaryStreamDeleted(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) {
+                mediaPlayer.submit { refreshTracks() }
+            }
 
-            override fun elementaryStreamSelected(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) =
-                refreshTracks()
+            override fun elementaryStreamSelected(mediaPlayer: MediaPlayer, type: uk.co.caprica.vlcj.media.TrackType, id: Int) {
+                mediaPlayer.submit { refreshTracks() }
+            }
         })
     }
 

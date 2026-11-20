@@ -42,7 +42,7 @@ object DataHealth {
  * A single JSON file holding one value. Writes go to a temp file, flushed to disk, which then
  * replaces the old one, so neither a crash nor a power cut leaves a half-written file. A file that
  * can't be read (damaged, or from a newer version) is kept as name.unreadable-<time> rather than
- * overwritten, and noted in [DataHealth].
+ * overwritten (except [private] ones), and noted in [DataHealth].
  */
 class JsonFile<T : Any>(
     name: String,
@@ -58,7 +58,9 @@ class JsonFile<T : Any>(
         if (file.exists()) jsonMapper.readValue(file, type) else default()
     } catch (t: Throwable) {
         System.err.println("Could not read ${file.name}, using defaults and keeping a copy: ${t.message}")
-        runCatching { file.copyTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"), overwrite = true) }
+        // Not for a file holding a sign-in: the copy would be readable by everyone and, with a
+        // name of its own, not kept out of Android's backups. Signing in again replaces it
+        if (!private) runCatching { file.copyTo(File(file.parentFile, "${file.name}.unreadable-${System.currentTimeMillis()}"), overwrite = true) }
         DataHealth.unreadable += file.name
         default()
     }

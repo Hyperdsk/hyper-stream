@@ -94,7 +94,9 @@ object RepositoryClient {
                 val response = app.get("https://$host/${fixed.removePrefix("!")}", allowRedirects = false)
                 val location = response.headers["Location"] ?: return@runCatching null
                 if (location.startsWith("https://$host/404") || location.removeSuffix("/") == "https://$host") null
-                else location
+                // Only https: the "not secure" warning is shown for http addresses typed in, and a
+                // short code would add one without it (then its extensions could come over http too)
+                else location.takeIf { it.startsWith("https://", ignoreCase = true) }
             }.getOrNull()
 
             else -> null

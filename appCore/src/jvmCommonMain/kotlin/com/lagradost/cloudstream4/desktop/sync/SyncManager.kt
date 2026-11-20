@@ -413,13 +413,20 @@ object SyncManager {
         // before sending it there, instead of merging two people's libraries without a word
         val before = previous ?: store.lastUserId
         val library = LibraryStore.state.value
-        val switching = before != null && before != session.userId && (library.history.isNotEmpty() || library.bookmarks.isNotEmpty())
+        // Everything "use the account's library" would clear counts, not only history and bookmarks
+        val hasLibrary = library.history.isNotEmpty() || library.bookmarks.isNotEmpty() ||
+            SearchHistory.entries.value.isNotEmpty() || SourceMemory.all().isNotEmpty()
+        // The same account again (a refreshed sign-in) still owes the answer it hadn't given
+        val switching = if (previous == session.userId) store.awaitingChoice
+        else before != null && before != session.userId && hasLibrary
         save {
-            if (previous == session.userId) it.copy(session = session, lastUserId = session.userId)
-            // A new account starts from this device's data; known items from another account don't apply
+            if (previous == session.userId) it.copy(session = session, lastUserId = if (it.awaitingChoice) it.lastUserId else session.userId)
+            // A new account starts from this device's data; known items from another account don't apply.
+            // Until the question is answered the device still counts as the earlier account's, so
+            // signing out and back in asks again instead of merging without a word
             else SyncStore(
                 session = session.copy(email = session.email ?: email),
-                lastUserId = session.userId,
+                lastUserId = if (switching) before else session.userId,
                 awaitingChoice = switching,
                 declinedRepositories = if (before == session.userId) it.declinedRepositories else emptySet(),
             )
@@ -440,7 +447,7 @@ object SyncManager {
                 SearchHistory.clear()
                 SourceMemory.clear()
             }
-            save { it.copy(awaitingChoice = false) }
+            save { it.copy(awaitingChoice = false, lastUserId = it.session?.userId ?: it.lastUserId) }
         }
         _ui.update { it.copy(askMerge = false) }
         requestSync()
@@ -466,10 +473,15 @@ object SyncManager {
         _ui.update { it.copy(codeSentTo = null, error = null) }
     }
 
+    /** The store after signing out: only which account the device's data belongs to stays. */
+    private fun signedOut(s: SyncStore) =
+        SyncStore(lastUserId = if (s.awaitingChoice) s.lastUserId else s.session?.userId ?: s.lastUserId)
+
     /** Stops syncing on this device. Its data stays as it is. */
     fun signOut() = scope.launch {
-        val session = store.session
-        lock.withLock { save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) } }
+        // Read under the lock: a refresh that finished meanwhile replaced the session, and logging
+        // out the old one would leave the new refresh token valid on the server
+        val session = lock.withLock { store.session.also { save { signedOut(it) } } }
         _ui.value = SyncUiState()
         if (session != null) SupabaseClient.signOut(session)
     }
@@ -502,7 +514,7 @@ object SyncManager {
             fresh.also { save { it.copy(session = fresh) } }
         } catch (e: SyncAuthException) {
         // The session was revoked or expired for good: sign in again
-        save { SyncStore(lastUserId = it.session?.userId ?: it.lastUserId) }
+        save { signedOut(it) }
             _ui.value = SyncUiState(error = "Signed out of sync. Sign in again to keep syncing.")
             null
         }

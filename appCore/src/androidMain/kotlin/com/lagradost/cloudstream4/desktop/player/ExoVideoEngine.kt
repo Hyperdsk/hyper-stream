@@ -159,6 +159,8 @@ class ExoVideoEngine(private val context: Context) : VideoEngine {
                 buffering = s == Player.STATE_BUFFERING || (s == Player.STATE_IDLE && currentUrl != null && it.error == null),
                 ended = s == Player.STATE_ENDED,
                 timeMs = player.currentPosition.coerceAtLeast(0),
+                // Ready once: the source loaded. The position alone is the resume point from the start
+                started = it.started || s == Player.STATE_READY,
             )
         }
     }

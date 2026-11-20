@@ -62,6 +62,9 @@ fun main() {
         val store = remember { ModelStore() }
         var confirmQuit by remember { mutableStateOf(false) }
         fun quit() {
+            // The player's model saves its progress and Continue watching picture as it closes:
+            // before VLC goes, or up to 5 seconds of watching were lost on quit
+            runCatching { store.disposeAll() }
             vlc?.release()
             // Watch progress saved in the background a moment ago, not lost on the way out
             com.lagradost.cloudstream4.desktop.data.JsonFile.flushAll()

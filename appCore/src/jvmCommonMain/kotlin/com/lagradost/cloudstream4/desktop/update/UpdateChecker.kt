@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.update
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream4.desktop.Platform
@@ -107,8 +108,13 @@ object UpdateChecker {
             ?.forEach { it.deleteRecursively() }
     }
 
-    /** A download from this project's own GitHub releases, the only place updates come from. */
-    fun isOwnDownload(url: String): Boolean = url.startsWith(DOWNLOAD_PREFIX)
+    /**
+     * A download from this project's own GitHub releases, the only place updates come from.
+     * Checked as the URL that will be fetched: "../" segments are resolved first, so
+     * ".../releases/download/../../../../other/repo/..." doesn't pass.
+     */
+    fun isOwnDownload(url: String): Boolean =
+        url.toHttpUrlOrNull()?.toString()?.startsWith(DOWNLOAD_PREFIX) == true
 
     /** The installed version, read from the APK on Android and from the app jar's manifest on desktop. */
     val currentVersion: String get() = Platform.appVersion

@@ -224,6 +224,8 @@ object ExtensionManager {
         toRemove.forEach { uninstallNow(it) }
         lock.withLock { reposFile.write(reposFile.read().filterNot { it.url == url }) }
         _state.update { s -> s.copy(repositories = s.repositories.removingAll { it.data.url == url }) }
+        // Its extensions are unloaded: screens showing their providers refresh, as after uninstall()
+        if (toRemove.isNotEmpty()) providersChanged()
     }
 
     fun refreshRepository(url: String) = scope.launch {

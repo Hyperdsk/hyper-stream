@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
+import okhttp3.Interceptor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Protocol
 import okhttp3.Request
@@ -153,7 +154,7 @@ object StreamProxy {
      * would share one connection, and per-connection speed limits are what this gets around.
      */
     private val streamClient by lazy {
-        app.baseClient.newBuilder()
+        proxyClient.newBuilder()
             // Its own: clear() cancels every call on it, and the shared one also runs extensions,
             // downloads, sync and the updater
             .dispatcher(Dispatcher())
@@ -297,14 +298,37 @@ object StreamProxy {
         return headers.filterKeys { !it.equals("Cookie", ignoreCase = true) && !it.equals("Authorization", ignoreCase = true) }
     }
 
-    /** One site: the same host, or the same last two labels (cdn.example.com and example.com). Addresses must match. */
+    /**
+     * One site: the same host, or the same registrable domain (cdn.example.com and example.com).
+     * By the public suffix list, so a.co.uk and b.co.uk (or two github.io pages) are not one site.
+     * Addresses must match.
+     */
     internal fun sameSite(a: String, b: String): Boolean {
         if (a.equals(b, ignoreCase = true)) return true
         // IP addresses (with a ':' for IPv6, or ending in a digit) only match themselves
         if (listOf(a, b).any { host -> ':' in host || host.lastOrNull()?.isDigit() != false }) return false
-        fun site(host: String) = host.lowercase().split('.').takeLast(2).joinToString(".")
-        return site(a) == site(b)
+        fun site(host: String) = "https://$host/".toHttpUrlOrNull()?.topPrivateDomain()
+        val siteA = site(a) ?: return false
+        return siteA.equals(site(b), ignoreCase = true)
     }
+
+    /**
+     * A redirect to another site keeps the Cookie header the proxy set (OkHttp only drops
+     * Authorization): take both off there, as [headersFor] does for links to other sites.
+     * Cookies a cookie jar adds for the new host itself are left alone.
+     */
+    internal val crossSiteRedirects = Interceptor { chain ->
+        val request = chain.request()
+        val first = chain.call().request()
+        if (request.url.host == first.url.host || sameSite(first.url.host, request.url.host)) return@Interceptor chain.proceed(request)
+        chain.proceed(request.newBuilder().apply {
+            if (request.header("Cookie") == first.header("Cookie")) removeHeader("Cookie")
+            removeHeader("Authorization")
+        }.build())
+    }
+
+    /** The shared client, with [crossSiteRedirects]. */
+    private val proxyClient by lazy { app.baseClient.newBuilder().addNetworkInterceptor(crossSiteRedirects).build() }
 
     /** The host a proxied request is for, for logs. */
     private fun requestHost(exchange: HttpExchange): String = runCatching {
@@ -397,7 +421,7 @@ object StreamProxy {
     }
 
     private fun passThrough(exchange: HttpExchange, request: Request, session: String) {
-        app.baseClient.newCall(request).execute().use { response ->
+        proxyClient.newCall(request).execute().use { response ->
             val body = response.body
             val contentType = response.header("Content-Type") ?: ""
             val finalUrl = response.request.url.toString()
@@ -501,7 +525,7 @@ object StreamProxy {
             val progressed = runCatching {
                 meter.open()
                 try {
-                    app.baseClient.newCall(request).execute().use { r ->
+                    proxyClient.newCall(request).execute().use { r ->
                         val start = r.header("Content-Range")?.removePrefix("bytes ")?.substringBefore('-')?.toLongOrNull()
                         // Only the part asked for will do: the whole file again would scramble the video
                         if (r.code != 206 || start != position) throw IOException("The host answered HTTP ${r.code} from ${start ?: "the start"}")
@@ -618,7 +642,12 @@ object StreamProxy {
         val next = order.subList(position + 1, minOf(order.size, position + 1 + ahead)).toList()
         // Not once the player has closed (clear() cancels the fetch) or the fetch failed
         val started = generation
-        wanted.invokeOnCompletion { cause -> if (cause == null && generation == started) next.forEach { segment(it, headers) } }
+        // Each with its own headers: the next segment can be on another site (ads, a second CDN),
+        // which mustn't get this one's cookies
+        val base = sessions[session]
+        wanted.invokeOnCompletion { cause ->
+            if (cause == null && generation == started) next.forEach { url -> segment(url, base?.let { headersFor(it, sessionHosts[session], url) } ?: headers) }
+        }
         val segment = try {
             runBlocking { withTimeout(60_000) { wanted.await() } }
         } catch (_: Throwable) {
@@ -762,7 +791,7 @@ object StreamProxy {
                 val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
                 meter.open()
                 try {
-                    app.baseClient.newCall(request).execute().use { r ->
+                    proxyClient.newCall(request).execute().use { r ->
                         if (!r.isSuccessful) return@async null
                         r.request.url.toString() to r.body.string().removePrefix("﻿")
                     }
