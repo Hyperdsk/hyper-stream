@@ -426,6 +426,8 @@ object ExtensionManager {
         setStatus(file, PluginStatus.Loading)
         val status = try {
             val plugin = PluginLoader.load(file)
+            // Before its names are shown or used: a name another extension already has is made unique
+            ProviderNames.makeUnique(plugin.instance.filename ?: file.absolutePath)
             PluginStatus.Loaded(plugin.providerNames, plugin.stubbed)
         } catch (e: Throwable) {
             System.err.println("Failed to load ${file.name}: ${e.message}")
