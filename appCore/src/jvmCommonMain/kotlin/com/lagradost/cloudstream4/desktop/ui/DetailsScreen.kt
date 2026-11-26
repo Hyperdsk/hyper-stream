@@ -1,5 +1,16 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.joinAll
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream4.desktop.data.SettingsStore
+import com.lagradost.cloudstream4.desktop.plugins.ExtensionManager
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.background
 import androidx.compose.ui.text.style.TextAlign
@@ -125,14 +136,64 @@ data class DetailsState(
     val imdb: ImdbInfo? = null,
     /** The most helpful IMDb reviews, for the Ratings & Reviews shelf. */
     val reviews: ImdbReviewPage? = null,
+    /** Other extensions that have this title, to switch to when this one's links fail. */
+    val alsoOn: PersistentList<AlsoOn> = persistentListOf(),
+    /** Still searching the other extensions for [alsoOn]. */
+    val alsoOnSearching: Boolean = false,
 ) {
     val episodes: List<EpisodeUi> get() = allEpisodes.filter { seasons.isEmpty() || it.playable.season == season }
     val isMovieLike: Boolean get() = response is MovieLoadResponse || response is LiveStreamLoadResponse
 }
 
+/** The same title on another extension. */
+data class AlsoOn(val apiName: String, val url: String, val name: String)
+
 class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>(DetailsState()) {
+    private var alsoOnJob: Job? = null
+
     init {
         load()
+    }
+
+    /**
+     * Finds the other extensions that have this title. Opened from Search, that search's answers
+     * already say; otherwise the enabled extensions are searched for it, a few at a time.
+     */
+    private fun findAlsoOn(response: LoadResponse) {
+        alsoOnJob?.cancel()
+        val name = response.name
+        val year = response.year
+        fun match(items: List<SearchResponse>) = items.firstOrNull { sameTitle(name, year, it.name, it.yearOrNull) }
+        fun add(apiName: String, hit: SearchResponse) = update {
+            if (alsoOn.any { it.apiName == apiName }) this
+            else copy(alsoOn = (alsoOn + AlsoOn(apiName, hit.url, hit.name)).sortedBy { it.apiName.lowercase() }.toPersistentList())
+        }
+
+        val last = LastSearch.results()
+        if (last[route.apiName]?.any { it.url == route.url } == true) {
+            last.filterKeys { it != route.apiName }.forEach { (apiName, items) -> match(items)?.let { add(apiName, it) } }
+            return
+        }
+        val settings = SettingsStore.state.value
+        val apis = ExtensionManager.providers().filter {
+            it.name != route.apiName && searches(SearchProvider(it.name, it.supportedTypes.toSet()), settings.searchExcluded, settings.searchTypes)
+        }
+        if (apis.isEmpty()) return
+        update { copy(alsoOnSearching = true) }
+        // A few at a time, each with a time limit: this runs while the page is being used
+        val limit = Semaphore(if (Platform.isTv) 4 else 8)
+        alsoOnJob = scope.launch {
+            apis.map { api ->
+                launch {
+                    limit.withPermit {
+                        val items = withTimeoutOrNull(20_000) { providerCall { api.search(name, 1)?.items.orEmpty() }.getOrNull() }
+                            ?: return@withPermit
+                        withContext(Dispatchers.Default) { match(items) }?.let { add(api.name, it) }
+                    }
+                }
+            }.joinAll()
+            update { copy(alsoOnSearching = false) }
+        }
     }
 
     fun load() {
@@ -149,6 +210,7 @@ class DetailsModel(private val route: Route.Details) : ScreenModel<DetailsState>
                         update { copy(loading = false, error = "The provider returned nothing for this title.") }
                     } else {
                         apply(response)
+                        findAlsoOn(response)
                     }
                 }
                 .onFailure { e -> update { copy(loading = false, error = e.userMessage()) } }
@@ -553,6 +615,16 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
             Column(
                 Modifier.align(Alignment.BottomStart).padding(start = appLayout.pageMargin, end = appLayout.pageMargin, top = 120.dp, bottom = 28.dp).widthIn(max = 680.dp),
             ) {
+                // Which extension this page is from, before anything else
+                Text(
+                    "FROM ${route.apiName.uppercase()}",
+                    style = MaterialTheme.typography.labelMedium,
+                    letterSpacing = 1.5.sp,
+                    color = Color.White.copy(alpha = 0.75f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(6.dp))
                 val logo = response.logoUrl
                 if (logo != null) {
                     RemoteImage(logo, response.posterHeaders, Modifier.heightIn(max = if (appLayout.compact) 96.dp else 150.dp).widthIn(max = 440.dp), contentScale = ContentScale.Fit, placeholder = false)
@@ -603,6 +675,23 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         GlassButton(Icons.Default.OpenInBrowser, "Open in browser") { openInBrowser(page) }
                     }
                 }
+                // The same title on other extensions, to switch to when this one's links fail
+                if (state.alsoOn.isNotEmpty() || state.alsoOnSearching) {
+                    val nav = LocalNavigator.current
+                    Spacer(Modifier.height(14.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (state.alsoOn.isEmpty()) "Looking on other extensions…" else "Also on",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = Color.White.copy(alpha = 0.7f),
+                        )
+                        state.alsoOn.forEach { other ->
+                            GlassButton(Icons.Default.SwapHoriz, "Open on ${other.apiName}", text = other.apiName) {
+                                nav.open(Route.Details(other.apiName, other.url, other.name))
+                            }
+                        }
+                    }
+                }
                 (response.plot?.let(::plainText)?.takeIf { it.isNotBlank() } ?: state.imdb?.plot)?.let {
                     Spacer(Modifier.height(18.dp))
                     Text(
@@ -614,8 +703,6 @@ private fun Header(route: Route.Details, response: LoadResponse, state: DetailsS
                         modifier = Modifier.clickable(indication = tvIndication, interactionSource = remember { MutableInteractionSource() }) { plotExpanded = !plotExpanded },
                     )
                 }
-                Spacer(Modifier.height(10.dp))
-                Text(route.apiName, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
             }
         }
     }

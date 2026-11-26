@@ -1,5 +1,11 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import coil3.size.Precision
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.background
@@ -279,9 +285,19 @@ fun PosterRow(
     loadingMore: Boolean = false,
     onReachEnd: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
+    /** The posters' width, when not the layout's usual size. */
+    posterSize: Dp? = null,
+    /**
+     * Scroll the whole row (its title too) into view when the remote moves into it. Focusing a
+     * poster only scrolls the poster into view, which on a TV left the row's name off screen.
+     */
+    keepTitleVisible: Boolean = false,
     onClick: (PosterItem) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    val size = posterSize ?: if (horizontal) appLayout.widePoster else appLayout.poster
+    val rowInView = remember { BringIntoViewRequester() }
+    val rowScope = rememberCoroutineScope()
     if (onReachEnd != null) {
         val nearEnd by remember {
             derivedStateOf {
@@ -293,7 +309,16 @@ fun PosterRow(
             snapshotFlow { nearEnd }.distinctUntilChanged().filter { it }.collect { onReachEnd() }
         }
     }
-    Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .then(
+                if (keepTitleVisible) Modifier.bringIntoViewRequester(rowInView).onFocusChanged {
+                    // After the poster's own scroll, so this one, showing the title too, wins
+                    if (it.hasFocus) rowScope.launch { delay(50); rowInView.bringIntoView() }
+                } else Modifier
+            )
+            .padding(top = 18.dp, bottom = 6.dp)
+    ) {
         ShelfTitle(title, trailing = trailing)
         Spacer(Modifier.height(12.dp))
         LazyRow(
@@ -305,12 +330,12 @@ fun PosterRow(
             horizontalArrangement = Arrangement.spacedBy(appLayout.shelfSpacing),
         ) {
             itemsIndexed(items, key = { i, it -> "$i|${it.apiName}|${it.url}" }) { _, item ->
-                PosterCard(item, if (horizontal) appLayout.widePoster else appLayout.poster, horizontal) { onClick(item) }
+                PosterCard(item, size, horizontal) { onClick(item) }
             }
             if (loadingMore) {
                 item {
                     // As tall as the row's posters, so the row doesn't jump while the next page loads
-                    val posterHeight = if (horizontal) appLayout.widePoster * 9f / 16f else appLayout.poster * 1.5f
+                    val posterHeight = if (horizontal) size * 9f / 16f else size * 1.5f
                     Box(Modifier.size(80.dp, posterHeight), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                     }
