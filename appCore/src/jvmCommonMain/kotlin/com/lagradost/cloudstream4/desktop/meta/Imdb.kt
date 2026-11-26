@@ -90,9 +90,11 @@ private data class CachedImdb(
  * IMDb details for a title. Uses the IMDb id when the extension provides one, otherwise finds
  * the title by name, year and type with IMDb's search suggestions.
  *
- * These are the unofficial endpoints imdb.com itself uses; IMDb allows only limited, private,
- * non-commercial use of this data. That fits a personal app. A published build would need a
- * licensed source (or OMDb with the user's own key) instead.
+ * The details come from Cinemeta (Stremio's public catalogue of IMDb titles): IMDb's own data
+ * API began refusing the app (403) in November 2026. Cinemeta has the rating, genres, run time,
+ * plot, people, country, release date, awards and episodes, but no vote counts, Metascore,
+ * popularity, certificate, budget or box office. Reviews still ask IMDb, and are simply missing
+ * while it refuses.
  */
 object Imdb {
     private const val TTL_MS = 3L * 24 * 60 * 60 * 1000
@@ -100,7 +102,8 @@ object Imdb {
     private const val BROWSER_UA =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
-    private val file = jsonFile<Map<String, CachedImdb>>("imdb-cache-v2.json") { emptyMap() }
+    // v3: v2 holds the misses saved while IMDb refused, which would hide details for hours
+    private val file = jsonFile<Map<String, CachedImdb>>("imdb-cache-v3.json") { emptyMap() }
     private val cache = ConcurrentHashMap<String, CachedImdb>(file.read())
 
     /** Details for [response], or null when IMDb has no matching title. Cached for a few days. */
@@ -111,7 +114,7 @@ object Imdb {
         cache[key]?.takeIf { now - it.savedAt < (if (it.info == null) MISS_TTL_MS else TTL_MS) }?.let { return@withContext it.info }
         val id = runCatching { response.getImdbId() }.getOrNull()?.takeIf { it.startsWith("tt") }
             ?: findId(response.name, response.year, response.type)
-        val info = id?.let { fetch(it) }
+        val info = id?.let { fetch(it, series = response.type != TvType.Movie && response.type != TvType.AnimeMovie, name = response.name, year = response.year) }
         cache[key] = CachedImdb(info, now)
         // Expired entries go, so the file doesn't grow with every title ever opened
         cache.entries.removeIf { now - it.value.savedAt > TTL_MS }
@@ -146,24 +149,6 @@ object Imdb {
             ?.first
     }
 
-    private val query = """
-        query(${'$'}id: ID!) { title(id: ${'$'}id) {
-          id titleText { text } titleType { text } releaseYear { year endYear }
-          ratingsSummary { aggregateRating voteCount } meterRanking { currentRank }
-          runtime { seconds } certificate { rating } genres { genres { text } }
-          plot { plotText { plainText } } metacritic { metascore { score } }
-          principalCredits { category { text } credits(limit: 8) { name { id nameText { text } primaryImage { url } } } }
-          countriesOfOrigin { countries { text } } spokenLanguages { spokenLanguages { text } }
-          prestigiousAwardSummary { nominations wins award { text } }
-          releaseDate { day month year country { text } }
-          productionBudget { budget { amount currency } }
-          lifetimeGross(boxOfficeArea: WORLDWIDE) { total { amount currency } }
-          episodes { seasons { number } episodes(first: 0) { total } }
-          aggregateRatingsBreakdown { histogram { histogramValues { rating voteCount } } }
-          reviews(first: 0) { total }
-        } }
-    """.trimIndent()
-
     private fun graphql(query: String, variables: Map<String, Any?>): JsonNode? {
         val payload = jsonMapper.writeValueAsString(mapOf("query" to query, "variables" to variables))
         val request = Request.Builder()
@@ -177,7 +162,80 @@ object Imdb {
         return jsonMapper.readTree(text).path("data").path("title").takeIf { it.isObject }
     }
 
-    internal fun fetch(id: String): ImdbInfo? = graphql(query, mapOf("id" to id))?.let(::parse)
+    /** What IMDb's search says an id is: its title, year and whether it's a series. */
+    private data class ImdbEntry(val title: String, val year: Int?, val series: Boolean)
+
+    private suspend fun lookup(id: String): ImdbEntry? = runCatching {
+        val body = app.get("https://v3.sg.media-imdb.com/suggestion/t/$id.json", headers = mapOf("User-Agent" to BROWSER_UA)).text
+        jsonMapper.readTree(body).path("d").firstOrNull { it.path("id").asText() == id }?.let { r ->
+            val kind = r.path("qid").asText()
+            ImdbEntry(r.path("l").asText(), r.path("y").takeIf { it.isNumber }?.asInt(), kind == "tvSeries" || kind == "tvMiniSeries")
+        }
+    }.getOrNull()
+
+    /**
+     * Details for an IMDb [id] from Cinemeta. It files movies and series apart and must be asked
+     * for the right kind: asked for a series as a movie it answers with another title entirely
+     * (Breaking Bad's id came back as the 1975 film "Mirror"), and it does the same for ids it
+     * doesn't have. So the kind comes from IMDb's search when it knows the id ([series] otherwise),
+     * and the answer counts only when its title or year is the one IMDb (or the extension, as
+     * [name] and [year]) gives.
+     */
+    internal suspend fun fetch(id: String, series: Boolean = false, name: String? = null, year: Int? = null): ImdbInfo? =
+        withContext(Dispatchers.IO) {
+            val known = lookup(id)
+            val kind = if (known?.series ?: series) "series" else "movie"
+            val body = runCatching { app.get("https://v3-cinemeta.strem.io/meta/$kind/$id.json").text }.getOrNull() ?: return@withContext null
+            val meta = runCatching { jsonMapper.readTree(body).path("meta") }.getOrNull() ?: return@withContext null
+            val info = meta.textOrNull("name")?.let { parseCinemeta(id, kind, meta) } ?: return@withContext null
+            val title = known?.title ?: name ?: return@withContext null
+            val expectedYear = known?.year ?: year
+            val same = normalize(info.title) == normalize(title) || (expectedYear != null && info.year == expectedYear)
+            info.takeIf { same }
+        }
+
+    private fun parseCinemeta(id: String, kind: String, m: JsonNode): ImdbInfo {
+        // "2008–2013" for a series that ended, "2019–" for one still running
+        val years = (m.textOrNull("releaseInfo") ?: m.textOrNull("year")).orEmpty()
+            .split('–', '-').map { it.trim().toIntOrNull() }
+        val released = m.textOrNull("released")?.let { iso ->
+            runCatching {
+                val date = java.time.LocalDate.parse(iso.take(10))
+                date.format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy", java.util.Locale.ENGLISH))
+            }.getOrNull()
+        }
+        fun names(field: String) = m.path(field).mapNotNull { it.takeIf { n -> n.isTextual }?.asText()?.takeIf { n -> n.isNotBlank() } }
+            .distinct().map { ImdbPerson("name:$it", it, null) }
+        // Specials are season 0: not counted, as on IMDb's page
+        val episodes = m.path("videos").filter { it.path("season").asInt(0) > 0 }
+        return ImdbInfo(
+            id = id,
+            title = m.textOrNull("name") ?: "",
+            type = if (kind == "series") "TV Series" else "Movie",
+            year = years.getOrNull(0),
+            endYear = years.getOrNull(1),
+            rating = m.textOrNull("imdbRating")?.toDoubleOrNull()?.takeIf { it > 0 },
+            votes = null,
+            metascore = null,
+            popularity = null,
+            runtimeMinutes = m.textOrNull("runtime")?.let { Regex("(\\d+)").find(it)?.value?.toIntOrNull() },
+            certificate = null,
+            genres = (m.path("genres").takeIf { it.size() > 0 } ?: m.path("genre")).mapNotNull { it.textOrNull() },
+            plot = m.textOrNull("description"),
+            directors = names("director"),
+            writers = names("writer"),
+            creators = emptyList(),
+            stars = names("cast"),
+            countries = m.textOrNull("country")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
+            languages = emptyList(),
+            released = released,
+            awards = m.textOrNull("awards"),
+            budget = null,
+            grossWorldwide = null,
+            seasons = episodes.map { it.path("season").asInt() }.distinct().size.takeIf { it > 0 },
+            episodes = episodes.size.takeIf { it > 0 },
+        )
+    }
 
     private val reviewsQuery = """
         query(${'$'}id: ID!, ${'$'}first: Int!, ${'$'}after: ID, ${'$'}by: ReviewsSortBy!, ${'$'}order: SortOrder!) { title(id: ${'$'}id) {
@@ -220,79 +278,6 @@ object Imdb {
     private fun JsonNode.textOrNull(vararg path: String): String? =
         path.fold(this) { node, key -> node.path(key) }.takeIf { it.isTextual }?.asText()?.takeIf { it.isNotBlank() }
 
-    private fun people(t: JsonNode, vararg categories: String): List<ImdbPerson> =
-        t.path("principalCredits").filter { c -> c.path("category").path("text").asText() in categories }
-            .flatMap { c -> c.path("credits") }
-            .mapNotNull { c ->
-                val n = c.path("name")
-                val name = n.textOrNull("nameText", "text") ?: return@mapNotNull null
-                ImdbPerson(n.path("id").asText(), name, n.textOrNull("primaryImage", "url"))
-            }
-            .distinctBy { it.id }
-
-    private fun money(node: JsonNode): String? {
-        val amount = node.path("amount").takeIf { it.isNumber }?.asLong() ?: return null
-        val currency = node.path("currency").asText("USD")
-        val short = when {
-            amount >= 1_000_000_000 -> "%.1fB".format(amount / 1e9)
-            amount >= 1_000_000 -> "%.1fM".format(amount / 1e6)
-            else -> "%,d".format(amount)
-        }.replace(".0", "")
-        return if (currency == "USD") "$$short" else "$short $currency"
-    }
-
-    private fun parse(t: JsonNode): ImdbInfo {
-        val date = t.path("releaseDate")
-        val released = date.path("year").takeIf { it.isNumber }?.asInt()?.let { y ->
-            val months = listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
-            val m = date.path("month").takeIf { it.isNumber }?.asInt()?.let { months.getOrNull(it - 1) }
-            val d = date.path("day").takeIf { it.isNumber }?.asInt()
-            listOfNotNull(listOfNotNull(m, d?.toString()).joinToString(" ").ifBlank { null }, y.toString()).joinToString(", ") +
-                (date.textOrNull("country", "text")?.let { " ($it)" } ?: "")
-        }
-        val awards = t.path("prestigiousAwardSummary").takeIf { it.isObject }?.let { a ->
-            val award = a.textOrNull("award", "text") ?: return@let null
-            val wins = a.path("wins").asInt(0)
-            val noms = a.path("nominations").asInt(0)
-            when {
-                wins > 0 -> "Won $wins $award${if (wins > 1) "s" else ""}"
-                noms > 0 -> "Nominated for $noms $award${if (noms > 1) "s" else ""}"
-                else -> null
-            }
-        }
-        return ImdbInfo(
-            id = t.path("id").asText(),
-            title = t.textOrNull("titleText", "text") ?: "",
-            type = t.textOrNull("titleType", "text"),
-            year = t.path("releaseYear").path("year").takeIf { it.isNumber }?.asInt(),
-            endYear = t.path("releaseYear").path("endYear").takeIf { it.isNumber }?.asInt(),
-            rating = t.path("ratingsSummary").path("aggregateRating").takeIf { it.isNumber }?.asDouble(),
-            votes = t.path("ratingsSummary").path("voteCount").takeIf { it.isNumber }?.asLong(),
-            metascore = t.path("metacritic").path("metascore").path("score").takeIf { it.isNumber }?.asInt(),
-            popularity = t.path("meterRanking").path("currentRank").takeIf { it.isNumber }?.asInt(),
-            runtimeMinutes = t.path("runtime").path("seconds").takeIf { it.isNumber }?.asInt()?.div(60),
-            certificate = t.textOrNull("certificate", "rating"),
-            genres = t.path("genres").path("genres").mapNotNull { it.textOrNull("text") },
-            plot = t.textOrNull("plot", "plotText", "plainText"),
-            directors = people(t, "Director", "Directors"),
-            writers = people(t, "Writer", "Writers"),
-            creators = people(t, "Creator", "Creators"),
-            stars = people(t, "Star", "Stars"),
-            countries = t.path("countriesOfOrigin").path("countries").mapNotNull { it.textOrNull("text") },
-            languages = t.path("spokenLanguages").path("spokenLanguages").mapNotNull { it.textOrNull("text") },
-            released = released,
-            awards = awards,
-            budget = money(t.path("productionBudget").path("budget")),
-            grossWorldwide = money(t.path("lifetimeGross").path("total")),
-            seasons = t.path("episodes").path("seasons").size().takeIf { it > 0 },
-            episodes = t.path("episodes").path("episodes").path("total").takeIf { it.isNumber }?.asInt()?.takeIf { it > 0 },
-            ratingHistogram = t.path("aggregateRatingsBreakdown").path("histogram").path("histogramValues").let { values ->
-                val byRating = values.associate { it.path("rating").asInt() to it.path("voteCount").asLong() }
-                if (byRating.isEmpty()) emptyList() else (1..10).map { byRating[it] ?: 0L }
-            },
-            reviewCount = t.path("reviews").path("total").takeIf { it.isNumber }?.asInt(),
-        )
-    }
 }
 
 /** "10K", "3.2M" for vote counts. */
