@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.sync.Semaphore
@@ -548,8 +549,17 @@ fun DetailsScreen(route: Route.Details, model: DetailsModel) {
                             horizontalArrangement = Arrangement.spacedBy(22.dp),
                         ) {
                             items(cast) { actor ->
-                                Column(Modifier.width(104.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    RemoteImage(actor.actor.image, null, Modifier.size(96.dp).clip(CircleShape))
+                                // Focusable on TV, so the remote can reach this row and the sections below it
+                                Column(Modifier.width(104.dp).tvFocusStop(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    if (actor.actor.image.isNullOrBlank()) {
+                                        // No photo (Cinemeta gives none): their initials, not an empty grey circle
+                                        val initials = actor.actor.name.split(' ').filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1).uppercase() }
+                                        Box(Modifier.size(96.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                                            Text(initials, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    } else {
+                                        RemoteImage(actor.actor.image, null, Modifier.size(96.dp).clip(CircleShape))
+                                    }
                                     Spacer(Modifier.height(8.dp))
                                     Text(
                                         actor.actor.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground,
@@ -943,7 +953,14 @@ internal fun InformationSection(imdb: ImdbInfo) {
             if (!com.lagradost.cloudstream4.desktop.Platform.isTv) SubtleCapsule(Icons.Default.OpenInBrowser, "View on IMDb") { openInBrowser(imdb.url) }
         }
         Spacer(Modifier.height(16.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(if (appLayout.compact) 16.dp else 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        // On TV the facts take focus as one block (with room inside the ring), so the remote can
+        // scroll down to them: nothing else here is focusable
+        val tv = com.lagradost.cloudstream4.desktop.Platform.isTv
+        FlowRow(
+            Modifier.then(if (tv) Modifier.offset(x = (-12).dp) else Modifier).tvFocusStop().then(if (tv) Modifier.padding(12.dp) else Modifier),
+            horizontalArrangement = Arrangement.spacedBy(if (appLayout.compact) 16.dp else 32.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             facts.forEach { (label, value) ->
                 Column(Modifier.width(if (appLayout.compact) 150.dp else 240.dp)) {
                     Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
@@ -953,6 +970,6 @@ internal fun InformationSection(imdb: ImdbInfo) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        Text("Information from IMDb", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f))
+        Text("Information from IMDb, via Cinemeta", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f))
     }
 }

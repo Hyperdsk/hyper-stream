@@ -138,7 +138,8 @@ fun RatingBreakdown(imdb: ImdbInfo, modifier: Modifier = Modifier) {
             Spacer(Modifier.width(8.dp))
             Column(Modifier.padding(bottom = 8.dp)) {
                 Text("out of 10", style = MaterialTheme.typography.labelMedium, color = secondaryText)
-                Text("${compactCount(total)} ratings", style = MaterialTheme.typography.labelSmall, color = secondaryText)
+                // Unknown, not zero, when the details have no vote count (Cinemeta gives none)
+                if (total > 0) Text("${compactCount(total)} ratings", style = MaterialTheme.typography.labelSmall, color = secondaryText)
             }
             Spacer(Modifier.weight(1f))
             Text(

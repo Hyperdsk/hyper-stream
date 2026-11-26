@@ -1,5 +1,10 @@
 package com.lagradost.cloudstream4.desktop.ui
 
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.interaction.FocusInteraction
@@ -24,6 +29,19 @@ import kotlinx.coroutines.launch
  * look as before.
  */
 val tvIndication: Indication? get() = if (Platform.isTv) FocusRingIndication else null
+
+/**
+ * On TV, lets the remote stop on content that does nothing when pressed (cast, a title's facts),
+ * showing the focus ring, so the page scrolls down to it. A remote only moves between focusable
+ * things: a title page whose last ones were the episodes couldn't show what came after them.
+ * Nothing elsewhere, where a pointer or scroll wheel reaches everything.
+ */
+@Composable
+fun Modifier.tvFocusStop(): Modifier {
+    if (!Platform.isTv) return this
+    val interaction = remember { MutableInteractionSource() }
+    return indication(interaction, FocusRingIndication).focusable(interactionSource = interaction)
+}
 
 private object FocusRingIndication : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode = FocusRingNode(interactionSource)
